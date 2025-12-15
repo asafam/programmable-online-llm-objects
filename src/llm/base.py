@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Union
+
+from pydantic import BaseModel
 
 
 @dataclass
@@ -36,8 +38,8 @@ class AbstractLLM(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def generate_structured(self, messages: Sequence[ChatMessage], response_schema: Dict[str, Any]) -> StructuredResponse:
-        """Return a structured response given a chat history and JSON schema."""
+    def generate_structured(self, messages: Sequence[ChatMessage], schema_or_model: Union[Dict[str, Any], BaseModel]) -> Any:
+        """Return a structured response given a chat history and JSON schema or Pydantic model."""
         raise NotImplementedError
 
     def generate_text(self, messages: Sequence[ChatMessage]) -> str:

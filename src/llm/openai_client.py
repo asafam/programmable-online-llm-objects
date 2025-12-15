@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Union
 
+from pydantic import BaseModel
 from src.llm.base import AbstractLLM, ChatMessage, StructuredResponse, ToolSpec
 
 try:
@@ -94,8 +95,15 @@ class OpenAIChatLLM(AbstractLLM):
             tool_calls=normalized_tool_calls if normalized_tool_calls else None,
         )
 
-    def generate_structured(self, messages: Sequence[ChatMessage], response_schema: Dict[str, Any]) -> StructuredResponse:
+    def generate_structured(self, messages: Sequence[ChatMessage], schema_or_model: Union[Dict[str, Any], BaseModel]) -> Any:
         """Generate structured response using OpenAI's structured outputs."""
+        if isinstance(schema_or_model, BaseModel):
+            schema = schema_or_model.model_json_schema()
+            response_model = schema_or_model
+        else:
+            schema = schema_or_model
+            response_model = None
+
         response = self.client.chat.completions.create(
             model=self.model,
             messages=self._to_dict_messages(messages),
@@ -104,7 +112,7 @@ class OpenAIChatLLM(AbstractLLM):
                 "type": "json_schema",
                 "json_schema": {
                     "name": "structured_response",
-                    "schema": response_schema,
+                    "schema": schema,
                     "strict": False  # Allow more flexibility
                 }
             }
@@ -116,11 +124,17 @@ class OpenAIChatLLM(AbstractLLM):
         try:
             import json
             parsed = json.loads(content)
-            return StructuredResponse(
-                response=parsed.get("response", ""),
-                state=parsed.get("state"),
-                messages=parsed.get("messages")
-            )
+            if response_model:
+                return response_model(**parsed)
+            else:
+                return StructuredResponse(
+                    response=parsed.get("response", ""),
+                    state=parsed.get("state"),
+                    messages=parsed.get("messages")
+                )
         except json.JSONDecodeError:
-            # Fallback to empty structured response
-            return StructuredResponse(response="", state=None, messages=None)
+            # Fallback
+            if response_model:
+                return response_model()
+            else:
+                return StructuredResponse(response="", state=None, messages=None)

@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel
 from src.llm.base import AbstractLLM, ChatMessage, system_message, user_message
+
+
+class Message(BaseModel):
+    to: str
+    message: str
+    message_type: str = "default"
+
+
+class StructuredResponse(BaseModel):
+    state: Optional[Dict[str, Any]] = None
+    messages: List[Message] = []
 
 
 class BaseActor:
@@ -84,35 +96,8 @@ class Actor(BaseActor):
 
         chat.append(user_message(f"From {from_actor}: {message}"))
 
-        # Define structured response schema
-        response_schema = {
-            "type": "object",
-            "properties": {
-                "state": {
-                    "type": "object",
-                    "description": "State updates to apply (JSON object that will be merged into current state)",
-                    "additionalProperties": True  # Allow any additional properties
-                },
-                "messages": {
-                    "type": "array",
-                    "description": "Messages to send to other actors",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "to": {"type": "string", "description": "Target actor name"},
-                            "message": {"type": "string", "description": "Message content"},
-                            "message_type": {"type": "string", "description": "Type of the message, defaults to 'default'"}
-                        },
-                        "required": ["to", "message"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            "required": []
-        }
-
         # Get structured response from LLM
-        structured_response = self.llm.generate_structured(chat, response_schema)
+        structured_response = self.llm.generate_structured(chat, StructuredResponse)
 
         # Apply state changes if any
         if structured_response.state:
@@ -121,9 +106,7 @@ class Actor(BaseActor):
         # Send messages if any
         if structured_response.messages and self.message_bus:
             for msg in structured_response.messages:
-                if isinstance(msg, dict) and 'to' in msg and 'message' in msg:
-                    msg.setdefault('message_type', 'default')
-                    self.message_bus.send(from_actor=self.name, to_actor=msg['to'], message=msg['message'])
+                self.message_bus.send(from_actor=self.name, to_actor=msg.to, message=msg.message)
 
         return ""
 
