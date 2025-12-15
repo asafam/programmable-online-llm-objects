@@ -33,8 +33,8 @@ class CoordinatorActor(Actor):
         if not registry:
             registry = "(none)"
         if not hasattr(self, '_loaded_prompt'):
-            config_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'prompts')
-            prompt_path = os.path.join(config_dir, 'coordinator_actor.yml')
+            base_config_dir = os.path.join(os.path.dirname(__file__), '..', '..')
+            prompt_path = os.path.join(base_config_dir, self.config['prompts']['coordinator'])
             with open(prompt_path, 'r') as f:
                 self._loaded_prompt = yaml.safe_load(f)['system_prompt']
         return self._loaded_prompt.replace('[[registry]]', registry)
@@ -61,7 +61,8 @@ class CoordinatorActor(Actor):
         init_state.setdefault("purpose", purpose)
 
         # Load base prompt from actor.yml
-        base_prompt_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'prompts', 'actor.yml')
+        base_config_dir = os.path.join(os.path.dirname(__file__), '..', '..')
+        base_prompt_path = os.path.join(base_config_dir, self.config['prompts']['actor'])
         with open(base_prompt_path, 'r') as f:
             base_config = yaml.safe_load(f)
 

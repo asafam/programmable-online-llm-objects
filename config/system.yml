@@ -4,3 +4,7 @@ heartbeat:
 
 features:
   proactivity: false
+
+prompts:
+  coordinator: config/prompts/coordinator_actor.yml
+  actor: config/prompts/actor.yml
