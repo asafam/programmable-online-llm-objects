@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import yaml
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from pydantic import BaseModel
@@ -18,15 +19,25 @@ class AnthropicChatLLM(AbstractLLM):
 
     def __init__(
         self,
-        model: str = "claude-3-5-sonnet-latest",
+        model: Optional[str] = None,
         api_key: Optional[str] = None,
-        temperature: float = 0.2,
+        temperature: Optional[float] = None,
+        seed: Optional[int] = None,
         tools: Optional[List[ToolSpec]] = None,
     ) -> None:
         if anthropic is None:
             raise ImportError("anthropic package not installed. Install `anthropic` to use AnthropicChatLLM.")
-        self.model = model
-        self.temperature = temperature
+
+        # Load config from system.yml
+        config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'system.yml')
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+
+        llm_config = config.get('llm', {})
+
+        self.model = model or llm_config.get('model', 'claude-3-5-sonnet-latest')
+        self.temperature = temperature if temperature is not None else llm_config.get('temperature', 0.2)
+        self.seed = seed if seed is not None else llm_config.get('seed')
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
             raise ValueError("ANTHROPIC_API_KEY is required for AnthropicChatLLM.")
@@ -65,14 +76,20 @@ class AnthropicChatLLM(AbstractLLM):
 
         system_content = "\n".join(system_parts) if system_parts else None
 
-        resp = self.client.messages.create(
-            model=self.model,
-            max_tokens=4096,
-            temperature=self.temperature,
-            system=system_content,
-            messages=self._to_anthropic_messages(non_system_messages),
-            tools=tools_payload if tools_payload else None,
-        )
+        # Build API call kwargs
+        kwargs = {
+            "model": self.model,
+            "max_tokens": 4096,
+            "temperature": self.temperature,
+            "system": system_content,
+            "messages": self._to_anthropic_messages(non_system_messages),
+        }
+        if tools_payload:
+            kwargs["tools"] = tools_payload
+        # Note: Anthropic API does not currently support a seed parameter for deterministic outputs
+        # The seed is loaded from config but not used since the API doesn't support it
+
+        resp = self.client.messages.create(**kwargs)
 
         content_str = ""
         tool_calls = None
@@ -92,10 +109,10 @@ class AnthropicChatLLM(AbstractLLM):
 
         return ChatMessage(role="assistant", content=content_str, tool_calls=tool_calls)
 
-    def generate_structured(self, messages: Sequence[ChatMessage], schema_or_model: Union[Dict[str, Any], BaseModel]) -> Any:
+    def generate_structured(self, messages: Sequence[ChatMessage], schema_or_model: Union[Dict[str, Any], BaseModel, type]) -> Any:
         """Generate structured response using Anthropic's structured outputs."""
-        if isinstance(schema_or_model, BaseModel):
-            schema = schema_or_model.model_json_schema()
+        if isinstance(schema_or_model, type) and issubclass(schema_or_model, BaseModel):
+            schema = schema_or_model.schema()
             response_model = schema_or_model
         else:
             schema = schema_or_model
@@ -112,13 +129,14 @@ class AnthropicChatLLM(AbstractLLM):
 
         system_content = "\n".join(system_parts) if system_parts else None
 
-        resp = self.client.messages.create(
-            model=self.model,
-            max_tokens=4096,
-            temperature=self.temperature,
-            system=system_content,
-            messages=self._to_anthropic_messages(non_system_messages),
-            response_format={
+        # Build API call kwargs
+        kwargs = {
+            "model": self.model,
+            "max_tokens": 4096,
+            "temperature": self.temperature,
+            "system": system_content,
+            "messages": self._to_anthropic_messages(non_system_messages),
+            "response_format": {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "structured_response",
@@ -126,7 +144,11 @@ class AnthropicChatLLM(AbstractLLM):
                     "strict": False  # Allow more flexibility
                 }
             }
-        )
+        }
+        # Note: Anthropic API does not currently support a seed parameter for deterministic outputs
+        # The seed is loaded from config but not used since the API doesn't support it
+
+        resp = self.client.messages.create(**kwargs)
 
         content_str = ""
         for block in resp.content:
@@ -139,7 +161,7 @@ class AnthropicChatLLM(AbstractLLM):
                 return response_model(**parsed)
             else:
                 return StructuredResponse(
-                    response=parsed.get("response", ""),
+                    response=parsed.get("response") or "",
                     state=parsed.get("state"),
                     messages=parsed.get("messages")
                 )

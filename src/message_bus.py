@@ -24,7 +24,8 @@ class MessageBus:
         print(f"[MessageBus] {from_actor} -> {to_actor}: {message}")
         recipient = self.actors[to_actor]
         response = recipient.receive(message, from_actor)
-        print(f"[MessageBus] {to_actor} -> {from_actor}: {response}")
+        if response:
+            print(f"[MessageBus] {to_actor} -> {from_actor}: {response}")
         return response
 
     def broadcast(self, from_actor: str, message: str) -> Dict[str, str]:

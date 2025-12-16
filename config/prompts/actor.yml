@@ -5,6 +5,8 @@ system_prompt: |
 
   Your purpose: {purpose}
 
+  CRITICAL: You MUST follow your purpose on EVERY interaction. If your purpose says to notify another actor when something happens, you MUST do so immediately whenever that thing happens.
+
   You maintain private state and communicate with other actors and users exclusively through natural language.
 
 
@@ -15,6 +17,14 @@ system_prompt: |
 
   You own this state. Update it as needed based on interactions.
 
+  STATE MANAGEMENT PRINCIPLES:
+  - Keep state structure SIMPLE and MINIMAL - only what's necessary for your purpose
+  - Use CONSISTENT field names across updates (don't alternate between similar names)
+  - Maintain the SAME structure you initially chose - don't restructure unless absolutely necessary
+  - When updating state, consider ALL related fields that should change together
+  - Prefer flat structures over nested ones when possible
+  - Use clear, descriptive field names (e.g., "value" not "v", "properties" not "prps")
+
 
   === RELATIONSHIPS ===
 
@@ -23,20 +33,20 @@ system_prompt: |
 
   You may send them messages when relevant to your purpose.
 
+  When your purpose includes coordination with other actors (e.g., notifying them of changes), ALWAYS include appropriate messages in your response.
+
+  If your purpose mentions notifying another actor, ALWAYS send appropriate messages when relevant events occur.
+
   {proactivity::instructions}
   
   === FORMAT ===
 
-  Respond in the following format:
+  Respond with a JSON object containing:
 
-  <state_updates>
-  JSON object with any state updates (merge with current state)
-  </state_updates>
-
-  <messages>
-  JSON array of messages to Messages to send to other actors
-  Or empty array: []
-  </messages>
+  - response: Natural language response to the user/message sender (string)
+  - state_updates: Array of state field updates, each with 'key' (string) and 'value_json' (JSON-encoded string). Example: [{"key": "volume", "value_json": "50"}, {"key": "items", "value_json": "[\"foo\", \"bar\"]"}]
+  - messages: Array of messages to send to other actors, each with 'to' (actor name) and 'message' (content)
+  - purpose_updates: Array of new purposes to accumulate (strings)
 
   {proactivity::format}
 
@@ -68,3 +78,24 @@ system_prompt_proactivity:
     JSON array of unprompted observations/alerts
     Or empty array: []
     </proactive>
+
+reflection_prompt: |
+  Your state just changed.
+  Previous state:
+  {old_state}
+  Current state:
+  {new_state}
+  What changed:
+  {state_diff}
+
+  Based on this state change, determine if you need to take any follow-up action.
+
+  Consider:
+  - Are there related fields that should be updated together?
+  - Do you need to notify other actors about this change?
+  - Are there thresholds crossed, anomalies, or constraints violated?
+  - Should you validate or correct something?
+
+  If action is needed, set should_act=true and provide a clear action_message that will be sent to yourself.
+  IMPORTANT: If you are notifying about a removal or change, include the OLD values (e.g., quantity, price) in the action_message, because they are no longer in your current state.
+  If no action is needed, set should_act=false.

@@ -14,21 +14,22 @@ from src.llm.openai_client import OpenAIChatLLM
 from src.message_bus import MessageBus
 
 
-def build_llm_factory(provider: str, model: str, temperature: float, openai_base_url: str) -> Callable[[str], object]:
+def build_llm_factory(provider: str, openai_base_url: str = None) -> Callable[[str], object]:
+    """Build LLM factory that reads config from system.yml automatically."""
     if provider == "openai":
         def factory(_: str):
-            return OpenAIChatLLM(model=model, temperature=temperature, base_url=openai_base_url or None)
+            return OpenAIChatLLM(base_url=openai_base_url or None)
         return factory
 
     if provider == "anthropic":
         def factory(_: str):
-            return AnthropicChatLLM(model=model, temperature=temperature)
+            return AnthropicChatLLM()
         return factory
 
     raise ValueError(f"Unsupported provider: {provider}")
 
 
-def interactive_loop(provider: str, model: str, temperature: float, openai_base_url: str, config: dict) -> None:
+def interactive_loop(provider: str, openai_base_url: str, config: dict) -> None:
     bus = MessageBus()
 
     if config.get('heartbeat', {}).get('enabled', False):
@@ -37,7 +38,7 @@ def interactive_loop(provider: str, model: str, temperature: float, openai_base_
         bus.register(heartbeat)
         heartbeat.start()
 
-    llm_factory = build_llm_factory(provider=provider, model=model, temperature=temperature, openai_base_url=openai_base_url)
+    llm_factory = build_llm_factory(provider=provider, openai_base_url=openai_base_url)
 
     coordinator = CoordinatorActor(llm=llm_factory("Coordinator"), llm_factory=llm_factory)
     bus.register(coordinator)
@@ -75,8 +76,6 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Run the NL actor coordinator.")
     parser.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
-    parser.add_argument("--model", help="Model name for the chosen provider")
-    parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--openai-base-url", default=os.getenv("OPENAI_BASE_URL", ""))
     parser.add_argument("--config", default="config/system.yml", help="Path to system config YAML file")
     args = parser.parse_args()
@@ -84,16 +83,8 @@ def main() -> None:
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
 
-    provider = args.provider
-    if args.model:
-        model = args.model
-    else:
-        model = "gpt-4o-mini" if provider == "openai" else "claude-3-5-sonnet-latest"
-
     interactive_loop(
-        provider=provider,
-        model=model,
-        temperature=args.temperature,
+        provider=args.provider,
         openai_base_url=args.openai_base_url,
         config=config,
     )

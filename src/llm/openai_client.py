@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import yaml
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from pydantic import BaseModel
@@ -17,16 +18,26 @@ class OpenAIChatLLM(AbstractLLM):
 
     def __init__(
         self,
-        model: str = "gpt-4o-mini",
+        model: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        temperature: float = 0.2,
+        temperature: Optional[float] = None,
+        seed: Optional[int] = None,
         tools: Optional[List[ToolSpec]] = None,
     ) -> None:
         if OpenAI is None:
             raise ImportError("openai package not installed. Install `openai` to use OpenAIChatLLM.")
-        self.model = model
-        self.temperature = temperature
+
+        # Load config from system.yml
+        config_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'system.yml')
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+
+        llm_config = config.get('llm', {})
+
+        self.model = model or llm_config.get('model', 'gpt-4o-mini')
+        self.temperature = temperature if temperature is not None else llm_config.get('temperature', 0.0)
+        self.seed = seed if seed is not None else llm_config.get('seed')
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY is required for OpenAIChatLLM.")
@@ -63,13 +74,18 @@ class OpenAIChatLLM(AbstractLLM):
 
     def generate(self, messages: Sequence[ChatMessage]) -> ChatMessage:
         tool_payloads = self._tool_payloads()
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=self._to_dict_messages(messages),
-            temperature=self.temperature,
-            tools=tool_payloads if tool_payloads else None,
-            tool_choice="auto" if tool_payloads else None,
-        )
+        kwargs = {
+            "model": self.model,
+            "messages": self._to_dict_messages(messages),
+            "temperature": self.temperature,
+        }
+        if tool_payloads:
+            kwargs["tools"] = tool_payloads
+            kwargs["tool_choice"] = "auto"
+        if self.seed is not None:
+            kwargs["seed"] = self.seed
+
+        response = self.client.chat.completions.create(**kwargs)
 
         msg = response.choices[0].message
 
@@ -95,28 +111,43 @@ class OpenAIChatLLM(AbstractLLM):
             tool_calls=normalized_tool_calls if normalized_tool_calls else None,
         )
 
-    def generate_structured(self, messages: Sequence[ChatMessage], schema_or_model: Union[Dict[str, Any], BaseModel]) -> Any:
-        """Generate structured response using OpenAI's structured outputs."""
-        if isinstance(schema_or_model, BaseModel):
-            schema = schema_or_model.model_json_schema()
+    def generate_structured(self, messages: Sequence[ChatMessage], schema_or_model: Union[Dict[str, Any], BaseModel, type]) -> Any:
+        """Generate structured response using OpenAI's structured outputs.
+
+        Args:
+            schema_or_model: Either a Pydantic model (uses strict=False) or a raw JSON schema dict (uses strict=True)
+        """
+        # Determine if this is a Pydantic model or a raw schema
+        is_pydantic = isinstance(schema_or_model, type) and issubclass(schema_or_model, BaseModel)
+
+        if is_pydantic:
+            schema = schema_or_model.schema()
             response_model = schema_or_model
+            # Pydantic schemas may not have additionalProperties: false, so use strict=False
+            strict_mode = False
         else:
             schema = schema_or_model
             response_model = None
+            # Raw schemas should be designed for strict mode (with additionalProperties: false)
+            strict_mode = True
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=self._to_dict_messages(messages),
-            temperature=self.temperature,
-            response_format={
+        kwargs = {
+            "model": self.model,
+            "messages": self._to_dict_messages(messages),
+            "temperature": self.temperature,
+            "response_format": {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "structured_response",
                     "schema": schema,
-                    "strict": False  # Allow more flexibility
+                    "strict": strict_mode
                 }
             }
-        )
+        }
+        if self.seed is not None:
+            kwargs["seed"] = self.seed
+
+        response = self.client.chat.completions.create(**kwargs)
 
         msg = response.choices[0].message
         content = msg.content or "{}"
@@ -124,17 +155,30 @@ class OpenAIChatLLM(AbstractLLM):
         try:
             import json
             parsed = json.loads(content)
+
             if response_model:
+                # Pydantic model - instantiate it
                 return response_model(**parsed)
-            else:
+            elif is_pydantic:
+                # Was a Pydantic type but we're not using it - return StructuredResponse
                 return StructuredResponse(
-                    response=parsed.get("response", ""),
+                    response=parsed.get("response") or "",
                     state=parsed.get("state"),
                     messages=parsed.get("messages")
                 )
-        except json.JSONDecodeError:
-            # Fallback
+            else:
+                # Raw schema - return the parsed dict directly
+                return parsed
+
+        except json.JSONDecodeError as e:
+            # Fallback - log error for debugging
+            print(f"[ERROR] Failed to parse structured JSON response: {e}")
+            print(f"[ERROR] Raw content: {content[:500]}")  # First 500 chars
+
             if response_model:
                 return response_model()
-            else:
+            elif is_pydantic:
                 return StructuredResponse(response="", state=None, messages=None)
+            else:
+                # Raw schema - return empty dict
+                return {}

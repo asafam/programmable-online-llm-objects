@@ -38,7 +38,7 @@ class AbstractLLM(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def generate_structured(self, messages: Sequence[ChatMessage], schema_or_model: Union[Dict[str, Any], BaseModel]) -> Any:
+    def generate_structured(self, messages: Sequence[ChatMessage], schema_or_model: Union[Dict[str, Any], BaseModel, type]) -> Any:
         """Return a structured response given a chat history and JSON schema or Pydantic model."""
         raise NotImplementedError
 

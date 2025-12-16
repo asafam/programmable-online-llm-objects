@@ -1,8 +1,10 @@
 from src.llm.openai_client import OpenAIChatLLM
 from src.llm.base import system_message, user_message
+import yaml
 
 def get_validator_llm():
-    return OpenAIChatLLM(model="gpt-4o", temperature=0.0)
+    # LLM will read config from system.yml automatically
+    return OpenAIChatLLM()
 
 def llm_assert_state(state, prompt, error_message="State validation failed"):
     llm = get_validator_llm()
