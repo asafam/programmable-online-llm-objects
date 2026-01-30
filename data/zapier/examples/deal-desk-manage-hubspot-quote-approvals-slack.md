@@ -25,5 +25,5 @@ graph TD
   QuoteApprovalManager -->|sends approval request| EmailGateway
   QuoteApprovalManager --> |receives approver action| SlackGateway
   QuoteApprovalManager --> |updates quote status| HubSpotQuotesGateway
-  ReminderSystem --> |sends reminders| SlackGateway
+  QuoteApprovalManager --> |sends reminders| SlackGateway
 ```
