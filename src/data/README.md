@@ -80,7 +80,7 @@ python -m src.data.generate_test_cases \
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--input`, `-i` | (required) | Path to samples JSONL (from Stage 1) |
-| `--output`, `-o` | `outputs/data/zapier/generated/test_cases.jsonl` | Output JSONL path |
+| `--output`, `-o` | `<input_stem>__<mod-type>__<ambiguity>.jsonl` | Output JSONL path (derived from input, mod-type, and ambiguity) |
 | `--prompt-template` | `config/prompts/data-gen/generate_test_cases.yaml` | Prompt template path |
 | `--model`, `-m` | `gpt-4o` | Model name (provider auto-detected) |
 | `--seed`, `-s` | None | Random seed for reproducibility |

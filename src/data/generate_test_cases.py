@@ -158,8 +158,8 @@ Examples:
         "--output",
         "-o",
         type=Path,
-        default=Path("outputs/data/zapier/generated/test_cases.jsonl"),
-        help="Output JSONL path (default: outputs/data/zapier/generated/test_cases.jsonl)",
+        default=None,
+        help="Output JSONL path (default: derived from input file, mod-type, and ambiguity)",
     )
     parser.add_argument(
         "--prompt-template",
@@ -214,6 +214,14 @@ Examples:
     add_common_args(parser)
 
     args = parser.parse_args()
+
+    # Derive default output path from input file, mod-type, and ambiguity
+    if args.output is None:
+        input_stem = args.input.stem  # e.g. "samples"
+        mod_part = args.mod_type or "all"
+        ambiguity_part = args.ambiguity
+        output_name = f"{input_stem}__{mod_part}__{ambiguity_part}.jsonl"
+        args.output = args.input.parent / output_name
 
     # Infer provider from model if not specified
     if args.provider is None:
