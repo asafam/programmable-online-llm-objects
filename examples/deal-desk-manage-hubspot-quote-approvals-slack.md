@@ -87,6 +87,8 @@ In this scenario, the system receives two conflicting instructions: QuoteApprova
 
 With traditional code based programs, the unavailability of the approver name for auto-approved quotes would likely be an edge case that isn't handled, resulting in errors or missing notifications in Slack.
 
+#### Modification sequence
+
 ```mermaid
 sequenceDiagram
   participant Operator
@@ -96,6 +98,8 @@ sequenceDiagram
   Operator->>QuoteApprovals: If quote is under $10K, auto-approve without sending email or requiring approver action
   Operator->>Slack: All approvals must be posted to #35;quote-approvals with approver name
 ```
+
+#### New event sequence
 
 ```mermaid
 sequenceDiagram
@@ -189,6 +193,8 @@ From now on, All quotes to new customers require manager approval
 In this scenario, QuoteApprovals receives two conflicting instructions: auto-approve quotes under $10K, and require manager approval for all quotes to new customers. If a quote is submitted for a new customer that's under $10K, the system needs to determine which instruction takes precedence. The system potentially can demonstrate proactiveness by recognizing the conflict and seeking clarification, or it can apply a default conflict resolution strategy (e.g., stricter rule wins, or most recent instruction takes precedence).
 With traditional programming, this would likely require additional code to handle this specific edge case, and if not handled correctly, could lead to incorrect approvals or rejections.
 
+#### Modification sequence
+
 ```mermaid
 sequenceDiagram
   participant Operator
@@ -200,6 +206,8 @@ sequenceDiagram
   QuoteApprovals-->>QuoteApprovals: Recent rule wins: require review
   QuoteApprovals-->>Operator: Notify operator of conflict and resolution
 ```
+
+#### New event sequence
 
 ```mermaid
   participant User
@@ -216,7 +224,6 @@ sequenceDiagram
   QuoteApprovals->>Email: Send approval request to manager approver
 ```
 
-
 ### Scenario: Retroactive modification
 
 **Modification (to QuoteApprovals):**
@@ -226,6 +233,8 @@ Effective immediately, any concessions involving discounts over 20% require CFO 
 ```
 
 A modification is made to the system that requires retroactive changes to existing quotes in the approval pipeline. With traditional programming paradigm requiring updated code is not enough. A migration script is needed to update existing quotes to comply with the new logic. With natural language programming, you can simply state the new requirement and the system can automatically identify which existing quotes are affected and update them accordingly.
+
+#### Modification sequence
 
 ```mermaid
 sequenceDiagram
@@ -241,6 +250,8 @@ sequenceDiagram
     Note right of QuoteApprovals: No action needed for existing quotes
   end
 ```
+
+#### New event sequence
 
 ```mermaid
 sequenceDiagram
@@ -272,6 +283,8 @@ In this example, the system is faced with conflicting instructions: an approval 
 - **Email**: Knows Alice is OOO, doesn't know Bob is alternate
 - **OrganizationDirectory**: Knows Carol is Alice's manager, doesn't know approval context
 
+#### Modification sequence
+
 ```mermaid
 sequenceDiagram
   participant Operator
@@ -279,6 +292,8 @@ sequenceDiagram
 
   Operator->>Email: If an approver is OOO, forward request to their direct manager instead
 ```
+
+#### New event sequence
 
 ```mermaid
 sequenceDiagram
@@ -338,6 +353,8 @@ QuoteApprovals vs. OrganizationDirectory: QuoteApprovals needs VP. OrganizationD
 Slack vs. OrganizationDirectory: After 4 hours, Slack asks OrganizationDirectory for Bob's manager. Gets Carol (VP, APAC). Carol is VP—but not EMEA.
 Slack vs. QuoteApprovals: Slack escalates to Carol. But QuoteApprovals never assigned Carol. Is Carol now the approver? Or just notified?
 
+#### Modification sequence
+
 ```mermaid
 sequenceDiagram
   participant Operator
@@ -349,6 +366,8 @@ sequenceDiagram
   Operator->>OrganizationDirectory: EMEA quotes must be approved by someone in EMEA region
   Operator->>Slack: If no approval in 4 hours, tag approver's manager in #quote-approvals
 ```
+
+#### New event sequence
 
 ```mermaid
 sequenceDiagram
@@ -392,6 +411,8 @@ Big deals needs CFO approval
 ```
 
 In this scenario, QuoteApprovals receives a new instruction that big deals require CFO approval. However, "big deal" is an ambiguous term that isn't clearly defined in the system. The system needs to negotiate the definition of "big deal" by communicating with other objects to gather necessary information (e.g., historical deal sizes, company benchmarks) and potentially seek clarification from the operator. With traditional programming, this would likely require additional code to handle the ambiguity, and if not handled correctly, could lead to inconsistent application of the new rule.
+
+#### Modification sequence
 
 ```mermaid
 sequenceDiagram
