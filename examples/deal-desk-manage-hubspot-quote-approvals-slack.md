@@ -127,6 +127,18 @@ Enterprise quotes require VP approval
 In this scenario, QuoteApprovals is given a new requirement that enterprise quotes require VP approval. However, in this example, the system doesn't have enough information to determine whether ACME corp is an enterprise customer and who the required approver should be. LLM-objects communicate with each other to identify the missing information and determine the appropriate approver. The confidence level of the system can be be updated as it gathers more information, and it can even seek clarification from the user if needed.
 With traditional programming, this would likely result in a failure to route the approval request correctly, causing delays and possibly lost deals.
 
+#### Modification sequence
+
+```mermaid
+sequenceDiagram
+  participant Operator
+  participant QuoteApprovals
+
+  Operator->>QuoteApprovals: If quote is from an enterprise customer, require VP approval
+```
+
+#### New event sequence
+
 ```mermaid
 sequenceDiagram
   participant User
