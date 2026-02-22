@@ -90,12 +90,9 @@ With traditional code based programs, the unavailability of the approver name fo
 ```mermaid
 sequenceDiagram
   participant Operator
-  participant HubSpot
   participant QuoteApprovals
-  participant OrganizationDirectory
-  participant Email
   participant Slack
-  
+
   Operator->>QuoteApprovals: If quote is under $10K, auto-approve without sending email or requiring approver action
   Operator->>Slack: All approvals must be posted to #35;quote-approvals with approver name
 ```
