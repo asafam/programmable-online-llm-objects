@@ -79,7 +79,9 @@ Quotes under $10K auto-approve
 
 **Modification 2 (to Slack):**
 
-"==All approvals must be posted to #quote-approvals with approver name=="
+```
+All approvals must be posted to #quote-approvals with approver name
+```
 
 In this scenario, the system receives two conflicting instructions: QuoteApprovals is told to auto-approve quotes under $10K, while Slack is told that all approvals must be posted in #quote-approvals with the approver's name. Yet, autoapproved quotes won't have an approver name to post in Slack. The system needs to determine how to handle this conflict. 
 
@@ -92,7 +94,7 @@ sequenceDiagram
   participant Slack
 
   Operator->>QuoteApprovals: If quote is under $10K, auto-approve without sending email or requiring approver action
-  Operator->>Slack: All approvals must be posted to \#quote-approvals with approver name
+  Operator->>Slack: All approvals must be posted to &#35;quote-approvals with approver name
 ```
 
 ```mermaid
@@ -119,7 +121,9 @@ sequenceDiagram
 
 **Modification (to QuoteApprovals):**
 
-=="Effective immediately, any concessions involving discounts over 20% require CFO approval"==
+```
+Effective immediately, any concessions involving discounts over 20% require CFO approval
+```
 
 A modification is made to the system that requires retroactive changes to existing quotes in the approval pipeline. With traditional programming paradigm requiring updated code is not enough. A migration script is needed to update existing quotes to comply with the new logic. With natural language programming, you can simply state the new requirement and the system can automatically identify which existing quotes are affected and update them accordingly.
 
@@ -157,7 +161,9 @@ sequenceDiagram
 
 **Modification (to Email):**
 
-=="If an approver is OOO, Email should route the request to their direct manager instead"==
+```
+If an approver is OOO, Email should route the request to their direct manager instead
+```
 
 In this example, the system is faced with conflicting instructions: an approval should be sent to the designated approver manager, if the approver is out-of-office. An approval request define an alternate approver (e.g., Bob) to route to when the primary approver (e.g., Alice) is unavailable. The system needs to determine which instruction takes precedence and how to route the approval request accordingly. Business context or system defaults may guide the decision.
 
@@ -210,15 +216,21 @@ sequenceDiagram
 
 **Modification 1 (to QuoteApprovals):**
 
-"==Enterprise quotes must be approved by VP or above=="
+```
+Enterprise quotes must be approved by VP or above
+```
 
 **Modification 2 (to OrganizationDirectory):**
 
-"==EMEA quotes must be approved by someone in the EMEA region=="
+```
+EMEA quotes must be approved by someone in the EMEA region
+```
 
 **Modification 3 (to Slack):**
 
-"==If no approval in 4 hours, tag the assigned approver's manager in #quote-approvals=="
+```
+If no approval in 4 hours, tag the assigned approver's manager in #quote-approvals
+```
 
 **The conflicts:**
 
