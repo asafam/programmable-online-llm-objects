@@ -73,7 +73,7 @@ sequenceDiagram
 
 **Modification 1 (to QuoteApprovals):**
 
-==Quotes under $10K auto-approve==
+<mark>Quotes under $10K auto-approve</mark>
 
 **Modification 2 (to Slack):**
 
