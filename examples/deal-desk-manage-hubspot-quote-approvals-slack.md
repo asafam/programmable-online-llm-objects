@@ -111,10 +111,10 @@ sequenceDiagram
   QuoteApprovals->>QuoteApprovals: Quote is under $10K, auto-approve without sending email or requiring approver action
   QuoteApprovals->>HubSpot: Mark quote as approved
   QuoteApprovals->>Slack: Send approval notification"
-  Slack->>Slack: Error - No approver name to post in #quote-approvals
-  Slack-->>QuoteApprovals: Who is the approver for this quote approval that needs to be posted in #quote-approvals?
+  Slack->>Slack: Error - No approver name to post in #35;quote-approvals
+  Slack-->>QuoteApprovals: Who is the approver for this quote approval that needs to be posted in #35;quote-approvals?
   QuoteApprovals-->>Slack: No approver since this quote was auto-approved
-  Slack->>Slack: Post approval notification in #quote-approvals without approver name
+  Slack->>Slack: Post approval notification in #35;quote-approvals without approver name
 ```
 
 ### Scenario with modification: Retroactive modification
@@ -272,13 +272,13 @@ sequenceDiagram
   QuoteApprovals->>QuoteApprovals: Bob is approver for the EMEA enterprise quote that's pending for over 4 hours
   Slack->>OrganizationDirectory: Who is Bob's manager?
   OrganizationDirectory-->>Slack: Carol (VP, APAC)
-  Slack->>Slack: Tag Carol in #quote-approvals
+  Slack->>Slack: Tag Carol in #35;quote-approvals
   Note over Slack: Carol is VP (satisfies rule 1) but APAC (violates rule 2)
   alt Carol responds and approves
     Note over QuoteApprovals: Approved by VP—but not EMEA. Is this valid?
     QuoteApprovals->>HubSpot: Mark quote as approved
   else Carol ignores (not her region)
     Note over Slack: Escalation failed. No valid approver found.
-    Slack->>Slack: Send follow-up message in #quote-approvals tagging Quote Desk Team for assistance since no valid approver found.
+    Slack->>Slack: Send follow-up message in #35;quote-approvals tagging Quote Desk Team for assistance since no valid approver found.
   end
 ```
