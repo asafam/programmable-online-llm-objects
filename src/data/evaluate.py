@@ -79,21 +79,43 @@ def _execute_test_case_inner(
     harness,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase and return event + modification results."""
+    from src.lnl.gateway import EventGateway
     from src.lnl.runtime import Runtime
+    from src.lnl.tools import CodeExecutor, ToolRegistry
 
-    rt = Runtime(brain, strict_peers=False)
+    # 1. Create Runtime, EventGateway, and start the live environment
+    tool_registry = ToolRegistry()
+    tool_registry.register("execute_code", CodeExecutor())
 
-    # 1. Setup objects
+    rt = Runtime(brain, strict_peers=False, tool_registry=tool_registry)
+    gw = EventGateway(rt)
+
     for obj_def in tc.objects:
         rt.create_object(to_lnl_definition(obj_def))
 
+    # Start the runtime — objects are now live instances
+    rt.start()
+
+    try:
+        return _run_test_case_timeline(tc, rt, gw, harness)
+    finally:
+        rt.stop()
+
+
+def _run_test_case_timeline(
+    tc: TestCase,
+    rt,
+    gw,
+    harness,
+) -> tuple[list[EventResult], list[ModificationResult]]:
+    """Execute steps and timeline events against a live runtime."""
     event_results: list[EventResult] = []
     mod_results: list[ModificationResult] = []
 
     # 2. Run steps — initialize state and assert default (no-modification) behavior
     for i, step in enumerate(tc.steps):
         t0 = time.monotonic()
-        results = rt.send_event(step.target, step.text)
+        results = gw.dispatch(step.target, step.text)
         latency_ms = (time.monotonic() - t0) * 1000
 
         if step.expect is not None:
@@ -135,7 +157,7 @@ def _execute_test_case_inner(
         else:  # event
             t0 = time.monotonic()
             if item.call_type == "send_event":
-                results = rt.send_event(item.recipient, item.input, sender=item.source)
+                results = gw.dispatch(item.recipient, item.input, source=item.source)
             else:
                 results = rt.send(item.recipient, item.input, sender=item.source)
             latency_ms = (time.monotonic() - t0) * 1000

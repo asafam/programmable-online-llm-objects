@@ -36,6 +36,11 @@ When a guest checks out, update availability and process billing.
 
 - housekeeping-events
 - billing-events
+
+## Event Sources
+
+- PMS webhook: new reservation created
+- PMS webhook: guest check-out completed
 """
 
 MINIMAL_MD = """\
@@ -71,6 +76,7 @@ class TestParseObjectText:
         assert defn.peers[1].object_id == "billing-system"
         assert defn.skills == ["check-in", "check-out", "room-lookup"]
         assert defn.subscriptions == ["housekeeping-events", "billing-events"]
+        assert defn.event_sources == ["PMS webhook: new reservation created", "PMS webhook: guest check-out completed"]
 
     def test_minimal_definition(self):
         defn = parse_object_text(MINIMAL_MD)
@@ -81,6 +87,7 @@ class TestParseObjectText:
         assert defn.peers == []
         assert defn.skills == []
         assert defn.subscriptions == []
+        assert defn.event_sources == []
 
     def test_missing_h1_raises(self):
         with pytest.raises(ValueError, match="Missing H1"):
@@ -107,6 +114,7 @@ class TestSerialize:
             assert a.relationship == b.relationship
         assert roundtripped.skills == original.skills
         assert roundtripped.subscriptions == original.subscriptions
+        assert roundtripped.event_sources == original.event_sources
 
     def test_minimal_roundtrip(self):
         original = parse_object_text(MINIMAL_MD)

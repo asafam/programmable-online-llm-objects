@@ -31,8 +31,9 @@ python -m src.data.pipeline -i data/zapier/raw/templates.yaml --target-dir outpu
 python -m src.data.pipeline -i data/zapier/raw/templates.yaml --target-dir outputs/my-run  # continues if samples.jsonl exists
 python -m src.data.pipeline --samples outputs/data/zapier/templates_samples_object.jsonl  # skip stage 1 explicitly
 
-# Evaluation — standalone (separate from data generation pipeline)
+# Evaluation — see EVALUATION.md for full details
 python -m src.data.evaluate -i outputs/data/zapier/20260322_120000/test_cases.jsonl --runs 3
+python -m src.data.evaluate_baseline -i outputs/data/zapier/20260322_010211/test_cases.jsonl --runs 3
 ```
 
 ## Architecture
@@ -63,9 +64,14 @@ Key design: `mod_type` and `ambiguity` are **script-controlled**, not LLM-genera
 
 **Output path** is derived from input filename, mod-type, and ambiguity (e.g., `samples__temporal__vague.jsonl`).
 
+### Baseline Evaluation (`src/data/evaluate_baseline.py`)
+
+Single-agent comparison using OpenClaw. See [EVALUATION.md](EVALUATION.md) for setup, usage, and comparison details.
+
 ## Configuration
 
 - `config/prompts/lnl/object.yaml` — System prompt template for LLM-objects
+- `config/prompts/baseline/agent.yaml` — System prompt template for the OpenClaw baseline agent
 - `config/prompts/data-gen/` — Data generation prompt templates (use `{PLACEHOLDER}` substitution)
 
 ## Skills

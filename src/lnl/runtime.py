@@ -1,12 +1,19 @@
 """Runtime — library API tying together parser, objects, bus, and brain."""
 from __future__ import annotations
 
+import logging
+import queue
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from .brain import LLMBrain
 from .bus import BusMetrics, MessageBus
+from .events import EventSourceRegistry
 from .object import LLMObject
 from .parser import parse_object_file, parse_object_text, serialize_object
+from .tools import ToolRegistry
 from .types import (
     Message,
     MessageLog,
@@ -15,6 +22,17 @@ from .types import (
     PeerDeclaration,
     ProcessingResult,
 )
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _WorkItem:
+    """Unit of work submitted to the live run-loop."""
+    message: Message | None = None
+    event_inject: tuple[str, str, str] | None = None  # (recipient, content, source)
+    done: threading.Event = field(default_factory=threading.Event)
+    results: list[ProcessingResult] = field(default_factory=list)
 
 
 class Runtime:
@@ -25,14 +43,21 @@ class Runtime:
         brain: LLMBrain,
         max_chain_depth: int = 10,
         strict_peers: bool = True,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self._brain = brain
-        self._bus = MessageBus(
-            max_chain_depth=max_chain_depth,
-            strict_peers=strict_peers,
-        )
+        self._bus = MessageBus(strict_peers=strict_peers)
+        self._max_chain_depth = max_chain_depth
         self._sources: dict[str, Path] = {}  # object_id -> file path
         self._modified: set[str] = set()  # object_ids with unsaved changes
+        self._event_sources = EventSourceRegistry()
+        self._tool_registry = tool_registry
+
+        # Live mode state
+        self._work_queue: queue.Queue[_WorkItem] = queue.Queue()
+        self._running = threading.Event()
+        self._shutdown = threading.Event()
+        self._thread: threading.Thread | None = None
 
     # --- Loading ---
 
@@ -40,8 +65,7 @@ class Runtime:
         """Load an LLM-object from an MD file."""
         path = Path(path)
         defn = parse_object_file(path)
-        obj = LLMObject(defn, self._brain)
-        self._bus.register(obj)
+        obj = self._register_object(defn)
         self._sources[obj.object_id] = path
         return obj
 
@@ -55,14 +79,36 @@ class Runtime:
 
     def create_object(self, definition: ObjectDefinition) -> LLMObject:
         """Create an LLM-object from a definition."""
-        obj = LLMObject(definition, self._brain)
-        self._bus.register(obj)
-        return obj
+        return self._register_object(definition)
 
     def create_object_from_text(self, markdown: str) -> LLMObject:
         """Create an LLM-object from markdown text."""
         defn = parse_object_text(markdown)
-        return self.create_object(defn)
+        return self._register_object(defn)
+
+    def _register_object(self, definition: ObjectDefinition) -> LLMObject:
+        """Create, register on bus, and bind event sources to providers."""
+        # Build tool context factory that provides push_event for domain logic
+        tool_context_factory = None
+        if self._tool_registry:
+            def _make_context(obj: LLMObject) -> dict:
+                def push_event(content: str, source: str = "__code__") -> None:
+                    self._event_sources.inject(obj.object_id, content, source)
+                    if self._running.is_set():
+                        self._work_queue.put(_WorkItem())  # wake run-loop
+                return {"push_event": push_event}
+            tool_context_factory = _make_context
+
+        obj = LLMObject(
+            definition, self._brain,
+            tool_registry=self._tool_registry,
+            tool_context_factory=tool_context_factory,
+        )
+        self._bus.register(obj)
+        if definition.event_sources:
+            self._event_sources.bind_object(obj.object_id, definition.event_sources)
+
+        return obj
 
     # --- Messaging ---
 
@@ -72,29 +118,50 @@ class Runtime:
         content: str,
         sender: str = "__user__",
     ) -> list[ProcessingResult]:
-        """Send a message to a specific object."""
+        """Send a message to a specific object.
+
+        In live mode, enqueues work and blocks until processed.
+        """
         msg = Message(
             sender=sender,
             recipient=recipient,
             type=MessageType.DOMAIN,
             content=content,
         )
-        return self._bus.send(msg)
+        if self._running.is_set():
+            item = _WorkItem(message=msg)
+            self._work_queue.put(item)
+            item.done.wait()
+            return item.results
+        self._bus.deliver(msg)
+        return self._run_until_quiescent()
 
-    def send_event(
+    def process_pending(self) -> list[ProcessingResult]:
+        """Process all pending mailbox messages and polled events until quiescent."""
+        if self._running.is_set():
+            item = _WorkItem()
+            self._work_queue.put(item)
+            item.done.wait()
+            return item.results
+        return self._run_until_quiescent()
+
+    def inject_event(
         self,
         recipient: str,
         content: str,
-        sender: str = "__system__",
+        source: str = "__external__",
     ) -> list[ProcessingResult]:
-        """Send an event message."""
-        msg = Message(
-            sender=sender,
-            recipient=recipient,
-            type=MessageType.EVENT,
-            content=content,
-        )
-        return self._bus.send(msg)
+        """Inject an external event through the event source registry.
+
+        In live mode, enqueues work and blocks until processed.
+        """
+        if self._running.is_set():
+            item = _WorkItem(event_inject=(recipient, content, source))
+            self._work_queue.put(item)
+            item.done.wait()
+            return item.results
+        self._event_sources.inject(recipient, content, source)
+        return self._run_until_quiescent()
 
     def broadcast(
         self,
@@ -108,7 +175,13 @@ class Runtime:
             type=MessageType.DOMAIN,
             content=content,
         )
-        return self._bus.send(msg)
+        if self._running.is_set():
+            item = _WorkItem(message=msg)
+            self._work_queue.put(item)
+            item.done.wait()
+            return item.results
+        self._bus.deliver(msg)
+        return self._run_until_quiescent()
 
     def publish(
         self,
@@ -124,7 +197,58 @@ class Runtime:
             content=content,
             topic=topic,
         )
-        return self._bus.send(msg)
+        if self._running.is_set():
+            item = _WorkItem(message=msg)
+            self._work_queue.put(item)
+            item.done.wait()
+            return item.results
+        self._bus.deliver(msg)
+        return self._run_until_quiescent()
+
+    # --- Processing Loop ---
+
+    def _run_until_quiescent(self) -> list[ProcessingResult]:
+        """Process all pending mailbox messages until the system is quiescent."""
+        results: list[ProcessingResult] = []
+        total = 0
+
+        while total < self._max_chain_depth:
+            # Poll event sources and deliver to mailboxes
+            for object_id, envelope in self._event_sources.poll_all():
+                msg = Message(
+                    sender=envelope.source_id,
+                    recipient=object_id,
+                    type=MessageType.EVENT,
+                    content=envelope.content,
+                )
+                self._bus.deliver(msg)
+
+            # Find next object with pending messages (deterministic: registration order)
+            obj = next(
+                (o for o in self._bus.objects.values() if o.has_pending),
+                None,
+            )
+            if obj is None:
+                break  # quiescent
+
+            result = obj.process_next()
+            if result is None:
+                continue
+            total += 1
+            results.append(result)
+            self._bus.record_processing(result)
+
+            # Deliver outgoing peer messages
+            for out in result.outgoing_messages:
+                chained = Message(
+                    sender=obj.object_id,
+                    recipient=out.recipient,
+                    type=MessageType.DOMAIN,
+                    content=out.content,
+                )
+                self._bus.deliver(chained)
+
+        return results
 
     # --- Modification ---
 
@@ -174,6 +298,19 @@ class Runtime:
         """Return the communication graph."""
         return self._bus.topology()
 
+    @property
+    def event_registry(self) -> dict[str, list[str]]:
+        """Return object_id → list of bound source descriptors."""
+        return self._event_sources.bindings_summary()
+
+    def get_event_source(self, object_id: str, descriptor: str):
+        """Get the event source provider for an object's declared source.
+
+        Returns an InjectableEventSource (or custom provider) that the
+        test harness or external adapter can fire events into.
+        """
+        return self._event_sources.get_source(object_id, descriptor)
+
     # --- Persistence ---
 
     def save_object(self, object_id: str, path: str | Path | None = None) -> Path:
@@ -196,6 +333,121 @@ class Runtime:
     def has_unsaved_modifications(self, object_id: str) -> bool:
         """Check if an object has unsaved definition changes."""
         return object_id in self._modified
+
+    # --- Live Mode ---
+
+    @property
+    def is_running(self) -> bool:
+        """True when the live run-loop is active."""
+        return self._running.is_set()
+
+    def run(
+        self,
+        poll_interval: float = 0.1,
+        on_result: Callable[[ProcessingResult], None] | None = None,
+    ) -> None:
+        """Start the live run-loop. Blocks until stop() is called.
+
+        The run-loop continuously polls for work (submitted messages and
+        event source activity) and processes until quiescent, then waits.
+        """
+        self._shutdown.clear()
+        self._running.set()
+        try:
+            self._run_loop(poll_interval, on_result)
+        finally:
+            self._running.clear()
+
+    def start(
+        self,
+        poll_interval: float = 0.1,
+        on_result: Callable[[ProcessingResult], None] | None = None,
+    ) -> None:
+        """Start the runtime. Runs the processing loop in a background thread."""
+        self._thread = threading.Thread(
+            target=self.run,
+            args=(poll_interval, on_result),
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        """Signal the run-loop to stop and wait for it to finish."""
+        self._shutdown.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+            self._thread = None
+
+    def submit(
+        self,
+        recipient: str,
+        content: str,
+        sender: str = "__user__",
+    ) -> _WorkItem:
+        """Submit a message for processing by the run-loop. Non-blocking.
+
+        Returns a _WorkItem whose `done` event is set when processing completes.
+        Results are available in `item.results`.
+        """
+        msg = Message(
+            sender=sender,
+            recipient=recipient,
+            type=MessageType.DOMAIN,
+            content=content,
+        )
+        item = _WorkItem(message=msg)
+        self._work_queue.put(item)
+        return item
+
+    def kill_object(self, object_id: str) -> None:
+        """Remove an object from the runtime permanently."""
+        self._bus.unregister(object_id)
+        self._event_sources.unbind_object(object_id)
+        self._sources.pop(object_id, None)
+        self._modified.discard(object_id)
+
+    def _run_loop(
+        self,
+        poll_interval: float,
+        on_result: Callable[[ProcessingResult], None] | None,
+    ) -> None:
+        """Internal run-loop: drain work queue, process, repeat."""
+        while not self._shutdown.is_set():
+            # Block until work arrives or poll interval elapses
+            items: list[_WorkItem] = []
+            try:
+                items.append(self._work_queue.get(timeout=poll_interval))
+            except queue.Empty:
+                pass
+            # Drain any additional queued items
+            while True:
+                try:
+                    items.append(self._work_queue.get_nowait())
+                except queue.Empty:
+                    break
+
+            # Deliver messages / inject events from work items
+            for item in items:
+                if item.message is not None:
+                    self._bus.deliver(item.message)
+                if item.event_inject is not None:
+                    recipient, content, source = item.event_inject
+                    self._event_sources.inject(recipient, content, source)
+
+            # Process everything until quiescent
+            try:
+                results = self._run_until_quiescent()
+            except Exception:
+                logger.exception("Error in run-loop processing")
+                results = []
+
+            # Fire callbacks and signal completion
+            if on_result:
+                for r in results:
+                    on_result(r)
+            for item in items:
+                item.results = results
+                item.done.set()
 
     # --- Metrics ---
 

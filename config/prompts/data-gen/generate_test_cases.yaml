@@ -61,7 +61,7 @@ user_prompt: |
   - Internal actions (e.g., "System looks up manager", "Object routes ticket")
   - Consequences of other events (e.g., "HubSpot record updated after approval")
 
-  The `recipient` is the object that receives the external trigger directly — the same entry-point object targeted in the sample's `steps`. It is never a business logic object that only acts after receiving a chained message.
+  The `recipient` is the object that receives the external trigger directly — the same entry-point object targeted in the sample's `steps`. It must be an object whose `event_sources` list is non-empty in the sample's object definitions. It is never a business logic object that only acts after receiving a chained message.
 
   `call_type`: always `"send_event"` for external system triggers, `"send"` for direct user messages.
   `source`: `"__external__"` for system-originated events, `"__user__"` for user messages.

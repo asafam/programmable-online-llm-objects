@@ -70,6 +70,7 @@ class ObjectDef(BaseModel):
     peers: list[PeerDecl] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     subscriptions: list[str] = Field(default_factory=list)
+    event_sources: list[str] = Field(default_factory=list)
 
     @field_validator("object_id")
     @classmethod
@@ -183,4 +184,5 @@ def to_lnl_definition(obj: ObjectDef) -> ObjectDefinition:
         ],
         skills=list(obj.skills),
         subscriptions=list(obj.subscriptions),
+        event_sources=list(obj.event_sources),
     )

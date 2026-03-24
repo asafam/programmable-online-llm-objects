@@ -81,6 +81,10 @@ def main(argv: list[str] | None = None) -> None:
     p_save.add_argument("object_id")
     p_save.add_argument("--path", default=None)
 
+    # live
+    p_live = sub.add_parser("live", help="Start a live runtime with interactive REPL")
+    p_live.add_argument("path", help="Directory containing .md files")
+
     # run
     p_run = sub.add_parser("run", help="Run a benchmark scenario")
     p_run.add_argument("path", help="Scenario directory or scenarios parent directory")
@@ -113,7 +117,9 @@ def main(argv: list[str] | None = None) -> None:
             print(f"[{r.object_id}] {r.reply}")
 
     elif args.command == "event":
-        results = rt.send_event(args.recipient, args.content)
+        from .gateway import EventGateway
+        gw = EventGateway(rt)
+        results = gw.dispatch(args.recipient, args.content)
         for r in results:
             print(f"[{r.object_id}] {r.reply}")
 
@@ -156,6 +162,13 @@ def main(argv: list[str] | None = None) -> None:
         path = rt.save_object(args.object_id, args.path)
         print(f"Saved: {path}")
 
+    elif args.command == "live":
+        objects = rt.load_directory(args.path)
+        for obj in objects:
+            print(f"  Loaded: {obj.object_id}")
+        print()
+        _live_repl(rt)
+
     elif args.command == "run":
         from .benchmark import BenchmarkHarness
         harness = BenchmarkHarness(brain)
@@ -169,6 +182,67 @@ def main(argv: list[str] | None = None) -> None:
             for result in results:
                 _print_scenario_result(result)
                 print()
+
+
+def _live_repl(rt: Runtime) -> None:
+    """Interactive REPL with a live background runtime."""
+    from .gateway import EventGateway
+
+    gw = EventGateway(rt)
+
+    def _on_result(r):
+        print(f"  [{r.object_id}] {r.reply}")
+
+    rt.start(on_result=_on_result)
+    print("Runtime started. Commands: send <id> <msg>, event <id> <msg>, state <id>, kill <id>, topology, objects, quit")
+    print()
+
+    try:
+        while True:
+            try:
+                line = input("> ").strip()
+            except EOFError:
+                break
+            if not line:
+                continue
+
+            parts = line.split(None, 2)
+            cmd = parts[0].lower()
+
+            if cmd == "quit":
+                break
+            elif cmd == "send" and len(parts) >= 3:
+                rt.send(parts[1], parts[2])
+            elif cmd == "event" and len(parts) >= 3:
+                gw.dispatch(parts[1], parts[2])
+            elif cmd == "state" and len(parts) >= 2:
+                try:
+                    print(rt.state(parts[1]))
+                except KeyError as e:
+                    print(f"Error: {e}")
+            elif cmd == "kill" and len(parts) >= 2:
+                rt.kill_object(parts[1])
+                print(f"Killed: {parts[1]}")
+            elif cmd == "topology":
+                for oid, peers in rt.topology().items():
+                    peers_str = ", ".join(peers) if peers else "(none)"
+                    print(f"  {oid} -> {peers_str}")
+            elif cmd == "objects":
+                for oid in rt.topology():
+                    print(f"  {oid}")
+            elif cmd == "snapshot" and len(parts) >= 2:
+                try:
+                    print(json.dumps(rt.snapshot(parts[1]), indent=2))
+                except KeyError as e:
+                    print(f"Error: {e}")
+            else:
+                print(f"Unknown command: {line}")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("\nStopping runtime...")
+        rt.stop()
+        print("Done.")
 
 
 def _print_scenario_result(result):

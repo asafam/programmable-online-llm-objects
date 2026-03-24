@@ -30,6 +30,7 @@ class ObjectDefinition:
     peers: list[PeerDeclaration] = field(default_factory=list)
     skills: list[str] = field(default_factory=list)
     subscriptions: list[str] = field(default_factory=list)
+    event_sources: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -50,12 +51,29 @@ class OutgoingMessage:
 
 
 @dataclass
+class ToolCall:
+    """A tool call requested by the LLM."""
+    id: str
+    tool: str
+    arguments: dict
+
+
+@dataclass
+class ToolResult:
+    """Result of executing a tool call."""
+    id: str
+    output: str
+    error: str = ""
+
+
+@dataclass
 class LLMResponse:
     """Structured response returned by an LLM brain."""
-    updated_state: str
+    updated_state: dict
     reply: str
     outgoing_messages: list[OutgoingMessage] = field(default_factory=list)
     reasoning: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
 
 
 @dataclass
@@ -73,8 +91,8 @@ class ProcessingResult:
     object_id: str
     reply: str
     outgoing_messages: list[OutgoingMessage] = field(default_factory=list)
-    state_before: str = ""
-    state_after: str = ""
+    state_before: dict = field(default_factory=dict)
+    state_after: dict = field(default_factory=dict)
     metrics: Optional[InferenceMetrics] = None
 
 

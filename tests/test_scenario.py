@@ -116,7 +116,7 @@ class TestProactiveEvent:
 
         # Step 2: Email event — Sarah is going vegan
         print("\n[STEP 2] Email event: Sarah is going vegan")
-        results = rt.send_event(
+        results = rt.inject_event(
             "email-monitor",
             "New email from Sarah: 'I've decided to go vegan! "
             "Please remove all meat from the shopping list.'",
@@ -271,7 +271,7 @@ class TestAffirmativeEvent:
 
         # Send affirmative email
         print("\n[STEP 3] Email event: 'ok to eat meat' (should be no-op)")
-        results = rt.send_event(
+        results = rt.inject_event(
             "email-monitor",
             "New email from Sarah: 'Just confirming - it's totally fine to buy meat products.'",
         )

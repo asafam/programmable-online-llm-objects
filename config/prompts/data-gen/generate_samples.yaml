@@ -67,6 +67,7 @@ prompt: |
      Interactions with external systems are modeled as peers pointing to service objects (e.g., `{object_id: "active-directory", relationship: "Query for employee org structure when approval routing is needed"}`). This replaces skills like "look up manager" — the lookup is a message to a service object.
   6. `skills` — purely internal capabilities that do NOT require external system calls (e.g., `calculate-totals`, `format-report`). If a capability involves reading from or writing to an external system, model it as a peer to a service object instead. Omit if none.
   7. `subscriptions` — topics this object listens to (e.g., `new-ticket`, `escalation-needed`). Omit if none.
+  8. `event_sources` — external triggers this object receives from outside the system boundary (e.g., `Slack webhook: incoming messages`, `HubSpot: new quote created`). Only for service objects or entry-point objects that receive external triggers. Omit if none.
 
   Output all objects in the `objects` array before writing any steps.
 
@@ -100,4 +101,5 @@ prompt: |
 
   **Correctness**:
   - Every `target` must be a valid `object_id` from the `objects` array
+  - Every `target` must be an object whose `event_sources` list is non-empty — only objects that listen for external triggers can receive steps
   - The `text` must contain only information that arrives with the external trigger — not data the objects will look up themselves

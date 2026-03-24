@@ -73,6 +73,7 @@ def parse_object_text(text: str) -> ObjectDefinition:
 
     skills = _parse_bullets(sections.get("skills", ""))
     subscriptions = _parse_bullets(sections.get("subscriptions", ""))
+    event_sources = _parse_bullets(sections.get("event sources", ""))
 
     return ObjectDefinition(
         object_id=object_id,
@@ -82,6 +83,7 @@ def parse_object_text(text: str) -> ObjectDefinition:
         peers=peers,
         skills=skills,
         subscriptions=subscriptions,
+        event_sources=event_sources,
     )
 
 
@@ -113,5 +115,8 @@ def serialize_object(defn: ObjectDefinition) -> str:
 
     if defn.subscriptions:
         parts.append(f"\n## Subscriptions\n\n" + "\n".join(f"- {s}" for s in defn.subscriptions))
+
+    if defn.event_sources:
+        parts.append(f"\n## Event Sources\n\n" + "\n".join(f"- {s}" for s in defn.event_sources))
 
     return "\n".join(parts) + "\n"

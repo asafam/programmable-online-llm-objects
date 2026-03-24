@@ -15,8 +15,11 @@ from .types import (
     InferenceMetrics,
     LLMResponse,
     Message,
+    MessageType,
     ObjectDefinition,
     OutgoingMessage,
+    ToolCall,
+    ToolResult,
 )
 
 # JSON schema for the LLM response format
@@ -24,8 +27,9 @@ LLM_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "updated_state": {
-            "type": "string",
-            "description": "The complete updated state after processing the message.",
+            "type": "object",
+            "additionalProperties": True,
+            "description": "The complete updated state after processing the message, as a JSON object.",
         },
         "reply": {
             "type": "string",
@@ -59,6 +63,35 @@ LLM_RESPONSE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+# Extended schema with tool_calls — used when tools are available
+LLM_RESPONSE_SCHEMA_WITH_TOOLS: dict[str, Any] = {
+    **LLM_RESPONSE_SCHEMA,
+    "properties": {
+        **LLM_RESPONSE_SCHEMA["properties"],
+        "tool_calls": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Unique ID for this tool call."},
+                    "tool": {"type": "string", "description": "Tool name, e.g. 'execute_code'."},
+                    "arguments": {
+                        "type": "object",
+                        "properties": {
+                            "code": {"type": "string", "description": "Python code to execute."},
+                        },
+                        "required": ["code"],
+                        "additionalProperties": False,
+                    },
+                },
+                "required": ["id", "tool", "arguments"],
+                "additionalProperties": False,
+            },
+            "description": "Tool calls to execute before producing a final response.",
+        },
+    },
+}
+
 
 _PROMPT_CONFIG: Optional[dict] = None
 
@@ -73,7 +106,24 @@ def _load_prompt_config() -> dict:
     return _PROMPT_CONFIG
 
 
-def build_system_prompt(definition: ObjectDefinition, current_state: str) -> str:
+def _message_label(msg: Message) -> str:
+    """Return a human-readable label for a message, so the LLM knows its type."""
+    if msg.type == MessageType.EVENT:
+        if msg.sender in ("__system__", "__external__"):
+            return "External event"
+        return f"Event from {msg.sender}"
+    if msg.type == MessageType.ADMIN:
+        return "System"
+    if msg.sender == "__user__":
+        return "User instruction"
+    return f"Message from peer: {msg.sender}"
+
+
+def build_system_prompt(
+    definition: ObjectDefinition,
+    current_state: dict,
+    tools: str = "",
+) -> str:
     """Build the system prompt from the YAML template and an ObjectDefinition."""
     config = _load_prompt_config()
     template = config["system_prompt"]
@@ -86,14 +136,20 @@ def build_system_prompt(definition: ObjectDefinition, current_state: str) -> str
     if definition.skills:
         skills = "\n".join(f"- {s}" for s in definition.skills)
 
+    event_sources = ""
+    if definition.event_sources:
+        event_sources = "\n".join(f"- {s}" for s in definition.event_sources)
+
     return template.format(
         object_id=definition.object_id,
         role=definition.role,
         behavior=definition.behavior or "(none)",
         peers=peers or "(none)",
         skills=skills or "(none)",
+        event_sources=event_sources or "(none)",
+        tools=tools or "(none)",
         state_description=definition.state_description or "(none)",
-        current_state=current_state or "(empty)",
+        current_state=json.dumps(current_state, indent=2) if current_state else "(empty)",
     )
 
 
@@ -112,26 +168,40 @@ def _build_chat_messages(
     msgs: list[dict[str, str]] = [{"role": "system", "content": sys_prompt}]
     if history:
         prefix = get_history_prefix()
-        history_lines = [f"  [{msg.sender}]: {msg.content}" for msg in history]
+        history_lines = [f"  [{_message_label(msg)}]: {msg.content}" for msg in history]
         msgs.append({"role": "user", "content": f"{prefix}\n" + "\n".join(history_lines)})
         msgs.append({"role": "assistant", "content": "Understood, I see the past context. What is the new message?"})
-    msgs.append({"role": "user", "content": f"[NEW MESSAGE] [{message.sender}]: {message.content}"})
+    msgs.append({"role": "user", "content": f"[{_message_label(message)}]: {message.content}"})
     return msgs
 
 
 class LLMBrain(ABC):
     """Abstract interface for LLM processing backends."""
 
+    # Tool description injected into system prompt when tools are available
+    tools_description: str = ""
+
     @abstractmethod
     def process(
         self,
         definition: ObjectDefinition,
-        current_state: str,
+        current_state: dict,
         message: Message,
         history: Sequence[Message],
     ) -> tuple[LLMResponse, InferenceMetrics]:
         """Process a message and return the LLM response with metrics."""
         ...
+
+    def process_continuation(
+        self,
+        definition: ObjectDefinition,
+        current_state: dict,
+        message: Message,
+        history: Sequence[Message],
+        prior_exchanges: list[tuple[LLMResponse, list[ToolResult]]],
+    ) -> tuple[LLMResponse, InferenceMetrics]:
+        """Continue processing after tool calls. Default: delegate to process()."""
+        return self.process(definition, current_state, message, history)
 
 
 class OpenAIBrain(LLMBrain):
@@ -156,16 +226,11 @@ class OpenAIBrain(LLMBrain):
         self._seed = seed
         self._client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"])
 
-    def process(
-        self,
-        definition: ObjectDefinition,
-        current_state: str,
-        message: Message,
-        history: Sequence[Message],
-    ) -> tuple[LLMResponse, InferenceMetrics]:
-        sys_prompt = build_system_prompt(definition, current_state)
-        messages = _build_chat_messages(sys_prompt, history, message)
+    def _get_schema(self) -> dict[str, Any]:
+        return LLM_RESPONSE_SCHEMA_WITH_TOOLS if self.tools_description else LLM_RESPONSE_SCHEMA
 
+    def _call_openai(self, messages: list[dict]) -> tuple[LLMResponse, InferenceMetrics]:
+        schema = self._get_schema()
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -174,8 +239,7 @@ class OpenAIBrain(LLMBrain):
                 "type": "json_schema",
                 "json_schema": {
                     "name": "llm_response",
-                    "schema": LLM_RESPONSE_SCHEMA,
-                    "strict": True,
+                    "schema": schema,
                 },
             },
         }
@@ -195,6 +259,40 @@ class OpenAIBrain(LLMBrain):
 
         raw = json.loads(resp.choices[0].message.content or "{}")
         return _parse_llm_result(raw), metrics
+
+    def process(
+        self,
+        definition: ObjectDefinition,
+        current_state: dict,
+        message: Message,
+        history: Sequence[Message],
+    ) -> tuple[LLMResponse, InferenceMetrics]:
+        sys_prompt = build_system_prompt(definition, current_state, tools=self.tools_description)
+        messages = _build_chat_messages(sys_prompt, history, message)
+        return self._call_openai(messages)
+
+    def process_continuation(
+        self,
+        definition: ObjectDefinition,
+        current_state: dict,
+        message: Message,
+        history: Sequence[Message],
+        prior_exchanges: list[tuple[LLMResponse, list[ToolResult]]],
+    ) -> tuple[LLMResponse, InferenceMetrics]:
+        sys_prompt = build_system_prompt(definition, current_state, tools=self.tools_description)
+        messages = _build_chat_messages(sys_prompt, history, message)
+        # Append prior tool exchanges to conversation
+        for response, results in prior_exchanges:
+            messages.append({"role": "assistant", "content": json.dumps({
+                "tool_calls": [{"id": tc.id, "tool": tc.tool, "arguments": tc.arguments} for tc in response.tool_calls],
+                "reasoning": response.reasoning,
+            })})
+            results_text = "\n".join(
+                f"[{r.id}] output: {r.output}" + (f"\nerror: {r.error}" if r.error else "")
+                for r in results
+            )
+            messages.append({"role": "user", "content": f"[Tool results]:\n{results_text}"})
+        return self._call_openai(messages)
 
 
 class AnthropicBrain(LLMBrain):
@@ -237,20 +335,14 @@ class AnthropicBrain(LLMBrain):
                         if isinstance(item, dict):
                             AnthropicBrain._enforce_strict_schema(item)
 
-    def process(
-        self,
-        definition: ObjectDefinition,
-        current_state: str,
-        message: Message,
-        history: Sequence[Message],
-    ) -> tuple[LLMResponse, InferenceMetrics]:
-        sys_prompt = build_system_prompt(definition, current_state)
-        # Anthropic: system is separate, only pass non-system messages
-        all_msgs = _build_chat_messages(sys_prompt, history, message)
-        messages = [m for m in all_msgs if m["role"] != "system"]
-
-        schema = json.loads(json.dumps(LLM_RESPONSE_SCHEMA))
+    def _get_schema(self) -> dict[str, Any]:
+        base = LLM_RESPONSE_SCHEMA_WITH_TOOLS if self.tools_description else LLM_RESPONSE_SCHEMA
+        schema = json.loads(json.dumps(base))
         self._enforce_strict_schema(schema)
+        return schema
+
+    def _call_anthropic(self, sys_prompt: str, messages: list[dict]) -> tuple[LLMResponse, InferenceMetrics]:
+        schema = self._get_schema()
 
         t0 = time.time()
         resp = self._client.messages.create(
@@ -283,6 +375,41 @@ class AnthropicBrain(LLMBrain):
         raw = json.loads(content_str or "{}")
         return _parse_llm_result(raw), metrics
 
+    def process(
+        self,
+        definition: ObjectDefinition,
+        current_state: dict,
+        message: Message,
+        history: Sequence[Message],
+    ) -> tuple[LLMResponse, InferenceMetrics]:
+        sys_prompt = build_system_prompt(definition, current_state, tools=self.tools_description)
+        all_msgs = _build_chat_messages(sys_prompt, history, message)
+        messages = [m for m in all_msgs if m["role"] != "system"]
+        return self._call_anthropic(sys_prompt, messages)
+
+    def process_continuation(
+        self,
+        definition: ObjectDefinition,
+        current_state: dict,
+        message: Message,
+        history: Sequence[Message],
+        prior_exchanges: list[tuple[LLMResponse, list[ToolResult]]],
+    ) -> tuple[LLMResponse, InferenceMetrics]:
+        sys_prompt = build_system_prompt(definition, current_state, tools=self.tools_description)
+        all_msgs = _build_chat_messages(sys_prompt, history, message)
+        messages = [m for m in all_msgs if m["role"] != "system"]
+        for response, results in prior_exchanges:
+            messages.append({"role": "assistant", "content": json.dumps({
+                "tool_calls": [{"id": tc.id, "tool": tc.tool, "arguments": tc.arguments} for tc in response.tool_calls],
+                "reasoning": response.reasoning,
+            })})
+            results_text = "\n".join(
+                f"[{r.id}] output: {r.output}" + (f"\nerror: {r.error}" if r.error else "")
+                for r in results
+            )
+            messages.append({"role": "user", "content": f"[Tool results]:\n{results_text}"})
+        return self._call_anthropic(sys_prompt, messages)
+
 
 @dataclass
 class _ScriptEntry:
@@ -297,7 +424,7 @@ class CallRecord:
     """Record of a call made to MockBrain."""
     object_id: str
     definition: ObjectDefinition
-    current_state: str
+    current_state: dict
     message: Message
 
 
@@ -329,7 +456,7 @@ class MockBrain(LLMBrain):
     def process(
         self,
         definition: ObjectDefinition,
-        current_state: str,
+        current_state: dict,
         message: Message,
         history: Sequence[Message],
     ) -> tuple[LLMResponse, InferenceMetrics]:
@@ -353,7 +480,7 @@ class MockBrain(LLMBrain):
         # Fallback: echo back with no state change
         return (
             LLMResponse(
-                updated_state=current_state,
+                updated_state=dict(current_state),
                 reply=f"Echo: {message.content}",
                 outgoing_messages=[],
                 reasoning="No script configured",
@@ -382,9 +509,17 @@ def _parse_llm_result(result: Any) -> LLMResponse:
         elif isinstance(m, OutgoingMessage):
             outgoing.append(m)
 
+    tool_calls = []
+    for tc in data.get("tool_calls", []):
+        if isinstance(tc, dict):
+            tool_calls.append(ToolCall(id=tc["id"], tool=tc["tool"], arguments=tc["arguments"]))
+        elif isinstance(tc, ToolCall):
+            tool_calls.append(tc)
+
     return LLMResponse(
-        updated_state=data.get("updated_state", ""),
+        updated_state=data.get("updated_state") or {},
         reply=data.get("reply", ""),
         outgoing_messages=outgoing,
         reasoning=data.get("reasoning", ""),
+        tool_calls=tool_calls,
     )

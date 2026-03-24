@@ -14,7 +14,7 @@ from src.lnl.benchmark import (
 @pytest.fixture
 def brain():
     b = MockBrain()
-    b.set_default(LLMResponse(updated_state="processed", reply="ok"))
+    b.set_default(LLMResponse(updated_state={"status": "processed"}, reply="ok"))
     return b
 
 
@@ -114,7 +114,7 @@ class TestRunScenario:
         assert result.assertion_results[0].passed is True
 
     def test_modify_step(self, brain, tmp_path):
-        brain.set_default(LLMResponse(updated_state="has state", reply="ok"))
+        brain.set_default(LLMResponse(updated_state={"status": "has state"}, reply="ok"))
         harness = BenchmarkHarness(brain, judge=brain)
 
         objects_dir = tmp_path / "objects"
@@ -165,7 +165,7 @@ class TestRunDirectory:
 
 class TestMocksIntegration:
     def test_advance_fires_events(self, brain, tmp_path):
-        brain.set_default(LLMResponse(updated_state="event received", reply="ok"))
+        brain.set_default(LLMResponse(updated_state={"status": "event received"}, reply="ok"))
         harness = BenchmarkHarness(brain, judge=brain)
 
         objects_dir = tmp_path / "objects"

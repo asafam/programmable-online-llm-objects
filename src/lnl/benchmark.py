@@ -1,6 +1,7 @@
 """Benchmark harness — load scenarios, run them, evaluate with LLM-as-judge."""
 from __future__ import annotations
 
+import json
 import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -147,7 +148,7 @@ class BenchmarkHarness:
                 results = rt.send(step.target, step.content, sender=step.sender)
                 all_results.extend(results)
             elif step.action == "event":
-                results = rt.send_event(step.target, step.content, sender=step.sender)
+                results = rt.inject_event(step.target, step.content, source=step.sender)
                 all_results.extend(results)
             elif step.action == "broadcast":
                 results = rt.broadcast(step.content, sender=step.sender)
@@ -157,7 +158,7 @@ class BenchmarkHarness:
             elif step.action == "advance":
                 due_events = registry.advance()
                 for evt in due_events:
-                    results = rt.send_event(evt.target, evt.content)
+                    results = rt.inject_event(evt.target, evt.content)
                     all_results.extend(results)
 
         # Evaluate assertions
@@ -259,7 +260,8 @@ class BenchmarkHarness:
         """Gather the actual value for an assertion."""
         if assertion.type == "state":
             try:
-                return rt.state(assertion.target)
+                state = rt.state(assertion.target)
+                return json.dumps(state)
             except KeyError:
                 return f"Object '{assertion.target}' not found"
 
