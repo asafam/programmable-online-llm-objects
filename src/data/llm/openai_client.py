@@ -92,3 +92,15 @@ class OpenAIChatLLM(AbstractLLM):
 
         parsed = json.loads(content)
         return response_model(**parsed)
+
+    def generate_text(self, messages: Sequence[ChatMessage]) -> str:
+        """Generate a plain text response without schema constraints."""
+        kwargs = {
+            "model": self.model,
+            "messages": self._to_dict_messages(messages),
+            "temperature": self.temperature,
+        }
+        if self.seed is not None:
+            kwargs["seed"] = self.seed
+        response = self.client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content or ""

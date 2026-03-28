@@ -1,0 +1,35 @@
+# Mock email tool for LNL evaluation.
+# Load with: --mock-config config/mocks/lnl/email.yaml
+#
+# Triggers: when email.send is called, a confirmation is dispatched to a
+# target object (e.g. a slack-listener or approval-tracker).
+# Set triggers[].target_object_id to the object_id that should receive the
+# follow-up event. Use {arg_name} to interpolate tool call arguments.
+tools:
+  - tool_name: email.send
+    description: Send an email to a recipient.
+    arguments_schema:
+      type: object
+      properties:
+        to:
+          type: string
+          description: Recipient email address or name
+        subject:
+          type: string
+          description: Email subject line
+        body:
+          type: string
+          description: Email body text
+      required: [to, subject, body]
+    response_template: "Email sent to {to} (subject: '{subject}'). Message queued."
+    # scripted_responses: consumed FIFO per call; {call_index} = 1-based call number
+    # scripted_responses:
+    #   - "Email #{call_index} queued for {to}: '{subject}'"
+    #   - "Email #{call_index} sent to {to}: '{subject}'"
+    # match: {}  # empty = triggers always fire; add regex conditions to narrow
+    triggers: []
+    # Example trigger — uncomment and set target_object_id to enable orchestration:
+    # triggers:
+    #   - target_object_id: slack-notifier
+    #     message_template: "[Email Sent] To: {to} | Subject: {subject}"
+    #     source: email

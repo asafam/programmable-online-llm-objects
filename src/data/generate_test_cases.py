@@ -285,14 +285,20 @@ def run(args: argparse.Namespace) -> Path:
     print(f"Loaded {len(samples)} samples from {args.input}")
 
     # Setup output and determine completed items
-    # Use 'link' field for resume tracking (unique per sample, same in TestCase)
+    # Key by sample.id (unique per generated sample). Test case IDs are "{sample_id}-TC{NNN}",
+    # so we strip the trailing "-TC{NNN}" suffix to recover the sample ID.
+    # Using 'link' would collide when --samples-per-template > 1 generates multiple samples
+    # from the same template (they share the same link).
     completed, file_mode = setup_output(
         args.output,
         args.force,
-        lambda: load_completed_keys(args.output, lambda d: d.get("link")),
+        lambda: load_completed_keys(
+            args.output,
+            lambda d: d["id"].rsplit("-TC", 1)[0] if d.get("id") and "-TC" in d["id"] else d.get("id"),
+        ),
     )
 
-    pending = [s for s in samples if s.link not in completed]
+    pending = [s for s in samples if s.id not in completed]
 
     if not pending:
         print("All samples already generated. Use --force to regenerate.")

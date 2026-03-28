@@ -75,7 +75,8 @@ class AnthropicChatLLM(AbstractLLM):
         """Recursively set additionalProperties: false on all object types.
 
         Anthropic's JSON schema mode requires this for every object in the schema,
-        including nested $defs.
+        including nested $defs. Free-form dicts (additionalProperties: true) are
+        left unchanged since they must allow arbitrary keys.
         """
         if schema.get("type") == "object":
             schema["additionalProperties"] = False
@@ -140,3 +141,21 @@ class AnthropicChatLLM(AbstractLLM):
 
         parsed = json.loads(content)
         return response_model(**parsed)
+
+    def generate_text(self, messages: Sequence[ChatMessage]) -> str:
+        """Generate a plain text response without schema constraints."""
+        system_content, non_system_messages = self._to_anthropic_messages(messages)
+        kwargs = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "messages": non_system_messages,
+        }
+        if system_content:
+            kwargs["system"] = system_content
+        response = self.client.messages.create(**kwargs)
+        content = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                content += block.text
+        return content

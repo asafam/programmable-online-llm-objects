@@ -78,36 +78,32 @@ def _format_components(objects: list[ObjectDef]) -> str:
         lines = [
             f"### {obj.object_id}",
             f"**Role:** {obj.role}",
-            f"**State:** {obj.state_description}",
             f"**Behavior:** {obj.behavior}",
         ]
         if obj.peers:
             lines.append("**Peers:**")
             for p in obj.peers:
                 lines.append(f"  - {p.object_id}: {p.relationship}")
-        if obj.skills:
-            lines.append("**Skills:** " + ", ".join(obj.skills))
-        if obj.event_sources:
-            lines.append("**Event sources:** " + ", ".join(obj.event_sources))
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
 
-def build_system_prompt(tc: TestCase, tool_list: Optional[list[str]] = None) -> str:
+def _format_seed_data(objects: list[ObjectDef]) -> str:
+    """Collect and format seed_data from all objects into a single reference block."""
+    combined = {obj.object_id: obj.seed_data for obj in objects if obj.seed_data}
+    return json.dumps(combined, indent=2) if combined else "(none)"
+
+
+def build_system_prompt(tc: TestCase) -> str:
     """Build the single-agent system prompt from a TestCase."""
     config = _load_prompt_config()
     template = config["system_prompt"]
 
-    tools_section = ""
-    if tool_list:
-        tools_template = config.get("tools_section_template", "")
-        tools_section = tools_template.format(tool_list="\n".join(f"  - {t}" for t in tool_list))
-
     return template.format(
         workflow_name=tc.name,
         components=_format_components(tc.objects),
+        seed_data=_format_seed_data(tc.objects),
         current_state="(empty)",
-        tools_section=tools_section,
     )
 
 
@@ -136,10 +132,6 @@ def gather_evidence(content: str, tool_calls: Optional[list[dict]] = None) -> st
         reply = data.get("reply", "").strip()
         if reply:
             parts.append(f"Reply: {reply}")
-
-        actions = data.get("actions", [])
-        if actions:
-            parts.append("Actions:\n" + "\n".join(f"  - {a}" for a in actions))
 
         state = data.get("updated_state", {})
         if state:
@@ -197,7 +189,7 @@ class OpenClawAgent:
             init_result = await agent.execute(
                 f"[SYSTEM INSTRUCTIONS — follow these for the entire conversation]\n\n{system_prompt}\n\n"
                 f"Acknowledge by replying with a JSON object: "
-                f'{{"reasoning": "understood", "updated_state": {{}}, "actions": [], "reply": "Ready."}}'
+                f'{{"reasoning": "understood", "updated_state": {{}}, "reply": "Ready."}}'
             )
             init_latency = (time.time() - t0) * 1000
 
@@ -232,15 +224,7 @@ def _execute_test_case_inner(
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase against an OpenClaw agent and return results."""
 
-    tool_list: Optional[list[str]] = None
-    if mock_server and mock_server._state.mock_script:
-        tool_list = [
-            tool.method
-            for sys in mock_server._state.mock_script.systems
-            for tool in sys.tools
-        ]
-
-    sys_prompt = build_system_prompt(tc, tool_list=tool_list)
+    sys_prompt = build_system_prompt(tc)
 
     # Build the ordered list of messages to send
     messages: list[dict[str, Any]] = []
@@ -480,18 +464,18 @@ def run(args: argparse.Namespace) -> Path:
         mock_server.wait_ready()
         print("Mock server: ready")
 
-    # Judge uses an LLM brain
+    # Judge
     judge_provider = args.judge_provider or "openai"
     judge_model = args.judge_model or "gpt-4o-mini"
     if judge_provider == "openai":
-        from src.lnl.brain import OpenAIBrain
-        judge_brain = OpenAIBrain(model=judge_model)
+        from src.lnl.judge import OpenAIJudge
+        judge = OpenAIJudge(model=judge_model)
     else:
-        from src.lnl.brain import AnthropicBrain
-        judge_brain = AnthropicBrain(model=judge_model)
+        from src.lnl.judge import AnthropicJudge
+        judge = AnthropicJudge(model=judge_model)
 
     from src.lnl.benchmark import BenchmarkHarness
-    harness = BenchmarkHarness(brain=judge_brain)
+    harness = BenchmarkHarness(judge=judge)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
 

@@ -35,6 +35,17 @@ class AbstractLLM(ABC):
         """
         raise NotImplementedError
 
+    def generate_text(
+        self,
+        messages: Sequence[ChatMessage],
+    ) -> str:
+        """Generate a plain text response.
+
+        Default implementation raises NotImplementedError. Subclasses should
+        override this to support free-form text generation without schema constraints.
+        """
+        raise NotImplementedError
+
 
 def system_message(content: str) -> ChatMessage:
     """Create a system message."""

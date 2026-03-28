@@ -83,7 +83,7 @@ user_prompt: |
      it concretely. Never hedge with words like "appropriately", "as needed", or "if applicable".
 
   2. **`expect.action` describes terminal observable output, not internal routing.**
-     Write what would appear in a write-service state, a reply, or an external system record — what was sent, recorded, or produced and to whom. Not "system routes to approver" or "object handles request".
+     Write exactly what external action was performed: which system was called, what was sent, and to whom. For example: "Email sent to <name> via email system" or "Slack message posted to #<channel>". Do NOT use UX concepts like "interface", "dashboard", "widget", "panel", or "form" — these are not observable external actions and cannot be verified. Do NOT say "system routes to approver" or "object handles request".
 
   3. **For removal modifications, specify the fallback.**
      After-events must state both (a) what no longer happens, AND (b) what happens instead —

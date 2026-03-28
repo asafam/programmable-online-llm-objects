@@ -1,0 +1,36 @@
+# Mock Slack tools for LNL evaluation.
+# Load with: --mock-config config/mocks/lnl/slack.yaml
+tools:
+  - tool_name: slack.send_message
+    description: Post a message to a Slack channel.
+    arguments_schema:
+      type: object
+      properties:
+        channel:
+          type: string
+          description: Slack channel name (without #)
+        message:
+          type: string
+          description: Message text to post
+      required: [channel, message]
+    response_template: "Message posted to #{channel}. ts: {channel}-{message}"
+    triggers: []
+    # Example: trigger a reply from the channel when a message is posted
+    # match:
+    #   channel: ".*approv.*"
+    # triggers:
+    #   - target_object_id: approval-handler
+    #     message_template: "[Slack] Reply in #{channel}: Approved."
+    #     source: slack
+
+  - tool_name: slack.create_channel
+    description: Create a new Slack channel.
+    arguments_schema:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Channel name (no spaces, lowercase)
+      required: [name]
+    response_template: "Channel #{name} created."
+    triggers: []

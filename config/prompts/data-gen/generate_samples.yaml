@@ -13,7 +13,7 @@ prompt: |
 
   ## Your Task
 
-  This is a two-phase task. Complete Phase 1 (object identification) before Phase 2 (step writing).
+  Generate exactly **{SAMPLES_COUNT}** sample(s). This is a two-phase task. Complete Phase 1 (object identification) before Phase 2 (step writing).
 
   **Instantiate all placeholders**:
   - "a designated channel" → a specific channel name
@@ -43,7 +43,7 @@ prompt: |
 
   1. **Service objects** — represent external systems the automation interacts with (databases, messaging platforms, CRM, directory services, email, etc.). Named by brand or function as a slug (e.g., `slack`, `active-directory`, `crm`). One object per external system — never split a system into separate read and write objects. Service objects come in two flavors:
      - **Read services** have seeded reference data. Their behavior is to respond to queries about their data. Read services MUST reply with the requested data — the reply is the only way the caller receives the answer back. Read services MUST set `seed_data` (field 9) with concrete data for the scenario.
-     - **Write services** record what they receive and have initially empty state. Their state becomes the audit trail. Write services set `reply` to empty in their responses — they are fire-and-forget sinks. Their `behavior` field should end with: "Do not reply to incoming messages." IMPORTANT: "Do not reply" means the `reply` field in the JSON response is empty — it does NOT mean removing peer declarations. Entry-point write services (those with `event_sources`) still MUST declare peers to forward events to business logic objects.
+     - **Write services** record what they receive and have initially empty state. Their state becomes the audit trail. Write services set `reply` to empty in their responses — they are fire-and-forget sinks. Their `behavior` field should end with: "Do not reply to incoming messages." IMPORTANT: "Do not reply" means the `reply` field in the JSON response is empty — it does NOT mean removing peer declarations. **Entry-point write services (those with `event_sources`) MUST still declare the business logic object as a peer.** Without this peer, the trigger dead-ends at the entry-point and the automation never runs. Example: a CRM service that receives new record webhooks must have a peer pointing to the domain logic object that processes them.
      Both reads and writes happen through normal peer messages — no special mechanism needed.
   2. **Business logic objects** — one per distinct area of responsibility that involves decision-making, processing, routing, or orchestration. Named as domain slugs (nouns), not actions (verbs). Each business logic object owns its own business data and state internally. It interacts with external systems by sending messages to service objects via peer declarations.
 
@@ -54,6 +54,17 @@ prompt: |
   ### Phase 1 — Object identification (populate the `objects` array)
 
   Read all `raw_steps` first. Read the template `name` field to identify the core domain concept. Use it to guide object naming and grouping. Each business logic object should represent a complete domain (e.g., `retrospectives` not `incident-analyzer`). It owns its own data and logic — never create a separate object just to store data for it or just to run one step of its logic.
+
+  #### Mandatory object checklist
+
+  Before writing any objects, answer these questions about the automation:
+
+  1. **What external system receives the trigger?** → You need an entry-point service object with `event_sources` AND at least one peer pointing to the business logic object. Without the peer, the trigger dead-ends.
+  2. **What decisions or routing logic is required?** → You need one business logic object per domain. If the automation classifies, routes, approves, assigns, or orchestrates, there MUST be a business logic object.
+  3. **What data does the business logic object need to look up?** → For each lookup (org charts, catalogs, policy tables, user directories), you need a read service object with non-empty `seed_data`.
+  4. **What external outputs does the automation produce?** → For each output channel (email, Slack, Jira, database write, etc.), you need a write service object. If the automation sends an email, there MUST be an `email` (or equivalent) write service object.
+
+  Every object must have peers wired to form a complete chain from trigger → business logic → output. An object with no peers and no downstream effect is incomplete.
 
   Then identify every object needed. For each object, provide:
 
@@ -71,6 +82,12 @@ prompt: |
   8. `event_sources` — external triggers this object receives from outside the system boundary (e.g., `Slack webhook: incoming messages`, `HubSpot: new quote created`). Only for service objects or entry-point objects that receive external triggers. Omit if none.
   9. `seed_data` — **read services only**: static reference data as a JSON object. This is immutable ground truth the object answers queries from — it is NOT the object's mutable state. Use specific names, values, and rules that match the scenario — invent realistic but unique names for this scenario. The structure depends on what the object stores: an org chart stores employees and reporting lines; a product catalog stores items with prices and categories; a policy table stores rules and thresholds. Whatever the object's `state_description` says it tracks, populate it with concrete values. Write services and business logic objects leave this as `{}`. If omitted, the object starts with no knowledge and will hallucinate answers.
 
+  Before finalizing, verify:
+  - Every entry-point object with `event_sources` has at least one peer (no dead-ends)
+  - Every lookup ("find the manager", "check the policy") is served by a read service with non-empty `seed_data`
+  - Every output action ("send email", "post to Slack") is served by a write service object
+  - The automation has at least one business logic object if any decisions, routing, or processing is required
+
   Output all objects in the `objects` array before writing any steps.
 
   ### Phase 2 — Step writing (populate the `steps` array)
@@ -81,12 +98,16 @@ prompt: |
 
   Ask yourself: "What external event causes this automation to run?" Write only that.
 
-  Each step is a JSON object with three fields:
+  Each step is a JSON object with these fields:
   - `target` — the `object_id` of the LLM-object that receives the external trigger
+  - `source` — the external system originating this trigger (e.g. `"slack"`, `"hubspot"`, `"email"`, `"webhook"`). Use `"__external__"` only if the source is truly unknown.
   - `text` — the natural language content of the trigger (what arrived from outside)
   - `expect` — the expected outcome when the system runs with **no modifications applied**:
     - `action` — specific, observable terminal output: what was sent, recorded, or produced, and to whom
     - `reason` — the rule or peer relationship that produces it
+
+  **Step text content**:
+  Use descriptive names for people, items, and roles — not opaque identifiers (e.g., use "James Brown, Account Executive" not "SR-445"). Read service objects look up entities by name/role, so the names in step text must match entries in the seed_data of read services. When you write a step referencing a person or item, ensure an entry for that person or item exists in the relevant read service's seed_data.
 
   **What IS a step**:
   - An external system creates a record that triggers the automation (e.g., a new item submitted via webhook)
@@ -105,5 +126,6 @@ prompt: |
   - Every `target` must be a valid `object_id` from the `objects` array
   - Every `target` must be an object whose `event_sources` list is non-empty — only objects that listen for external triggers can receive steps
   - The `text` must contain only information that arrives with the external trigger — not data the objects will look up themselves
-  - Steps run sequentially on a shared runtime — each step's `expect` must be valid given the accumulated state from all prior steps. Do not write an `expect` whose precondition is negated by a prior step (e.g., a "check for pending items" step after a prior step already resolved all items).
-  - Omit `expect` entirely when the outcome depends on transient state (scheduled checks, polls, heartbeats).
+  - Steps run sequentially on a shared runtime and share state. Each step's side effects carry forward into all subsequent steps. Before writing `expect` for any step, ask: "Have prior steps already consumed or resolved the state this step depends on?" If yes, **omit `expect`** — the outcome is no longer deterministic.
+  - If step N creates a record and step N+1 resolves it, step N+2 (e.g., "check for unresolved records") will find nothing. That step's `expect` must reflect the resolved state, or be omitted entirely.
+  - Omit `expect` entirely when the outcome depends on transient state (scheduled checks, polls, heartbeats) or when a prior step has already resolved the relevant items.

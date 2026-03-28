@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import sys
 from pathlib import Path
@@ -43,27 +44,42 @@ from src.data.utils import (
 )
 
 
-def _seed_initial_state(llm, state_description: str) -> dict:
-    """Convert a state_description text into a concrete JSON initial_state dict."""
-    from pydantic import BaseModel
-    class _State(BaseModel):
-        state: dict
+def _seed_initial_state(llm, state_description: str, step_texts: list[str] | None = None) -> dict:
+    """Convert a state_description text into a concrete JSON seed_data dict.
+
+    step_texts: the text of all sample steps, so the LLM can use consistent
+    names/identifiers in seed_data (preventing lookup mismatches at eval time).
+    """
+    step_context = ""
+    if step_texts:
+        step_context = (
+            "\n\nThe automation's steps reference these specific people, items, or identifiers:\n"
+            + "\n".join(f"  - {t}" for t in step_texts)
+            + "\n\nYour seed data MUST include entries for every person, item, or entity "
+            "mentioned in those steps, using exactly the same names or identifiers. "
+            "If the steps use names (e.g., 'James Brown'), use those names. "
+            "If they use IDs, create records with matching IDs."
+        )
 
     messages = [
         ChatMessage(
             role="user",
             content=(
-                "Convert the following natural-language state description into a concrete "
-                "JSON object representing the initial state of this read-service object. "
-                "Include all specific names, values, rules, and relationships mentioned. "
-                "Return only the JSON object that would be stored as the object's state.\n\n"
+                "Generate concrete seed data for a read-service object. "
+                "Invent plausible names, values, and relationships consistent with the scenario.\n\n"
                 f"State description: {state_description}"
+                f"{step_context}\n\n"
+                "Respond with ONLY the raw JSON object (no markdown, no explanation)."
             ),
         )
     ]
     try:
-        result = llm.generate_structured(messages=messages, response_model=_State)
-        return result.state if result else {}
+        text = llm.generate_text(messages=messages)
+        # Strip markdown code fences if present
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        return json.loads(text)
     except Exception:
         return {}
 
@@ -237,6 +253,9 @@ def run(args: argparse.Namespace) -> Path:
             )
 
             if result:
+                # Trim to requested count (LLM may return more than asked)
+                result.samples = result.samples[: args.samples_per_template]
+
                 # Post-process: ensure all object_ids and step targets are slugified
                 for sample in result.samples:
                     for obj in sample.objects:
@@ -249,14 +268,19 @@ def run(args: argparse.Namespace) -> Path:
                 # Post-process: seed seed_data for read services that left it empty.
                 # A read service has no peers and no event_sources but has state_description.
                 for sample in result.samples:
+                    step_texts = [s.text for s in sample.steps if s.text]
                     for obj in sample.objects:
+                        # Only seed read services: they have no peers, no event_sources,
+                        # and their behavior doesn't mark them as write services.
+                        is_write_service = "do not reply" in (obj.behavior or "").lower()
                         if (
                             not obj.seed_data
                             and not obj.peers
                             and not obj.event_sources
+                            and not is_write_service
                             and obj.state_description.strip()
                         ):
-                            seeded = _seed_initial_state(llm, obj.state_description)
+                            seeded = _seed_initial_state(llm, obj.state_description, step_texts=step_texts)
                             if seeded:
                                 obj.seed_data = seeded
 
