@@ -3,12 +3,22 @@
   "version": "1.0.0",
   "description": "OpenClaw plugin: mock external system tools (Slack, Email, Jira, Webhook) for LNL baseline evaluation",
   "main": "dist/index.js",
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
   "scripts": {
-    "build": "tsc",
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=node --outfile=dist/index.js && cp dist/index.js ~/.openclaw/extensions/lnl-mock-external/index.js",
     "dev": "tsc --watch"
   },
-  "dependencies": {},
+  "peerDependencies": {
+    "openclaw": "*"
+  },
   "devDependencies": {
+    "@sinclair/typebox": "^0.34",
+    "@types/node": "^20.0",
+    "esbuild": "^0.27.4",
     "typescript": "^5.0"
   }
 }

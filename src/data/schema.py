@@ -23,18 +23,6 @@ class EventExpect(BaseModel):
     action: str
     reason: str
 
-class EventTrigger(BaseModel):
-    """Declares which tool call should cause this event to be injected.
-
-    When set, evaluate_baseline auto-builds an orchestration rule:
-    if the agent calls `tool` (with args matching `match`), this event's
-    `input` is injected back into the session after the specified delay.
-    """
-    tool: str                           # e.g. "email_send"
-    match: dict[str, str] = Field(default_factory=dict)  # arg key → regex (empty = always)
-    after_minutes: float = 0.0          # simulated delay (scaled by time_scale)
-    after_seconds: float = 0.0          # real-time delay (also scaled by time_scale)
-
 class Event(BaseModel):
     id: str
     call_type: str       # "send" or "send_event"
@@ -43,7 +31,9 @@ class Event(BaseModel):
     input: str
     when: str  # Same format as modification: "W02-1T09:00"
     expect: EventExpect
-    triggered_by: Optional[EventTrigger] = None  # if set, this event is an orchestration reaction
+    triggered_by: Optional[str] = None  # ID of sibling event that causes this one to fire
+    trigger_delay_minutes: float = 0.0  # simulated delay after triggering event fires
+    trigger_delay_seconds: float = 0.0
 
 class GeneratedModification(BaseModel):
     """LLM output schema — mod_type and ambiguity are set by the script, not the LLM."""

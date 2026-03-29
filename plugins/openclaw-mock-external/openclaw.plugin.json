@@ -1,0 +1,10 @@
+{
+  "id": "lnl-mock-external",
+  "name": "LNL Mock External Systems",
+  "description": "Mock tools for Slack, Email, Jira, and Webhook — forwards to local MockServer for LNL baseline evaluation.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

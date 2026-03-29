@@ -19,6 +19,7 @@ import statistics
 import sys
 import time
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -92,44 +93,13 @@ def _derive_tools_from_skills(tc: "TestCase") -> list[MockToolDef]:
     return result
 
 
-def _derive_mock_tools_from_events(tc: "TestCase") -> list[MockToolDef]:
-    """Auto-derive MockToolDef entries from events that have triggered_by set.
-
-    For each unique tool name found in event.triggered_by, creates one MockToolDef
-    whose triggers dispatch the event's input to the event's recipient when the tool
-    is called. This requires no manual YAML configs — the test case structure is
-    sufficient.
-
-    Multiple events that share the same triggered_by.tool are grouped under one
-    MockToolDef with multiple triggers (all fire on every matching tool call).
-    """
-    from src.data.schema import MockToolTrigger
-
-    tools_map: dict[str, dict] = {}
+def _build_trigger_map(tc: "TestCase") -> "dict[str, list]":
+    """Build a map from event_id → list of events triggered by that event."""
+    trigger_map: dict[str, list] = {}
     for event in tc.events:
-        if event.triggered_by is None:
-            continue
-        tb = event.triggered_by
-        tool_name = tb.tool
-        if tool_name not in tools_map:
-            tools_map[tool_name] = {"triggers": []}
-        tools_map[tool_name]["triggers"].append(MockToolTrigger(
-            target_object_id=event.recipient,
-            message_template=event.input,
-            source=event.source,
-        ))
-
-    result = []
-    for name, config in tools_map.items():
-        label = name.replace("_", " ").replace(".", " ")
-        result.append(MockToolDef(
-            tool_name=name,
-            description=f"Perform {label} operation.",
-            arguments_schema={"type": "object", "additionalProperties": True},
-            response_template=f"[mock] {name} executed successfully.",
-            triggers=config["triggers"],
-        ))
-    return result
+        if event.triggered_by:
+            trigger_map.setdefault(event.triggered_by, []).append(event)
+    return trigger_map
 
 
 # ── Timestamp parsing ──────────────────────────────────────────────────────────
@@ -247,17 +217,14 @@ def _execute_test_case_inner(
     from src.lnl.runtime import Runtime
     from src.lnl.tools import CodeExecutor, MockInProcessExecutor, PassthroughExecutor, ToolRegistry
 
-    # 1. Build ToolRegistry with three-layer priority merge (lowest → highest):
-    #    events-derived < --mock-config global < tc.mock_tools
+    # 1. Build ToolRegistry — two-layer priority merge (lowest → highest):
+    #    --mock-config global < tc.mock_tools
     #
     # Skills are intentionally NOT included here — they are internal computations
     # (the generate_samples prompt marks them as "purely internal, no external system
     # calls"). Registering them as tools would tell the LLM to call them externally.
-    events_derived = _derive_mock_tools_from_events(tc)
-    final_mock_tools = merge_mock_tools(
-        merge_mock_tools(events_derived, global_mock_tools or []),
-        tc.mock_tools,
-    )
+    # Triggered events are dispatched directly by the harness (no mock tool needed).
+    final_mock_tools = merge_mock_tools(global_mock_tools or [], tc.mock_tools)
 
     # Only enable the tool machinery (and LLM_RESPONSE_SCHEMA_WITH_TOOLS) when there
     # are actual mock tools to wire up. Without mock tools, pass tool_registry=None so
@@ -292,11 +259,13 @@ def _execute_test_case_inner(
     for obj_def in tc.objects:
         rt.create_object(to_lnl_definition(obj_def))
 
+    trigger_map = _build_trigger_map(tc)
     return _run_test_case_timeline(
         tc, rt, gw, harness,
         timeout_s=timeout_s,
         steps_only=steps_only,
         mock_executors=mock_executors + [passthrough] if final_mock_tools else [],
+        trigger_map=trigger_map,
     )
 
 
@@ -343,6 +312,7 @@ def _run_test_case_timeline(
     timeout_s: Optional[float] = None,
     steps_only: bool = False,
     mock_executors: "list | None" = None,
+    trigger_map: "dict[str, list] | None" = None,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Execute steps and timeline events against a live runtime."""
     event_results: list[EventResult] = []
@@ -392,13 +362,64 @@ def _run_test_case_timeline(
     if steps_only:
         return event_results, mod_results
 
-    # 3. Build sorted timeline: tag each item with its type and when-ordinal
+    tmap = trigger_map or {}
+
+    # 3. Build sorted timeline: tag each item with its type and when-ordinal.
+    # Triggered events are dispatched as reactions after their parent fires —
+    # exclude them from the main timeline ordering.
     timeline: list[tuple[int, str, object]] = []
     for mod in tc.modifications:
         timeline.append((parse_when(mod.when), "mod", mod))
     for evt in tc.events:
-        timeline.append((parse_when(evt.when), "event", evt))
+        if evt.triggered_by is None:
+            timeline.append((parse_when(evt.when), "event", evt))
     timeline.sort(key=lambda x: x[0])
+
+    def _dispatch_event(evt) -> tuple[list, bool, float]:
+        """Dispatch a single event; return (results, timed_out, latency_ms)."""
+        log_snap = len(rt.message_log)
+        exec_s = _snapshot_logs(execs)
+        t0 = time.monotonic()
+        if evt.call_type == "send_event":
+            payload = json.dumps({"system": evt.source, "content": evt.input})
+            res, tout = _run_with_timeout(
+                lambda e=evt, p=payload: gw.dispatch(e.recipient, p, source=e.source),
+                timeout_s,
+            )
+        else:
+            res, tout = _run_with_timeout(
+                lambda e=evt: rt.send(e.recipient, e.input, sender=e.source),
+                timeout_s,
+            )
+        lat = (time.monotonic() - t0) * 1000
+        return res, tout, lat, log_snap, exec_s
+
+    def _record_event_result(evt, res, timed_out, lat_ms, log_snap, exec_s):
+        if timed_out:
+            event_results.append(EventResult(
+                event_id=evt.id,
+                passed=False,
+                reasoning=f"Timeout after {timeout_s}s",
+                expected=evt.expect.action,
+                latency_ms=lat_ms,
+            ))
+        else:
+            in_tok = sum(r.metrics.input_tokens for r in res if r.metrics)
+            out_tok = sum(r.metrics.output_tokens for r in res if r.metrics)
+            bus_msgs = rt.message_log[log_snap:]
+            new_calls = _new_tool_calls(execs, exec_s)
+            evidence = gather_evidence(rt, res, evt.recipient, bus_messages=bus_msgs, tool_calls=new_calls)
+            passed, reasoning = harness.evaluate_assertion(evt.expect.action, evidence)
+            event_results.append(EventResult(
+                event_id=evt.id,
+                passed=passed,
+                reasoning=reasoning,
+                expected=evt.expect.action,
+                evidence=evidence,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                latency_ms=lat_ms,
+            ))
 
     for _, kind, item in timeline:
         if kind == "mod":
@@ -421,50 +442,13 @@ def _run_test_case_timeline(
                 ))
 
         else:  # event
-            log_snapshot = len(rt.message_log)
-            exec_snap = _snapshot_logs(execs)
-            t0 = time.monotonic()
-            if item.call_type == "send_event":
-                # Wrap as structured JSON envelope so the object receives a typed external event
-                payload = json.dumps({"system": item.source, "content": item.input})
-                results, timed_out = _run_with_timeout(
-                    lambda it=item, p=payload: gw.dispatch(it.recipient, p, source=it.source),
-                    timeout_s,
-                )
-            else:
-                results, timed_out = _run_with_timeout(
-                    lambda it=item: rt.send(it.recipient, it.input, sender=it.source),
-                    timeout_s,
-                )
-            latency_ms = (time.monotonic() - t0) * 1000
+            res, tout, lat, log_snap, exec_s = _dispatch_event(item)
+            _record_event_result(item, res, tout, lat, log_snap, exec_s)
 
-            if timed_out:
-                event_results.append(EventResult(
-                    event_id=item.id,
-                    passed=False,
-                    reasoning=f"Timeout after {timeout_s}s",
-                    expected=item.expect.action,
-                    latency_ms=latency_ms,
-                ))
-            else:
-                in_tok = sum(r.metrics.input_tokens for r in results if r.metrics)
-                out_tok = sum(r.metrics.output_tokens for r in results if r.metrics)
-                bus_msgs = rt.message_log[log_snapshot:]
-                new_calls = _new_tool_calls(execs, exec_snap)
-                evidence = gather_evidence(rt, results, item.recipient, bus_messages=bus_msgs, tool_calls=new_calls)
-                condition = item.expect.action
-                passed, reasoning = harness.evaluate_assertion(condition, evidence)
-
-                event_results.append(EventResult(
-                    event_id=item.id,
-                    passed=passed,
-                    reasoning=reasoning,
-                    expected=condition,
-                    evidence=evidence,
-                    input_tokens=in_tok,
-                    output_tokens=out_tok,
-                    latency_ms=latency_ms,
-                ))
+            # Dispatch events triggered by this one (in declaration order)
+            for triggered_evt in tmap.get(item.id, []):
+                tr, tt, tl, tls, tes = _dispatch_event(triggered_evt)
+                _record_event_result(triggered_evt, tr, tt, tl, tls, tes)
 
     return event_results, mod_results
 
@@ -504,7 +488,8 @@ def execute_test_case(
 # ── Output path ────────────────────────────────────────────────────────────────
 
 def default_output_path(input_path: Path) -> Path:
-    return input_path.parent / f"{input_path.stem}_eval.jsonl"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return input_path.parent / "runs" / f"{input_path.stem}_eval_{ts}.jsonl"
 
 
 # ── Verbose output ────────────────────────────────────────────────────────────

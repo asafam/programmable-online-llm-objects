@@ -39,7 +39,6 @@ from src.data.schema import (
     OrchestratorScript,
     OrchestratorTrigger,
     TestCase,
-    Event,
 )
 
 logger = logging.getLogger(__name__)
@@ -327,50 +326,6 @@ async def _inject_reaction(
                 logger.warning("Orchestration injection to %s returned %d", wake_url, resp.status_code)
     except Exception as e:
         logger.warning("Orchestration injection failed: %s", e)
-
-
-def resolve_orchestration(tc: TestCase, time_scale: float = 0.01) -> Optional[OrchestratorScript]:
-    """Build an OrchestratorScript from a TestCase's events that have `triggered_by` set.
-
-    Each such event becomes an OrchestratorTrigger: when the agent calls the
-    specified tool (matching the given args), this event's `input` is injected
-    back into the session after the specified delay.
-    """
-    triggers: list[OrchestratorTrigger] = []
-
-    for event in tc.events:
-        if event.triggered_by is None:
-            continue
-        tb = event.triggered_by
-        reaction = OrchestratorReaction(
-            after_seconds=tb.after_seconds,
-            after_minutes=tb.after_minutes,
-            source=event.source,
-            message=f"[{event.source} → {event.recipient}]: {event.input}",
-        )
-        # Merge into existing trigger for the same tool+match if one exists,
-        # otherwise create a new one (preserves ordering of reactions per trigger).
-        existing = next(
-            (t for t in triggers if t.tool == tb.tool and t.match == tb.match),
-            None,
-        )
-        if existing:
-            existing.reactions.append(reaction)
-        else:
-            triggers.append(OrchestratorTrigger(
-                tool=tb.tool,
-                match=tb.match,
-                reactions=[reaction],
-            ))
-
-    if not triggers:
-        return None
-
-    return OrchestratorScript(
-        name=f"{tc.id}-orchestration",
-        time_scale=time_scale,
-        triggers=triggers,
-    )
 
 
 def load_orchestration_file(path: Path) -> OrchestratorScript:

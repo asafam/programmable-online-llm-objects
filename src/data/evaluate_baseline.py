@@ -25,8 +25,11 @@ import statistics
 import sys
 import time
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+import os
 
 import yaml
 from dotenv import load_dotenv
@@ -42,13 +45,107 @@ from src.data.schema import (
     TestCase,
     TestCaseResult,
 )
-from src.data.mock_server import MockServer, resolve_mock_configs, resolve_orchestration
+from src.data.mock_server import MockServer, resolve_mock_configs
 from src.data.utils import (
     add_common_args,
     infer_provider,
     load_jsonl,
     print_run_info,
 )
+
+# ── OpenClaw agent configuration ─────────────────────────────────────────────
+
+# OAuth provider aliases: maps a canonical provider name to its OAuth variant.
+# OpenClaw uses separate provider strings for OAuth vs API-key auth.
+_OAUTH_PROVIDER_MAP = {
+    "openai": "openai-codex",
+}
+
+
+def _resolve_openclaw_provider(agent_id: str, provider: str) -> str:
+    """Detect which provider the agent is actually authenticated for.
+
+    If the requested provider (e.g. "openai") has an OAuth-authenticated
+    alias (e.g. "openai-codex") configured in the agent's auth store, use
+    the OAuth variant instead. Falls back to the original provider if the
+    auth file is absent or the alias is not configured.
+    """
+    oauth_alias = _OAUTH_PROVIDER_MAP.get(provider)
+    if oauth_alias is None:
+        return provider
+
+    auth_path = (
+        Path.home()
+        / ".openclaw"
+        / "agents"
+        / agent_id
+        / "agent"
+        / "auth-profiles.json"
+    )
+    if not auth_path.exists():
+        return provider
+
+    import json as _json
+    try:
+        data = _json.loads(auth_path.read_text())
+    except Exception:
+        return provider
+
+    configured = {p.split(":")[0] for p in data.get("profiles", {}).keys()}
+    # Prefer OAuth alias if it's configured and the raw provider is not
+    if oauth_alias in configured and provider not in configured:
+        return oauth_alias
+    return provider
+
+
+async def _configure_openclaw_agent(
+    agent_id: str,
+    provider: str,
+    model: str,
+    gateway_url: Optional[str],
+) -> str:
+    """Set provider/model on the named OpenClaw agent. Returns the effective provider used.
+
+    The OpenClaw config is JSONC (unquoted keys, trailing commas) which the
+    SDK's built-in get_parsed() fails to parse with stdlib json. We parse it
+    with json5 and write back standard JSON via config_mgr.patch().
+
+    Provider is resolved against the agent's auth store: if the user requests
+    "openai" but only "openai-codex" OAuth is configured, "openai-codex" is
+    used so the daemon can authenticate without an API key.
+    """
+    import json
+    import json5
+    from openclaw_sdk import OpenClawClient
+
+    effective_provider = _resolve_openclaw_provider(agent_id, provider)
+
+    connect_kwargs: dict[str, Any] = {}
+    if gateway_url:
+        connect_kwargs["gateway_ws_url"] = gateway_url
+
+    async with await OpenClawClient.connect(**connect_kwargs) as client:
+        result = await client.config_mgr.get()
+        raw = result.get("raw", "{}")
+        base_hash = result.get("hash")
+
+        config = json5.loads(raw)
+        agents = config.setdefault("agents", {})
+        lst = agents.setdefault("list", [])
+
+        # Find or create the named agent entry in agents.list
+        agent_cfg = next((a for a in lst if a.get("id") == agent_id), None)
+        if agent_cfg is None:
+            agent_cfg = {"id": agent_id}
+            lst.append(agent_cfg)
+
+        agent_cfg["model"] = {"primary": f"{effective_provider}/{model}"}
+        # Remove any stale apiKey — auth is handled by OpenClaw's auth store
+        agent_cfg.pop("params", None)
+
+        await client.config_mgr.patch(json.dumps(config, indent=2), base_hash=base_hash)
+
+    return effective_provider
 
 
 # ── Prompt building ──────────────────────────────────────────────────────────
@@ -157,7 +254,7 @@ def gather_evidence(content: str, tool_calls: Optional[list[dict]] = None) -> st
 class OpenClawAgent:
     """Wraps the OpenClaw SDK for sequential message execution."""
 
-    def __init__(self, agent_id: str = "lnl-baseline", gateway_url: Optional[str] = None):
+    def __init__(self, agent_id: str = "main", gateway_url: Optional[str] = None):
         self._agent_id = agent_id
         self._gateway_url = gateway_url
         self._session_counter = 0
@@ -181,7 +278,7 @@ class OpenClawAgent:
         session_name = f"eval-{self._session_counter}"
 
         results = []
-        async with OpenClawClient.connect(**connect_kwargs) as client:
+        async with await OpenClawClient.connect(**connect_kwargs) as client:
             agent = client.get_agent(self._agent_id, session_name=session_name)
 
             # Prime with system prompt
@@ -221,12 +318,21 @@ def _execute_test_case_inner(
     agent: OpenClawAgent,
     harness,
     mock_server: Optional["MockServer"] = None,
+    verbose: bool = False,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase against an OpenClaw agent and return results."""
 
     sys_prompt = build_system_prompt(tc)
 
-    # Build the ordered list of messages to send
+    # Build a map of event_id → triggered events (ordered by declaration)
+    trigger_map: dict[str, list[Any]] = {}
+    for evt in tc.events:
+        if evt.triggered_by:
+            trigger_map.setdefault(evt.triggered_by, []).append(evt)
+
+    # Build the ordered list of messages to send.
+    # Triggered events are NOT included in the main timeline — they are
+    # inserted as follow-up messages immediately after their parent event.
     messages: list[dict[str, Any]] = []
 
     # Steps
@@ -238,12 +344,13 @@ def _execute_test_case_inner(
             "expect": step.expect,
         })
 
-    # Timeline (mods + events sorted by when)
+    # Timeline (mods + non-triggered events sorted by when)
     timeline: list[tuple[int, str, Any]] = []
     for mod in tc.modifications:
         timeline.append((parse_when(mod.when), "mod", mod))
     for evt in tc.events:
-        timeline.append((parse_when(evt.when), "event", evt))
+        if evt.triggered_by is None:
+            timeline.append((parse_when(evt.when), "event", evt))
     timeline.sort(key=lambda x: x[0])
 
     for _, kind, item in timeline:
@@ -254,14 +361,18 @@ def _execute_test_case_inner(
                 "content": f"[Administrative instruction at {item.when}]: {item.intent}",
             })
         else:
-            # Skip pre-scripted injection for events handled by orchestration
-            if mock_server and item.triggered_by is not None:
-                continue
             messages.append({
                 "kind": "event",
                 "item": item,
                 "content": f"[Event from {item.source} at {item.when} to {item.recipient}]: {item.input}",
             })
+            # Insert triggered events immediately after their parent
+            for triggered in trigger_map.get(item.id, []):
+                messages.append({
+                    "kind": "event",
+                    "item": triggered,
+                    "content": f"[Event from {triggered.source} (triggered by {item.id})]: {triggered.input}",
+                })
 
     # Execute all messages through OpenClaw
     openclaw_messages = [{"content": m["content"]} for m in messages]
@@ -274,9 +385,8 @@ def _execute_test_case_inner(
     # Collect MockServer call log (if active)
     mock_log: list[dict] = []
     if mock_server:
-        # Brief wait for any pending orchestration reactions to fire
         import time as _time
-        _time.sleep(0.5)
+        _time.sleep(0.3)
         mock_log = mock_server.get_log()
 
     # Map results back to event/mod results
@@ -287,15 +397,26 @@ def _execute_test_case_inner(
         content = result["content"]
         latency_ms = result["latency_ms"]
 
+        if verbose:
+            kind_label = {"step": "STEP", "mod": "MOD", "event": "EVENT"}.get(msg_meta["kind"], "?")
+            print(f"\n{'─'*60}")
+            print(f"[{kind_label}] → {msg_meta['content'][:120]}")
+            print(f"  Agent: {content[:300]}")
+
         if msg_meta["kind"] == "step":
             expect = msg_meta["expect"]
             if expect is not None:
                 evidence = gather_evidence(content, tool_calls=mock_log if mock_server else None)
                 passed, reasoning = harness.evaluate_assertion(expect.action, evidence)
+                if verbose:
+                    print(f"  Expected: {expect.action}")
+                    print(f"  {'✓ PASS' if passed else '✗ FAIL'}: {reasoning[:200]}")
                 event_results.append(EventResult(
                     event_id=f"S{msg_meta['index']+1:03d}",
                     passed=passed,
                     reasoning=reasoning,
+                    expected=expect.action,
+                    evidence=evidence,
                     latency_ms=latency_ms,
                 ))
 
@@ -305,34 +426,20 @@ def _execute_test_case_inner(
                 latency_ms=latency_ms,
             ))
 
-        else:  # pre-scripted event (no triggered_by)
+        else:  # event
             item = msg_meta["item"]
             evidence = gather_evidence(content, tool_calls=mock_log if mock_server else None)
             passed, reasoning = harness.evaluate_assertion(item.expect.action, evidence)
+            if verbose:
+                print(f"  Expected: {item.expect.action}")
+                print(f"  {'✓ PASS' if passed else '✗ FAIL'}: {reasoning[:200]}")
             event_results.append(EventResult(
                 event_id=item.id,
                 passed=passed,
                 reasoning=reasoning,
+                expected=item.expect.action,
+                evidence=evidence,
                 latency_ms=latency_ms,
-            ))
-
-    # Evaluate orchestration-triggered events against the full mock log as evidence
-    if mock_server:
-        orchestration_evidence = gather_evidence("{}", tool_calls=mock_log)
-        for evt in tc.events:
-            if evt.triggered_by is None:
-                continue
-            # Check whether the expected reaction appears in the log
-            reaction_log = [
-                e for e in mock_log
-                if e.get("is_orchestration") and evt.source in e.get("method", "")
-            ]
-            evidence = gather_evidence("{}", tool_calls=reaction_log) if reaction_log else "(no orchestration reaction fired)"
-            passed, reasoning = harness.evaluate_assertion(evt.expect.action, evidence)
-            event_results.append(EventResult(
-                event_id=evt.id,
-                passed=passed,
-                reasoning=reasoning,
             ))
 
     return event_results, mod_results
@@ -344,13 +451,14 @@ def execute_test_case(
     harness,
     timeout_s: Optional[float] = None,
     mock_server: Optional[MockServer] = None,
+    verbose: bool = False,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase with an optional wall-clock timeout."""
     if timeout_s is None:
-        return _execute_test_case_inner(tc, agent, harness, mock_server=mock_server)
+        return _execute_test_case_inner(tc, agent, harness, mock_server=mock_server, verbose=verbose)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_execute_test_case_inner, tc, agent, harness, mock_server)
+        future = executor.submit(_execute_test_case_inner, tc, agent, harness, mock_server, verbose)
         try:
             return future.result(timeout=timeout_s)
         except concurrent.futures.TimeoutError:
@@ -373,7 +481,8 @@ def execute_test_case(
 # ── Output path ──────────────────────────────────────────────────────────────
 
 def default_output_path(input_path: Path) -> Path:
-    return input_path.parent / f"{input_path.stem}_baseline.jsonl"
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return input_path.parent / "runs" / f"{input_path.stem}_baseline_{ts}.jsonl"
 
 
 # ── Summary ──────────────────────────────────────────────────────────────────
@@ -427,14 +536,54 @@ def run(args: argparse.Namespace) -> Path:
 
     test_cases = load_jsonl(args.input, TestCase)
 
-    if args.limit:
+    if getattr(args, "tc", None):
+        selected: list[TestCase] = []
+        for selector in args.tc:
+            if selector.isdigit():
+                idx = int(selector) - 1
+                if idx < 0 or idx >= len(test_cases):
+                    print(f"Error: --tc {selector} out of range (file has {len(test_cases)} test cases)", file=sys.stderr)
+                    sys.exit(1)
+                selected.append(test_cases[idx])
+            else:
+                matched = [tc for tc in test_cases if tc.id == selector]
+                if not matched:
+                    print(f"Error: --tc {selector!r} not found. Available IDs: {[tc.id for tc in test_cases[:5]]}...", file=sys.stderr)
+                    sys.exit(1)
+                selected.extend(matched)
+        test_cases = selected
+    elif args.limit:
         test_cases = test_cases[: args.limit]
 
     timeout_s: Optional[float] = getattr(args, "timeout", None)
 
+    # Infer provider from model name if not supplied
+    agent_model: Optional[str] = getattr(args, "model", None)
+    agent_provider: Optional[str] = getattr(args, "provider", None)
+    if agent_model and not agent_provider:
+        agent_provider = infer_provider(agent_model)
+
+    # Judge — defaults to agent model (same convention as evaluate.py)
+    judge_model = args.judge_model or agent_model or "gpt-4o"
+    judge_provider = args.judge_provider or infer_provider(judge_model)
+
+    # Configure the OpenClaw agent's model/provider before running
+    effective_agent_provider = agent_provider
+    if agent_model or agent_provider:
+        effective_agent_provider = asyncio.run(_configure_openclaw_agent(
+            agent_id=args.agent_id,
+            provider=agent_provider or "openai",
+            model=agent_model or "gpt-4o",
+            gateway_url=args.gateway_url,
+        ))
+        print(f"Configured OpenClaw agent '{args.agent_id}': {effective_agent_provider}/{agent_model or 'gpt-4o'}")
+
     print(f"Loaded {len(test_cases)} test cases from {args.input}")
     print(f"Mode: baseline (OpenClaw single agent)")
     print(f"Agent ID: {args.agent_id}")
+    if agent_model:
+        print(f"Agent model: {effective_agent_provider}/{agent_model}")
+    print(f"Judge: {judge_provider}/{judge_model}")
     print(f"Runs per test case: {args.runs}")
     print(f"Timeout per run: {timeout_s}s" if timeout_s else "Timeout: none")
     if args.gateway_url:
@@ -464,9 +613,6 @@ def run(args: argparse.Namespace) -> Path:
         mock_server.wait_ready()
         print("Mock server: ready")
 
-    # Judge
-    judge_provider = args.judge_provider or "openai"
-    judge_model = args.judge_model or "gpt-4o-mini"
     if judge_provider == "openai":
         from src.lnl.judge import OpenAIJudge
         judge = OpenAIJudge(model=judge_model)
@@ -487,15 +633,15 @@ def run(args: argparse.Namespace) -> Path:
             if mock_server is not None:
                 tc_mock_script = resolve_mock_configs(tc)
                 mock_server._state.mock_script = tc_mock_script
-                tc_orchestration = resolve_orchestration(tc)
-                mock_server._state.orchestration_script = tc_orchestration
+                mock_server._state.orchestration_script = None
 
             for run_idx in range(args.runs):
                 label = f"{tc.id} run={run_idx}"
                 print(f"  Evaluating {label} ...", end=" ", flush=True)
                 try:
                     event_results, mod_results = execute_test_case(
-                        tc, agent, harness, timeout_s, mock_server=mock_server
+                        tc, agent, harness, timeout_s, mock_server=mock_server,
+                        verbose=getattr(args, "verbose", False),
                     )
                     pass_rate = (
                         sum(1 for e in event_results if e.passed) / len(event_results)
@@ -569,9 +715,28 @@ Examples:
         help="Wall-clock timeout per test case run (default: 120)",
     )
     parser.add_argument(
+        "--model", "-m",
+        default=None,
+        metavar="MODEL",
+        help="Model for the OpenClaw agent (e.g. gpt-4o, claude-sonnet-4-6). "
+             "Sets the model on the agent before running. Provider is inferred from model name.",
+    )
+    parser.add_argument(
+        "--provider", "-p",
+        choices=["openai", "anthropic"],
+        default=None,
+        help="LLM provider for the OpenClaw agent (overrides inference from --model).",
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        default=False,
+        help="Print each message sent and agent response, plus per-event pass/fail reasoning",
+    )
+    parser.add_argument(
         "--agent-id",
-        default="lnl-baseline",
-        help="OpenClaw agent ID to use (default: lnl-baseline)",
+        default="main",
+        help="OpenClaw agent ID to use (default: main)",
     )
     parser.add_argument(
         "--gateway-url",
@@ -579,21 +744,27 @@ Examples:
         help="OpenClaw gateway WebSocket URL (default: auto-detect localhost:18789)",
     )
     parser.add_argument(
-        "--judge-provider",
-        choices=["openai", "anthropic"],
-        default="openai",
-        help="LLM provider for the judge (default: openai)",
+        "--judge-model",
+        default=None,
+        help="Model for LLM-as-judge (default: same as --model). Provider is inferred from model name.",
     )
     parser.add_argument(
-        "--judge-model",
-        default="gpt-4o-mini",
-        help="Model for the judge (default: gpt-4o-mini)",
+        "--judge-provider",
+        choices=["openai", "anthropic"],
+        default=None,
+        help="Provider for judge model (inferred from --judge-model if not specified)",
     )
     parser.add_argument(
         "--limit", "-n",
         type=int,
         default=None,
         help="Process only the first N test cases",
+    )
+    parser.add_argument(
+        "--tc",
+        nargs="+",
+        metavar="INDEX_OR_ID",
+        help="Run specific test cases by 1-based index or ID (e.g. --tc 2 5 TC007). Overrides --limit.",
     )
     parser.add_argument(
         "--mock-server",

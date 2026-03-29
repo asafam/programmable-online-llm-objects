@@ -1,47 +1,22 @@
 # Evaluation: LNL Runtime vs OpenClaw Baseline
 
-This document describes how to run and compare the two evaluation modes:
+Both evaluators use the same test cases, the same LLM judge, and produce the same output schema for direct comparison.
 
-1. **LNL Runtime** (`evaluate`) — Multi-object paradigm where LLM-objects communicate via a message bus
-2. **OpenClaw Baseline** (`evaluate_baseline`) — Single OpenClaw agent handling the entire workflow
+1. **LNL Runtime** (`evaluate`) — Multi-object: LLM-objects communicate via a message bus
+2. **OpenClaw Baseline** (`evaluate_baseline`) — Single OpenClaw agent handles the entire workflow
 
-Both use the same test cases, the same judge, and produce the same output schema for apples-to-apples comparison.
+---
 
-## Prerequisites
+## LNL Runtime
 
-### LNL Runtime
+### Prerequisites
 
 ```bash
 source .venv/bin/activate
 # Requires OPENAI_API_KEY and/or ANTHROPIC_API_KEY in .env
 ```
 
-### OpenClaw Baseline
-
-Requires Node 22+ and Python 3.11+.
-
-```bash
-# 1. Install Node 22 (if needed)
-brew install node@22
-export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
-
-# 2. Install OpenClaw
-curl -fsSL https://openclaw.ai/install.sh | bash
-
-# 3. Onboard (interactive — configure model provider + API key)
-openclaw onboard --install-daemon
-
-# 4. Verify gateway is running
-openclaw gateway status
-
-# 5. Install Python SDK
-source .venv/bin/activate
-uv pip install openclaw-sdk
-```
-
-## Running the Evaluations
-
-### LNL Runtime (multi-object)
+### Running
 
 ```bash
 python -m src.data.evaluate \
@@ -153,48 +128,111 @@ Overrides `--limit`. Useful for isolating flaky or incomplete test cases.
 
 **`--debug-messages`** — Print all messages flowing through the message bus, including JSON envelopes for external events and internal peer communication. Shows sender, recipient, message type, and content.
 
-### OpenClaw Baseline (single agent)
+---
+
+## OpenClaw Baseline
+
+The baseline uses a single OpenClaw agent that receives all object definitions as context and processes steps, modifications, and events as sequential messages in one conversation.
+
+### One-time setup
+
+**1. Install OpenClaw** (if not already installed):
+
+```bash
+# Install Node 22+
+brew install node@22
+export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
+
+# Install OpenClaw and run the interactive onboarding wizard
+# (configures your model provider and API key, installs the daemon)
+curl -fsSL https://openclaw.ai/install.sh | bash
+openclaw onboard --install-daemon
+```
+
+**2. Install the mock tools plugin** (one time, after OpenClaw is installed):
+
+```bash
+cd plugins/openclaw-mock-external
+npm install
+npm run build       # builds and copies to ~/.openclaw/extensions/
+```
+
+Verify it loaded:
+```bash
+openclaw plugins list | grep lnl
+# should show: lnl-mock-external | loaded
+```
+
+The script uses the `main` agent (OpenClaw's default). No separate agent creation needed.
+
+### Before each session
+
+The OpenClaw daemon must be running:
+
+```bash
+openclaw gateway status   # check first
+openclaw gateway restart  # start or restart if not running
+```
+
+If the gateway has never been installed on this machine, run once:
+```bash
+openclaw config set gateway.mode local
+openclaw gateway install
+openclaw gateway restart
+```
+
+### Running
 
 ```bash
 python -m src.data.evaluate_baseline \
     -i outputs/data/zapier/20260322_010211/test_cases.jsonl \
+    --model gpt-4o \
     --mock-server \
     --runs 3
 ```
 
+`--model` configures the OpenClaw agent's model and provider (and injects the matching API key from `.env`) before the run starts — the same way `evaluate.py` works.
+
 Output: `test_cases_baseline.jsonl` (next to input file)
 
-#### Mock external system integration (`--mock-server`)
-
-When `--mock-server` is passed, the runner automatically:
-
-1. **Starts a MockServer** (FastAPI, `localhost:18888`) before the first test case and stops it after the last.
-2. **Per test case**: scans object `skills` and `event_sources` for system keywords (`slack`, `email`, `jira`, `webhook`) and loads matching scripts from `config/mocks/`.
-3. **Per test case**: builds orchestration triggers from events that have `triggered_by` set — these events are injected into the agent session only when the agent actually calls the corresponding tool, not unconditionally.
-4. **The OpenClaw plugin** (`plugins/openclaw-mock-external`) must be installed once beforehand — it registers the mock tools with the OpenClaw agent.
-
-**One-time plugin install:**
-```bash
-cd plugins/openclaw-mock-external && npm install && npm run build
-openclaw plugin install .
-```
-
-**Mock system scripts** (`config/mocks/`): define boilerplate immediate responses per tool (delivery ACKs, channel listings, ticket IDs). Generic across test cases.
-
-**Orchestration** is derived from `Event.triggered_by` fields in each test case — the test-case-specific content (what Slack/email says back) lives in `Event.input`.
-
-**`time_scale`** compresses simulated delays: `0.01` means 1 simulated minute = 0.6 real seconds. Configured in `config/mocks/orchestration/*.yaml` or set on `OrchestratorScript`.
+**Common options:**
 
 ```bash
-# Script-driven (default)
-python -m src.data.evaluate_baseline -i test_cases.jsonl --mock-server
+# Single test case (by 1-based index)
+python -m src.data.evaluate_baseline -i test_cases.jsonl --model gpt-4o --tc 1 --mock-server
 
-# LLM-powered mock responses
-python -m src.data.evaluate_baseline -i test_cases.jsonl --mock-server --mock-llm-mode
+# Multiple test cases by index or ID
+python -m src.data.evaluate_baseline -i test_cases.jsonl --model gpt-4o --tc 1 3 TC007 --mock-server
 
-# Custom OpenClaw gateway
-python -m src.data.evaluate_baseline -i test_cases.jsonl --mock-server --openclaw-http-url http://localhost:18789
+# Anthropic model
+python -m src.data.evaluate_baseline -i test_cases.jsonl --model claude-sonnet-4-6
+
+# Without mock tools (agent narrates actions as text, no real tool calls)
+python -m src.data.evaluate_baseline -i test_cases.jsonl --model gpt-4o
+
+# LLM-generated mock responses instead of scripted templates
+python -m src.data.evaluate_baseline -i test_cases.jsonl --model gpt-4o --mock-server --mock-llm-mode
 ```
+
+### How `--mock-server` works
+
+Without `--mock-server` the agent can only narrate actions ("I would send a Slack message…") — there's no real feedback loop. With it:
+
+**Outbound (agent → external system):** The `lnl-mock-external` plugin registers 12 tools (`slack_send_message`, `email_send`, `jira_create_issue`, etc.) with the OpenClaw daemon. When the agent calls one, the plugin forwards it to a local MockServer (FastAPI, `localhost:18888`), which returns a scripted response. The call is logged.
+
+**Inbound (external system → agent):** After each tool call, the MockServer can fire a callback into the live session via OpenClaw's `/hooks/wake` endpoint (e.g., a Slack delivery confirmation a few seconds later).
+
+**Per-test-case chaining:** Events with `triggered_by: "<event-id>"` are injected as follow-up messages immediately after their parent event is processed — no tool call matching required. Ordering is deterministic.
+
+**Mock scripts** (`config/mocks/`): define boilerplate immediate responses per tool (delivery ACKs, message IDs, ticket numbers). Shared across all test cases.
+
+**Generic orchestration scripts** (`config/mocks/orchestration/*.yaml`): define tool-call-triggered reactions for common patterns (email sent → Slack reply after N simulated minutes). Apply to any test case automatically when the keywords match.
+
+To rebuild the plugin after making changes to `plugins/openclaw-mock-external/src/index.ts`:
+```bash
+cd plugins/openclaw-mock-external && npm run build
+```
+(The build script copies the output to `~/.openclaw/extensions/` automatically.)
 
 ## CLI Flags
 
@@ -204,18 +242,22 @@ python -m src.data.evaluate_baseline -i test_cases.jsonl --mock-server --opencla
 | `--output`, `-o` | Output path | Output path |
 | `--runs` | Runs per test case (default: 1) | Runs per test case (default: 1) |
 | `--timeout` | Wall-clock seconds per step/event (default: 60) | Seconds per run (default: 120) |
-| `--model`, `-m` | Model for LLM-objects | N/A (configured in OpenClaw) |
-| `--provider`, `-p` | `openai` or `anthropic` | N/A |
+| `--model`, `-m` | Model for LLM-objects | Model for OpenClaw agent (sets provider/model/API key from `.env`) |
+| `--provider`, `-p` | `openai` or `anthropic` | `openai` or `anthropic` (overrides inference from `--model`) |
 | `--judge-model` | Judge model (default: same as `--model`; strongly prefer a separate stronger model) | Judge model (default: `gpt-4o-mini`) |
 | `--judge-provider` | Judge provider (inferred from model name) | Judge provider (default: `openai`) |
-| `--verbose`, `-v` | Print per-event evidence, expected, and judge reasoning | N/A |
-| `--agent-id` | N/A | OpenClaw agent ID (default: `lnl-baseline`) |
+| `--verbose`, `-v` | Print per-event evidence, expected, and judge reasoning | Print each message sent, agent response, and per-event pass/fail reasoning |
+| `--agent-id` | N/A | OpenClaw agent ID (default: `main`) |
 | `--gateway-url` | N/A | OpenClaw gateway URL (default: auto-detect) |
 | `--limit`, `-n` | First N test cases only | First N test cases only |
-| `--tc` | Specific test cases by 1-based index or ID (overrides `--limit`) | N/A |
+| `--tc` | Specific test cases by 1-based index or ID (overrides `--limit`) | Same |
 | `--steps-only` | Run only steps; skip modifications and events | N/A |
 | `--debug-messages` | Print messages exchanged between LLM-objects | N/A |
 | `--mock-config` | YAML file(s) with shared mock tool definitions (repeatable) | N/A |
+| `--mock-server` | N/A | Enable MockServer + plugin tool integration |
+| `--mock-llm-mode` | N/A | Use LLM to generate mock responses instead of templates |
+| `--mock-server-port` | N/A | MockServer port (default: 18888) |
+| `--openclaw-http-url` | N/A | OpenClaw gateway URL (default: http://localhost:18789) |
 
 ## Comparing Results
 
