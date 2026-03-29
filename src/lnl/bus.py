@@ -35,6 +35,11 @@ class MessageBus:
         self._log: list[MessageLog] = []
         self._metrics = BusMetrics()
         self.on_message: Optional[Callable[[Message], None]] = None
+        self._schedule_callback: Optional[Callable] = None
+
+    def set_schedule_callback(self, callback: Callable) -> None:
+        """Set callback invoked when an object needs to be scheduled on the pool."""
+        self._schedule_callback = callback
 
     # --- Registration ---
 
@@ -80,7 +85,7 @@ class MessageBus:
         recipients = self._resolve_recipients(message)
 
         for obj in recipients:
-            obj.deliver(message)
+            obj.deliver(message, self._schedule_callback)
             self._log.append(MessageLog(message=message, delivered=True))
             if self.on_message:
                 self.on_message(message)

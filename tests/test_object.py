@@ -189,16 +189,18 @@ class TestProperties:
 
 class TestToolLoop:
     def test_no_tool_registry_processes_normally(self):
-        """Without a tool_registry, tool_calls in response are ignored."""
+        """Without a tool_registry, a tool_call step loops with an unavailability notice, then finishes."""
         brain = MockBrain()
+        brain.script("test-obj", LLMResponse(
+            updated_state={}, reply="",
+            tool_calls=[ToolCall(id="t1", tool="execute_code", arguments={"code": "x"})],
+        ))
         brain.script("test-obj", LLMResponse(
             updated_state={"status": "done"},
             reply="ok",
-            tool_calls=[ToolCall(id="t1", tool="execute_code", arguments={"code": "x"})],
         ))
         obj = LLMObject(_make_definition(), brain)
         result = obj.process_message(_user_msg("go"))
-        # tool_calls present but no registry → treated as final response
         assert result.state_after == {"status": "done"}
 
     def test_tool_call_then_final_response(self):

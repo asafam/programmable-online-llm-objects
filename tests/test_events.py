@@ -158,7 +158,7 @@ class TestRuntimeEventProviderIntegration:
             source_descriptor="Slack webhook: incoming messages",
             content="New message in #general",
         ))
-        # inject_event will poll providers in _run_until_quiescent
+        # inject_event polls providers and dispatches; blocks until transaction commits
         # But we need to trigger processing — use send to an unrelated object
         # or inject to same object to trigger the loop
         rt.create_object(ObjectDefinition(object_id="dummy", role="dummy"))

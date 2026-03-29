@@ -42,13 +42,13 @@ python -m src.data.evaluate_baseline -i outputs/data/zapier/20260322_010211/test
 
 LLM-objects communicate via natural language messages through a message bus. Definitions are written in Markdown and can be modified at runtime while state persists.
 
-- **LLMObject** (`object.py`) — Definition + brain + mutable NL state string. Processes messages via LLM.
-- **MessageBus** (`bus.py`) — Routes messages between objects. Supports peer-to-peer (with peer validation), pub/sub, broadcast, and synchronous chaining with depth limit.
+- **LLMObject** (`object.py`) — Virtual actor: owns its mailbox, processes messages sequentially via a `drain()` loop scheduled on the shared thread pool. Holds definition + brain + mutable NL state.
+- **MessageBus** (`bus.py`) — Routes messages to object mailboxes. Supports peer-to-peer (with peer validation), pub/sub, and broadcast. Triggers scheduling when a message arrives for an idle object.
 - **LLMBrain** (`brain.py`) — Abstract LLM interface. OpenAI, Anthropic, and Mock implementations.
-- **Runtime** (`runtime.py`) — Library API: load, send, modify, inspect objects.
+- **Runtime** (`runtime.py`) — Library API: load, send, modify, inspect objects. Manages a `ThreadPoolExecutor` (default 4 workers) — objects run concurrently, not one thread each.
 - **Parser** (`parser.py`) — Markdown ↔ ObjectDefinition serializer.
 
-**Flow:** `Runtime.send(target, msg)` → `MessageBus.send()` → `LLMObject.process_message()` → LLM returns `{updated_state, reply, outgoing_messages}` → bus recursively delivers outgoing messages.
+**Flow:** `Runtime.send(target, msg)` → `MessageBus.deliver()` → `LLMObject.deliver()` schedules `drain()` on pool → `drain()` calls `process_message()` per message → LLM returns `{updated_state, reply, outgoing_messages}` → Runtime routes outgoing messages through bus (triggering further scheduling). Wave completes when all drain tasks finish.
 
 ### Data Generation Pipeline (`src/data/`)
 

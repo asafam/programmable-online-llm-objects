@@ -43,6 +43,7 @@ class Message:
     type: MessageType
     content: str
     topic: Optional[str] = None
+    depth_remaining: int = 10  # hops remaining before chain is cut
 
 
 @dataclass
@@ -109,6 +110,26 @@ class ProcessingResult:
     in_reply_to: Optional[str] = None  # sender of the message that was processed
     source_message_type: Optional[MessageType] = None  # type of the message that was processed
     external_actions: list[ExternalAction] = field(default_factory=list)
+    depth_remaining: int = 10  # propagated from the processed message
+    sequence: int = 0          # assigned by Runtime for ordering concurrent results
+
+
+@dataclass
+class ReactFinish:
+    """The finish action in a ReAct step — commits state, reply, and outgoing messages."""
+    reply: str
+    updated_state: dict = field(default_factory=dict)
+    outgoing_messages: list[OutgoingMessage] = field(default_factory=list)
+    external_actions: list[ExternalAction] = field(default_factory=list)
+
+
+@dataclass
+class ReactStep:
+    """One step in a ReAct loop: an explicit thought and a single action."""
+    thought: str
+    action: str  # "tool_call" | "finish"
+    tool_call: Optional[ToolCall] = None
+    finish: Optional[ReactFinish] = None
 
 
 @dataclass

@@ -19,6 +19,8 @@ from .types import (
     MessageType,
     ObjectDefinition,
     OutgoingMessage,
+    ReactFinish,
+    ReactStep,
     ToolCall,
     ToolResult,
 )
@@ -118,6 +120,78 @@ LLM_RESPONSE_SCHEMA_WITH_TOOLS: dict[str, Any] = {
             "description": "Tool calls to execute. When present, the LLM will be called again with results before producing a final response.",
         },
     },
+}
+
+
+# ReAct step schema — one thought + one action per LLM call.
+# action="tool_call": execute a tool and observe the result, then call again.
+# action="finish": commit reply, state, and any outgoing messages/actions.
+LLM_REACT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "thought": {
+            "type": "string",
+            "description": "Your explicit reasoning about what to do next.",
+        },
+        "action": {
+            "type": "string",
+            "enum": ["tool_call", "finish"],
+            "description": "The single action to take this step.",
+        },
+        "tool_call": {
+            "type": "object",
+            "description": "Present only when action=tool_call.",
+            "properties": {
+                "id": {"type": "string", "description": "Unique ID for this call."},
+                "tool": {"type": "string", "description": "Tool name."},
+                "arguments": {"type": "object", "additionalProperties": True},
+            },
+            "required": ["id", "tool", "arguments"],
+            "additionalProperties": False,
+        },
+        "finish": {
+            "type": "object",
+            "description": "Present only when action=finish.",
+            "properties": {
+                "reply": {"type": "string", "description": "Reply to the message sender."},
+                "updated_state": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "description": "Your complete updated state.",
+                },
+                "outgoing_messages": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "recipient": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["recipient", "content"],
+                        "additionalProperties": False,
+                    },
+                },
+                "external_actions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "system": {"type": "string"},
+                            "action": {"type": "string"},
+                            "content": {"type": "string"},
+                            "params": {"type": "object", "additionalProperties": True},
+                        },
+                        "required": ["system", "action", "content"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["reply", "updated_state"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["thought", "action"],
+    "additionalProperties": False,
 }
 
 
@@ -223,6 +297,20 @@ class LLMBrain(ABC):
         """
         ...
 
+    @abstractmethod
+    def react_call(
+        self,
+        messages: list[dict],
+        *,
+        object_id: str | None = None,
+    ) -> tuple[ReactStep, InferenceMetrics]:
+        """One ReAct step: returns a single thought + action and its metrics.
+
+        The caller appends the step and its observation to `messages` and calls
+        again until action == "finish".
+        """
+        ...
+
 
 class OpenAIBrain(LLMBrain):
     """Brain backed by the OpenAI API."""
@@ -279,6 +367,37 @@ class OpenAIBrain(LLMBrain):
 
         raw = _safe_json_loads(resp.choices[0].message.content or "{}")
         return _parse_llm_result(raw), metrics
+
+    def react_call(
+        self,
+        messages: list[dict],
+        *,
+        object_id: str | None = None,
+    ) -> tuple[ReactStep, InferenceMetrics]:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self._temperature,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "react_step", "schema": LLM_REACT_SCHEMA},
+            },
+        }
+        if self._seed is not None:
+            kwargs["seed"] = self._seed
+
+        t0 = time.time()
+        resp = self._client.chat.completions.create(**kwargs)
+        latency_ms = (time.time() - t0) * 1000
+
+        metrics = InferenceMetrics(
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        raw = _safe_json_loads(resp.choices[0].message.content or "{}")
+        return _parse_react_step(raw), metrics
 
 
 class AnthropicBrain(LLMBrain):
@@ -364,6 +483,39 @@ class AnthropicBrain(LLMBrain):
         raw = _safe_json_loads(content_str or "{}")
         return _parse_llm_result(raw), metrics
 
+    def react_call(
+        self,
+        messages: list[dict],
+        *,
+        object_id: str | None = None,
+    ) -> tuple[ReactStep, InferenceMetrics]:
+        sys_prompt = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+        user_messages = [m for m in messages if m["role"] != "system"]
+
+        strict_schema = json.loads(json.dumps(LLM_REACT_SCHEMA))
+        self._enforce_strict_schema(strict_schema)
+
+        t0 = time.time()
+        resp = self._client.messages.create(
+            model=self.model,
+            max_tokens=4096,
+            temperature=self._temperature,
+            system=sys_prompt,
+            messages=user_messages,
+            output_config={"format": {"type": "json_schema", "schema": strict_schema}},
+        )
+        latency_ms = (time.time() - t0) * 1000
+
+        metrics = InferenceMetrics(
+            input_tokens=getattr(resp.usage, "input_tokens", 0) if resp.usage else 0,
+            output_tokens=getattr(resp.usage, "output_tokens", 0) if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        content_str = "".join(block.text for block in resp.content if hasattr(block, "text"))
+        raw = _safe_json_loads(content_str or "{}")
+        return _parse_react_step(raw), metrics
+
 
 @dataclass
 class _ScriptEntry:
@@ -387,6 +539,7 @@ class MockBrain(LLMBrain):
         self._scripts: dict[str, list[_ScriptEntry]] = {}
         self._default_response: Optional[LLMResponse] = None
         self.call_log: list[CallRecord] = []
+        self._react_queue: list[tuple[ReactStep, InferenceMetrics]] = []
 
     def script(
         self,
@@ -437,6 +590,44 @@ class MockBrain(LLMBrain):
             InferenceMetrics(model="mock"),
         )
 
+    def react_call(
+        self,
+        messages: list[dict],
+        *,
+        object_id: str | None = None,
+    ) -> tuple[ReactStep, InferenceMetrics]:
+        # Return pre-converted steps before fetching a new scripted response.
+        if self._react_queue:
+            return self._react_queue.pop(0)
+
+        # Fetch the next scripted LLMResponse and convert to ReactStep(s).
+        response, metrics = self.call(messages, {}, object_id=object_id)
+
+        if response.tool_calls:
+            # One ReactStep per tool call — no finish yet (comes from next script).
+            for tc in response.tool_calls:
+                step = ReactStep(
+                    thought=response.reasoning or "Calling tool.",
+                    action="tool_call",
+                    tool_call=tc,
+                )
+                self._react_queue.append((step, metrics))
+        else:
+            finish = ReactFinish(
+                reply=response.reply,
+                updated_state=response.updated_state,
+                outgoing_messages=response.outgoing_messages,
+                external_actions=response.external_actions,
+            )
+            step = ReactStep(
+                thought=response.reasoning or "Done.",
+                action="finish",
+                finish=finish,
+            )
+            self._react_queue.append((step, metrics))
+
+        return self._react_queue.pop(0)
+
 
 def _safe_json_loads(text: str) -> dict:
     """Parse JSON from LLM output, tolerating trailing extra data."""
@@ -460,6 +651,46 @@ def _ensure_str(value: Any) -> str:
     if value is None:
         return ""
     return json.dumps(value)
+
+
+def _parse_react_step(raw: dict) -> ReactStep:
+    """Parse a raw LLM dict into a ReactStep."""
+    thought = raw.get("thought", "")
+    action = raw.get("action", "finish")
+
+    if action == "tool_call":
+        tc_data = raw.get("tool_call") or {}
+        tc = ToolCall(
+            id=tc_data.get("id", ""),
+            tool=tc_data.get("tool", ""),
+            arguments=tc_data.get("arguments", {}),
+        )
+        return ReactStep(thought=thought, action="tool_call", tool_call=tc)
+
+    # action == "finish"
+    f_data = raw.get("finish") or {}
+    outgoing = [
+        OutgoingMessage(recipient=m["recipient"], content=m["content"])
+        for m in f_data.get("outgoing_messages", [])
+        if isinstance(m, dict)
+    ]
+    external = [
+        ExternalAction(
+            system=ea["system"],
+            action=ea["action"],
+            content=ea["content"],
+            params=ea.get("params", {}),
+        )
+        for ea in f_data.get("external_actions", [])
+        if isinstance(ea, dict)
+    ]
+    finish = ReactFinish(
+        reply=f_data.get("reply", ""),
+        updated_state=f_data.get("updated_state") or {},
+        outgoing_messages=outgoing,
+        external_actions=external,
+    )
+    return ReactStep(thought=thought, action="finish", finish=finish)
 
 
 def _parse_llm_result(result: Any) -> LLMResponse:

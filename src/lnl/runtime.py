@@ -4,9 +4,10 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from .brain import LLMBrain
 from .bus import BusMetrics, MessageBus
@@ -35,6 +36,37 @@ class _WorkItem:
     results: list[ProcessingResult] = field(default_factory=list)
 
 
+class _Transaction:
+    """Tracks in-flight execute tasks for one dispatch transaction.
+
+    An transaction begins when messages are dispatched and ends when the system
+    commits — all scheduled executions have completed and no new ones are
+    pending. Uses a reference count: increment() when scheduling an object,
+    decrement() in its completion callback; wait() blocks until count reaches 0.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._count = 0
+        self._done = threading.Event()
+        self._done.set()  # starts committed since count=0
+
+    def increment(self) -> None:
+        with self._lock:
+            self._count += 1
+            self._done.clear()
+
+    def decrement(self) -> None:
+        with self._lock:
+            self._count -= 1
+            if self._count == 0:
+                self._done.set()
+
+    def wait(self) -> None:
+        """Block until the transaction commits (all executions complete)."""
+        self._done.wait()
+
+
 class Runtime:
     """Single entry point for the LNL runtime."""
 
@@ -44,6 +76,7 @@ class Runtime:
         max_chain_depth: int = 10,
         strict_peers: bool = True,
         tool_registry: ToolRegistry | None = None,
+        pool_size: int = 4,
     ) -> None:
         self._brain = brain
         self._bus = MessageBus(strict_peers=strict_peers)
@@ -53,11 +86,35 @@ class Runtime:
         self._event_sources = EventSourceRegistry()
         self._tool_registry = tool_registry
 
+        # Thread pool — shared across all objects; no per-object thread
+        self._pool = ThreadPoolExecutor(max_workers=pool_size, thread_name_prefix="lnl-obj")
+        self._active_futures: dict[str, Future] = {}
+        self._futures_lock = threading.Lock()
+
+        # Results accumulated during an transaction
+        self._pending_results: list[ProcessingResult] = []
+        self._results_lock = threading.Lock()
+        self._sequence_counter = 0
+
+        # One transaction active at a time; _dispatch_lock serializes _dispatch calls
+        self._current_transaction: Optional[_Transaction] = None
+        self._dispatch_lock = threading.Lock()
+
+        # Reply routing: object_id -> set of peer_ids whose reply is awaited
+        self._awaiting_reply: dict[str, set[str]] = {}
+        self._awaiting_lock = threading.Lock()
+
+        # on_result callback for live mode
+        self._on_result_callback: Optional[Callable[[ProcessingResult], None]] = None
+
         # Live mode state
         self._work_queue: queue.Queue[_WorkItem] = queue.Queue()
         self._running = threading.Event()
         self._shutdown = threading.Event()
         self._thread: threading.Thread | None = None
+
+        # Wire bus schedule callback — objects schedule themselves when mail arrives
+        self._bus.set_schedule_callback(self._schedule_object)
 
     # --- Loading ---
 
@@ -88,21 +145,28 @@ class Runtime:
 
     def _register_object(self, definition: ObjectDefinition) -> LLMObject:
         """Create, register on bus, and bind event sources to providers."""
-        # Build tool context factory that provides push_event for domain logic
         tool_context_factory = None
         if self._tool_registry:
             def _make_context(obj: LLMObject) -> dict:
                 def push_event(content: str, source: str = "__code__") -> None:
-                    """Inject an event into the calling object's own event queue."""
-                    self._event_sources.inject(obj.object_id, content, source)
-                    if self._running.is_set():
-                        self._work_queue.put(_WorkItem())  # wake run-loop
+                    """Inject an event into the calling object's own mailbox."""
+                    msg = Message(
+                        sender=source,
+                        recipient=obj.object_id,
+                        type=MessageType.EVENT,
+                        content=content,
+                    )
+                    self._bus.deliver(msg)
 
                 def inject_event(recipient: str, content: str, source: str = "__external__") -> None:
-                    """Inject an event to any object — used for cross-object orchestration."""
-                    self._event_sources.inject(recipient, content, source)
-                    if self._running.is_set():
-                        self._work_queue.put(_WorkItem())  # wake run-loop
+                    """Inject an event to any object."""
+                    msg = Message(
+                        sender=source,
+                        recipient=recipient,
+                        type=MessageType.EVENT,
+                        content=content,
+                    )
+                    self._bus.deliver(msg)
 
                 return {"push_event": push_event, "inject_event": inject_event}
             tool_context_factory = _make_context
@@ -126,32 +190,29 @@ class Runtime:
         content: str,
         sender: str = "__user__",
     ) -> list[ProcessingResult]:
-        """Send a message to a specific object.
-
-        In live mode, enqueues work and blocks until processed.
-        """
+        """Send a message to a specific object."""
         msg = Message(
             sender=sender,
             recipient=recipient,
             type=MessageType.DOMAIN,
             content=content,
+            depth_remaining=self._max_chain_depth,
         )
         if self._running.is_set():
             item = _WorkItem(message=msg)
             self._work_queue.put(item)
             item.done.wait()
             return item.results
-        self._bus.deliver(msg)
-        return self._run_until_quiescent()
+        return self._dispatch([msg])
 
     def process_pending(self) -> list[ProcessingResult]:
-        """Process all pending mailbox messages and polled events until quiescent."""
+        """Process all pending mailbox messages and polled events until committed."""
         if self._running.is_set():
             item = _WorkItem()
             self._work_queue.put(item)
             item.done.wait()
             return item.results
-        return self._run_until_quiescent()
+        return self._dispatch([])
 
     def inject_event(
         self,
@@ -159,17 +220,14 @@ class Runtime:
         content: str,
         source: str = "__external__",
     ) -> list[ProcessingResult]:
-        """Inject an external event through the event source registry.
-
-        In live mode, enqueues work and blocks until processed.
-        """
+        """Inject an external event through the event source registry."""
         if self._running.is_set():
             item = _WorkItem(event_inject=(recipient, content, source))
             self._work_queue.put(item)
             item.done.wait()
             return item.results
         self._event_sources.inject(recipient, content, source)
-        return self._run_until_quiescent()
+        return self._dispatch([])
 
     def broadcast(
         self,
@@ -182,14 +240,14 @@ class Runtime:
             recipient="__broadcast__",
             type=MessageType.DOMAIN,
             content=content,
+            depth_remaining=self._max_chain_depth,
         )
         if self._running.is_set():
             item = _WorkItem(message=msg)
             self._work_queue.put(item)
             item.done.wait()
             return item.results
-        self._bus.deliver(msg)
-        return self._run_until_quiescent()
+        return self._dispatch([msg])
 
     def publish(
         self,
@@ -204,112 +262,160 @@ class Runtime:
             type=MessageType.EVENT,
             content=content,
             topic=topic,
+            depth_remaining=self._max_chain_depth,
         )
         if self._running.is_set():
             item = _WorkItem(message=msg)
             self._work_queue.put(item)
             item.done.wait()
             return item.results
-        self._bus.deliver(msg)
-        return self._run_until_quiescent()
+        return self._dispatch([msg])
 
-    # --- Processing Loop ---
+    # --- Virtual Actor Scheduling ---
 
-    def _run_until_quiescent(self) -> list[ProcessingResult]:
-        """Process all pending mailbox messages until the system is quiescent."""
-        results: list[ProcessingResult] = []
-        total = 0
-        # Track which objects are awaiting replies from which peers.
-        # Only replies from awaited peers are routed back. This prevents ack
-        # cascades: write services (email, slack) should not reply at all;
-        # read services reply with data that is routed back once per query.
-        awaiting_reply: dict[str, set[str]] = {}  # object_id -> set of peer_ids
+    def _schedule_object(self, obj: LLMObject) -> None:
+        """Schedule an object for execution on the thread pool.
 
-        while total < self._max_chain_depth:
-            # Poll event sources and deliver to mailboxes
-            for object_id, envelope in self._event_sources.poll_all():
-                msg = Message(
-                    sender=envelope.source_id,
-                    recipient=object_id,
-                    type=MessageType.EVENT,
-                    content=envelope.content,
-                )
-                self._bus.deliver(msg)
+        Called by LLMObject.deliver() when the object transitions from idle to active.
+        Registers with the current transaction so the transaction waits for this execution to complete.
+        """
+        transaction = self._current_transaction  # read once; safe because _dispatch_lock guards writes
+        if transaction:
+            transaction.increment()
 
-            # Find next object with pending messages (deterministic: registration order)
-            obj = next(
-                (o for o in self._bus.objects.values() if o.has_pending),
-                None,
-            )
-            if obj is None:
-                break  # quiescent
+        future = self._pool.submit(obj.read, self._on_result)
 
-            result = obj.process_next()
-            if result is None:
-                continue
-            total += 1
-            results.append(result)
-            self._bus.record_processing(result)
+        with self._futures_lock:
+            self._active_futures[obj.object_id] = future
 
-            logger.debug(
-                "[%d/%d] %s processed msg from %s (%s) → reply=%s, outgoing=%s",
-                total, self._max_chain_depth,
-                obj.object_id,
-                result.in_reply_to,
-                result.source_message_type.value if result.source_message_type else "?",
-                repr(result.reply[:80]) if result.reply else "(empty)",
-                [o.recipient for o in result.outgoing_messages],
-            )
+        def _done(f: Future, _transaction: Optional[_Transaction] = transaction, _oid: str = obj.object_id) -> None:
+            with self._futures_lock:
+                self._active_futures.pop(_oid, None)
+            if f.exception():
+                logger.exception("Error reading object %s", _oid, exc_info=f.exception())
+            if _transaction:
+                _transaction.decrement()
 
-            # Route reply back to sender ONLY if the sender is awaiting a reply
-            # from this object (prevents ack storms from write-service objects).
-            if (
-                result.reply
-                and result.in_reply_to
+        future.add_done_callback(_done)
+
+    def _on_result(self, result: ProcessingResult) -> None:
+        """Called from pool threads after each message is processed by an object.
+
+        Assigns a sequence number, records the result, then routes replies and
+        outgoing messages through the bus — scheduling idle recipients and keeping
+        the transaction open until all cascades commit.
+        """
+        with self._results_lock:
+            result.sequence = self._sequence_counter
+            self._sequence_counter += 1
+            self._pending_results.append(result)
+
+        self._bus.record_processing(result)
+
+        if self._on_result_callback:
+            self._on_result_callback(result)
+
+        obj_id = result.object_id
+
+        logger.debug(
+            "[seq=%d] %s processed msg from %s (%s) → reply=%s, outgoing=%s",
+            result.sequence, obj_id, result.in_reply_to,
+            result.source_message_type.value if result.source_message_type else "?",
+            repr(result.reply[:80]) if result.reply else "(empty)",
+            [o.recipient for o in result.outgoing_messages],
+        )
+
+        # Route reply back to sender ONLY if the sender is awaiting a reply from
+        # this object (prevents ack storms from write-service objects).
+        with self._awaiting_lock:
+            should_reply = (
+                bool(result.reply)
+                and result.in_reply_to is not None
                 and result.source_message_type != MessageType.REPLY
                 and result.in_reply_to not in ("__user__", "__system__", "__external__", "__code__")
                 and result.in_reply_to in self._bus.objects
-                and obj.object_id in awaiting_reply.get(result.in_reply_to, set())
-            ):
+                and obj_id in self._awaiting_reply.get(result.in_reply_to, set())
+            )
+            if should_reply:
+                self._awaiting_reply[result.in_reply_to].discard(obj_id)
+
+        if should_reply:
+            next_depth = result.depth_remaining - 1
+            if next_depth > 0:
                 reply_msg = Message(
-                    sender=obj.object_id,
+                    sender=obj_id,
                     recipient=result.in_reply_to,
                     type=MessageType.REPLY,
                     content=result.reply,
+                    depth_remaining=next_depth,
                 )
                 self._bus.deliver(reply_msg)
-                # Clear the awaited flag — reply delivered
-                awaiting_reply[result.in_reply_to].discard(obj.object_id)
-                logger.debug(
-                    "  ↩ reply routed: %s → %s",
-                    obj.object_id, result.in_reply_to,
-                )
+                logger.debug("  ↩ reply routed: %s → %s", obj_id, result.in_reply_to)
+            else:
+                logger.warning("Chain depth limit reached; dropping reply from %s to %s", obj_id, result.in_reply_to)
 
-            # Deliver outgoing peer messages
-            for out in result.outgoing_messages:
-                chained = Message(
-                    sender=obj.object_id,
-                    recipient=out.recipient,
-                    type=MessageType.DOMAIN,
-                    content=out.content,
+        # Deliver outgoing peer messages
+        for out in result.outgoing_messages:
+            next_depth = result.depth_remaining - 1
+            if next_depth <= 0:
+                logger.warning(
+                    "Chain depth limit reached; dropping message from %s to %s",
+                    obj_id, out.recipient,
                 )
-                self._bus.deliver(chained)
-                logger.debug(
-                    "  → outgoing: %s → %s: %s",
-                    obj.object_id, out.recipient, repr(out.content[:80]),
-                )
-                # Always await replies from outgoing messages. Cascades are
-                # prevented at the source: write services produce empty replies.
-                awaiting_reply.setdefault(obj.object_id, set()).add(out.recipient)
-
-        if total >= self._max_chain_depth:
-            pending = [o.object_id for o in self._bus.objects.values() if o.has_pending]
-            logger.warning(
-                "Chain depth limit reached (%d). Still pending: %s",
-                self._max_chain_depth, pending,
+                continue
+            chained = Message(
+                sender=obj_id,
+                recipient=out.recipient,
+                type=MessageType.DOMAIN,
+                content=out.content,
+                depth_remaining=next_depth,
             )
+            self._bus.deliver(chained)
+            logger.debug("  → outgoing: %s → %s: %s", obj_id, out.recipient, repr(out.content[:80]))
+            with self._awaiting_lock:
+                self._awaiting_reply.setdefault(obj_id, set()).add(out.recipient)
 
-        return results
+    def _dispatch(
+        self,
+        messages: list[Message],
+    ) -> list[ProcessingResult]:
+        """Dispatch messages into the network and block until the transaction commits.
+
+        Delivers each message to the bus (scheduling idle recipients), polls any
+        pending external events, then waits for all triggered executions to complete.
+        Transactions are serialized via _dispatch_lock — only one is in-flight at a time.
+        """
+        with self._dispatch_lock:
+            transaction = _Transaction()
+            self._current_transaction = transaction
+            with self._awaiting_lock:
+                self._awaiting_reply.clear()
+
+            self._poll_events_once()
+
+            for msg in messages:
+                self._bus.deliver(msg)
+
+            transaction.wait()  # block until committed
+            self._current_transaction = None
+
+            with self._results_lock:
+                results = sorted(self._pending_results, key=lambda r: r.sequence)
+                self._pending_results.clear()
+
+            return results
+
+    def _poll_events_once(self) -> None:
+        """Poll all event sources and deliver events to object mailboxes."""
+        for object_id, envelope in self._event_sources.poll_all():
+            msg = Message(
+                sender=envelope.source_id,
+                recipient=object_id,
+                type=MessageType.EVENT,
+                content=envelope.content,
+                depth_remaining=self._max_chain_depth,
+            )
+            self._bus.deliver(msg)
 
     # --- Modification ---
 
@@ -365,11 +471,7 @@ class Runtime:
         return self._event_sources.bindings_summary()
 
     def get_event_source(self, object_id: str, descriptor: str):
-        """Get the event source provider for an object's declared source.
-
-        Returns an InjectableEventSource (or custom provider) that the
-        test harness or external adapter can fire events into.
-        """
+        """Get the event source provider for an object's declared source."""
         return self._event_sources.get_source(object_id, descriptor)
 
     # --- Persistence ---
@@ -407,17 +509,15 @@ class Runtime:
         poll_interval: float = 0.1,
         on_result: Callable[[ProcessingResult], None] | None = None,
     ) -> None:
-        """Start the live run-loop. Blocks until stop() is called.
-
-        The run-loop continuously polls for work (submitted messages and
-        event source activity) and processes until quiescent, then waits.
-        """
+        """Start the live run-loop. Blocks until stop() is called."""
         self._shutdown.clear()
         self._running.set()
+        self._on_result_callback = on_result
         try:
-            self._run_loop(poll_interval, on_result)
+            self._run_loop(poll_interval)
         finally:
             self._running.clear()
+            self._on_result_callback = None
 
     def start(
         self,
@@ -438,6 +538,7 @@ class Runtime:
         if self._thread is not None:
             self._thread.join(timeout=timeout)
             self._thread = None
+        self._pool.shutdown(wait=False)
 
     def submit(
         self,
@@ -455,6 +556,7 @@ class Runtime:
             recipient=recipient,
             type=MessageType.DOMAIN,
             content=content,
+            depth_remaining=self._max_chain_depth,
         )
         item = _WorkItem(message=msg)
         self._work_queue.put(item)
@@ -467,12 +569,8 @@ class Runtime:
         self._sources.pop(object_id, None)
         self._modified.discard(object_id)
 
-    def _run_loop(
-        self,
-        poll_interval: float,
-        on_result: Callable[[ProcessingResult], None] | None,
-    ) -> None:
-        """Internal run-loop: drain work queue, process, repeat."""
+    def _run_loop(self, poll_interval: float) -> None:
+        """Internal run-loop: dequeue work, dispatch transaction, repeat."""
         while not self._shutdown.is_set():
             # Block until work arrives or poll interval elapses
             items: list[_WorkItem] = []
@@ -487,25 +585,23 @@ class Runtime:
                 except queue.Empty:
                     break
 
-            # Deliver messages / inject events from work items
+            # Collect messages and inject events from work items
+            msgs: list[Message] = []
             for item in items:
                 if item.message is not None:
-                    self._bus.deliver(item.message)
+                    msgs.append(item.message)
                 if item.event_inject is not None:
                     recipient, content, source = item.event_inject
                     self._event_sources.inject(recipient, content, source)
 
-            # Process everything until quiescent
+            # Dispatch: deliver all messages and poll events; block until transaction commits
             try:
-                results = self._run_until_quiescent()
+                results = self._dispatch(msgs)
             except Exception:
                 logger.exception("Error in run-loop processing")
                 results = []
 
-            # Fire callbacks and signal completion
-            if on_result:
-                for r in results:
-                    on_result(r)
+            # Signal completion to all work items
             for item in items:
                 item.results = results
                 item.done.set()

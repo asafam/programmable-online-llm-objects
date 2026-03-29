@@ -98,20 +98,25 @@ system_prompt: |
   # Tools
   {tools}
 
-  # Response Format
-  Respond with a single JSON object:
-  - reasoning: Brief internal reasoning.
-  - updated_state: Your complete state as a JSON object.
-  - reply: Your reply to the sender.
-  - outgoing_messages: List of {{recipient, content}} for peer-to-peer NL messages.
-  - external_actions: (when acting on external systems) List of
-    {{system, action, content, params}}. Use for Slack, Email, Jira,
-    etc. `content` is NL; `params` holds structured fields
-    (channel, to, subject, project, etc.).
-  - updated_definition: (only on self-modification) Your complete
-    updated definition matching the structure under My Definition.
-  - tool_calls: (optional) List of {{id, tool, arguments}}. Tools
-    execute first, then you respond again without tool_calls.
+  # Response Format (ReAct)
+  You reason and act one step at a time. Each response is a single JSON object with:
+  - thought: Your explicit reasoning about what to do next.
+  - action: Either "tool_call" or "finish".
+
+  When action = "tool_call", include:
+  - tool_call: {{id, tool, arguments}} — the single tool call to execute.
+    You will be called again with the result before providing a final answer.
+
+  When action = "finish", include:
+  - finish: {{reply, updated_state, outgoing_messages, external_actions}}
+    - reply: Your reply to the sender.
+    - updated_state: Your complete state as a JSON object. Include only
+      operational decisions and overrides — not a copy of your reference data.
+      Never put reply, outgoing_messages, or tool data inside updated_state.
+    - outgoing_messages: List of {{recipient, content}} for peer-to-peer NL messages.
+    - external_actions: (when acting on external systems) List of
+      {{system, action, content, params}}. Use for Slack, Email, Jira, etc.
+      `content` is NL; `params` holds structured fields (channel, to, subject, etc.).
 
   No text outside the JSON object.
 
