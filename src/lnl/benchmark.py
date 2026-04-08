@@ -202,9 +202,15 @@ class BenchmarkHarness:
                 results.append(self.run_scenario(scenario))
         return results
 
-    def evaluate_assertion(self, condition: str, actual: str, context: str = "") -> tuple[bool, str]:
-        """Evaluate an assertion condition against actual evidence using the judge."""
-        return self._judge.evaluate(condition, actual, context)
+    def evaluate_assertion(
+        self, condition: str, actual: str, context: str = ""
+    ) -> tuple[bool, str, list[dict]]:
+        """Evaluate an assertion condition against actual evidence using the judge.
+
+        Returns (passed, reasoning, votes). votes is a list of per-judge dicts
+        when a PanelJudge is used, or a single-entry list for single judges.
+        """
+        return self._judge.evaluate_with_votes(condition, actual, context)
 
     def _gather_actual(
         self,

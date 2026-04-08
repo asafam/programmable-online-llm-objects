@@ -569,7 +569,13 @@ class GeminiBrain(LLMBrain):
 
         self.model = model
         self._temperature = temperature
-        self._client = genai.Client(api_key=api_key or os.environ["GOOGLE_API_KEY"])
+        resolved_key = api_key or os.environ.get("GOOGLE_API_KEY")
+        if not resolved_key:
+            raise ValueError(
+                "Google API key required. Set GOOGLE_API_KEY in your environment or .env file, "
+                "or pass api_key to GeminiBrain."
+            )
+        self._client = genai.Client(api_key=resolved_key)
         self._types = genai_types
 
     def _to_gemini_contents(self, messages: list[dict]) -> tuple[str, list]:

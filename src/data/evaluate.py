@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import re
@@ -22,6 +23,7 @@ import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -38,6 +40,8 @@ from src.data.schema import (
     MockConfig,
     MockToolDef,
     ModificationResult,
+    RawEventData,
+    RawTestCaseResult,
     RunConfig,
     TestCase,
     TestCaseResult,
@@ -95,6 +99,78 @@ def _derive_tools_from_skills(tc: "TestCase") -> list[MockToolDef]:
                 response_template=f"[mock] {skill} completed.",
             ))
     return result
+
+
+@dataclass
+class StepsSnapshot:
+    """Captured runtime state after steps complete, for reuse across TC variants.
+
+    Allows skipping redundant step re-execution when multiple test cases share
+    the same base steps (same sample_id). Enable with --reuse-steps.
+    """
+    object_states: dict[str, str]           # obj_id → _state string
+    object_histories: dict[str, list]       # obj_id → _history messages
+    object_definitions: dict[str, object]   # obj_id → ObjectDefinition (shallow copy)
+    tool_call_counts: dict[str, int]        # tool_name → _call_count after steps
+    tool_call_logs: dict[str, list]         # tool_name → call_log after steps
+    step_event_results: list               # EventResult list for steps (reused verbatim)
+    step_raw_events: list                  # RawEventData list for steps (replayed)
+    prior_context: str                     # _format_prior_state after steps
+
+
+def _take_snapshot(
+    rt,
+    mock_executors: list,
+    step_event_results: list,
+    step_raw_events: list,
+    prior_context: str,
+) -> StepsSnapshot:
+    """Capture runtime state after steps complete."""
+    states: dict[str, str] = {}
+    histories: dict[str, list] = {}
+    definitions: dict[str, object] = {}
+    for obj_id, obj in rt._bus._objects.items():
+        states[obj_id] = obj._state
+        histories[obj_id] = list(obj._history)
+        definitions[obj_id] = copy.copy(obj._definition)
+
+    tool_counts: dict[str, int] = {}
+    tool_logs: dict[str, list] = {}
+    for ex in mock_executors:
+        name = getattr(getattr(ex, "_tool_def", None), "tool_name", None)
+        if name is not None and hasattr(ex, "_call_count"):
+            tool_counts[name] = ex._call_count
+            tool_logs[name] = list(getattr(ex, "call_log", []))
+
+    return StepsSnapshot(
+        object_states=states,
+        object_histories=histories,
+        object_definitions=definitions,
+        tool_call_counts=tool_counts,
+        tool_call_logs=tool_logs,
+        step_event_results=list(step_event_results),
+        step_raw_events=list(step_raw_events),
+        prior_context=prior_context,
+    )
+
+
+def _restore_snapshot(rt, mock_executors: list, snapshot: StepsSnapshot) -> None:
+    """Restore runtime state from a snapshot (overwrites freshly-created objects)."""
+    for obj_id, obj in rt._bus._objects.items():
+        if obj_id not in snapshot.object_states:
+            continue
+        obj._state = snapshot.object_states[obj_id]
+        obj._history = list(snapshot.object_histories[obj_id])
+        src = snapshot.object_definitions[obj_id]
+        for attr in ("role", "behavior", "peers", "skills", "subscriptions", "event_sources", "initial_state"):
+            if hasattr(src, attr):
+                setattr(obj._definition, attr, copy.copy(getattr(src, attr)))
+
+    for ex in mock_executors:
+        name = getattr(getattr(ex, "_tool_def", None), "tool_name", None)
+        if name is not None and name in snapshot.tool_call_counts:
+            ex._call_count = snapshot.tool_call_counts[name]
+            ex.call_log = list(snapshot.tool_call_logs.get(name, []))
 
 
 def _build_trigger_map(tc: "TestCase") -> "dict[str, list]":
@@ -216,6 +292,9 @@ def _execute_test_case_inner(
     progress_callback=None,
     on_event_result=None,
     on_mod_applied=None,
+    on_raw_event=None,
+    steps_snapshot: "Optional[StepsSnapshot]" = None,
+    snapshot_out: "Optional[list]" = None,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase and return event + modification results."""
     from src.lnl.gateway import EventGateway
@@ -274,9 +353,12 @@ def _execute_test_case_inner(
         timeout_s=timeout_s,
         steps_only=steps_only,
         mock_executors=mock_executors + [passthrough] if final_mock_tools else [],
+        steps_snapshot=steps_snapshot,
+        snapshot_out=snapshot_out,
         trigger_map=trigger_map,
         on_event_result=on_event_result,
         on_mod_applied=on_mod_applied,
+        on_raw_event=on_raw_event,
     )
 
 
@@ -337,6 +419,9 @@ def _run_test_case_timeline(
     trigger_map: "dict[str, list] | None" = None,
     on_event_result=None,   # callable(EventResult, is_step: bool)
     on_mod_applied=None,    # callable(Modification)
+    on_raw_event=None,      # callable(RawEventData) — fired before judge, for artifact capture
+    steps_snapshot: "Optional[StepsSnapshot]" = None,   # restore from this; skip step execution
+    snapshot_out: "Optional[list]" = None,              # append StepsSnapshot here after steps
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Execute steps and timeline events against a live runtime."""
     event_results: list[EventResult] = []
@@ -345,8 +430,24 @@ def _run_test_case_timeline(
     execs = mock_executors or []
     prior_context: str = ""
 
-    # 2. Run steps — initialize state and assert default (no-modification) behavior
+    # 2. Run steps — initialize state and assert default (no-modification) behavior.
+    # When steps_snapshot is provided, skip execution and restore from snapshot instead.
+    if steps_snapshot is not None:
+        _restore_snapshot(rt, execs, steps_snapshot)
+        event_results.extend(steps_snapshot.step_event_results)
+        prior_context = steps_snapshot.prior_context
+        if on_raw_event:
+            for raw in steps_snapshot.step_raw_events:
+                on_raw_event(raw)
+        if on_event_result:
+            for ev in steps_snapshot.step_event_results:
+                on_event_result(ev, True)
+    else:
+        _step_raw_events: list = []
+
     for i, step in enumerate(tc.steps):
+        if steps_snapshot is not None:
+            break  # already restored above
         log_snapshot = len(rt.message_log)
         exec_snap = _snapshot_logs(execs)
         t0 = time.monotonic()
@@ -374,20 +475,38 @@ def _run_test_case_timeline(
                 new_calls = _new_tool_calls(execs, exec_snap)
                 evidence = gather_evidence(rt, results, step.target, bus_messages=bus_msgs, tool_calls=new_calls)
                 condition = step.expect.action
-                passed, reasoning = harness.evaluate_assertion(condition, evidence, prior_context)
+                raw = RawEventData(
+                    event_id=f"S{i+1:03d}",
+                    expected=condition,
+                    evidence=evidence,
+                    prior_context=prior_context,
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
+                    latency_ms=latency_ms,
+                )
+                if snapshot_out is not None:
+                    _step_raw_events.append(raw)
+                if on_raw_event:
+                    on_raw_event(raw)
+                passed, reasoning, votes = harness.evaluate_assertion(condition, evidence, prior_context)
                 event_results.append(EventResult(
                     event_id=f"S{i+1:03d}",
                     passed=passed,
                     reasoning=reasoning,
                     expected=condition,
-                    evidence=evidence,
                     input_tokens=in_tok,
                     output_tokens=out_tok,
                     latency_ms=latency_ms,
+                    judge_votes=votes if len(votes) > 1 else [],
                 ))
                 if on_event_result:
                     on_event_result(event_results[-1], True)
         prior_context = _format_prior_state(rt)
+
+    # Capture snapshot after steps complete (first TC in a sample group)
+    if snapshot_out is not None and steps_snapshot is None:
+        step_results_so_far = [e for e in event_results]
+        snapshot_out.append(_take_snapshot(rt, execs, step_results_so_far, _step_raw_events, prior_context))
 
     if steps_only:
         return event_results, mod_results
@@ -439,16 +558,26 @@ def _run_test_case_timeline(
             bus_msgs = rt.message_log[log_snap:]
             new_calls = _new_tool_calls(execs, exec_s)
             evidence = gather_evidence(rt, res, evt.recipient, bus_messages=bus_msgs, tool_calls=new_calls)
-            passed, reasoning = harness.evaluate_assertion(evt.expect.action, evidence, ctx)
+            if on_raw_event:
+                on_raw_event(RawEventData(
+                    event_id=evt.id,
+                    expected=evt.expect.action,
+                    evidence=evidence,
+                    prior_context=ctx,
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
+                    latency_ms=lat_ms,
+                ))
+            passed, reasoning, votes = harness.evaluate_assertion(evt.expect.action, evidence, ctx)
             event_results.append(EventResult(
                 event_id=evt.id,
                 passed=passed,
                 reasoning=reasoning,
                 expected=evt.expect.action,
-                evidence=evidence,
                 input_tokens=in_tok,
                 output_tokens=out_tok,
                 latency_ms=lat_ms,
+                judge_votes=votes if len(votes) > 1 else [],
             ))
 
     for _, kind, item in timeline:
@@ -506,6 +635,9 @@ def execute_test_case(
     progress_callback=None,
     on_event_result=None,
     on_mod_applied=None,
+    on_raw_event=None,
+    steps_snapshot: "Optional[StepsSnapshot]" = None,
+    snapshot_out: "Optional[list]" = None,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase with a per-event timeout (seconds).
 
@@ -518,6 +650,7 @@ def execute_test_case(
         progress_callback: Optional callable(msg) invoked on every bus message delivery.
         on_event_result: Optional callable(EventResult, is_step: bool) for real-time display.
         on_mod_applied: Optional callable(Modification) called before each modification runs.
+        on_raw_event: Optional callable(RawEventData) fired before each judge call, for artifact capture.
     """
     return _execute_test_case_inner(
         tc, brain, harness,
@@ -529,6 +662,9 @@ def execute_test_case(
         progress_callback=progress_callback,
         on_event_result=on_event_result,
         on_mod_applied=on_mod_applied,
+        on_raw_event=on_raw_event,
+        steps_snapshot=steps_snapshot,
+        snapshot_out=snapshot_out,
     )
 
 
@@ -537,6 +673,11 @@ def execute_test_case(
 def default_output_path(input_path: Path) -> Path:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     return input_path.parent / "runs" / f"{input_path.stem}_eval_{ts}.jsonl"
+
+
+def runs_path_from_eval_path(eval_path: Path) -> Path:
+    """Derive the _runs.jsonl artifact path from an _eval.jsonl path."""
+    return eval_path.parent / eval_path.name.replace("_eval_", "_runs_", 1)
 
 
 # ── Verbose output ────────────────────────────────────────────────────────────
@@ -703,7 +844,8 @@ def run(args: argparse.Namespace) -> Path:
         judge = single_judges[0]
     else:
         from src.lnl.judge import PanelJudge
-        judge = PanelJudge(single_judges)
+        labels = [f"{p}/{m}" for p, m in parsed_judges]
+        judge = PanelJudge(single_judges, judge_labels=labels)
 
     from src.lnl.benchmark import BenchmarkHarness
     harness = BenchmarkHarness(brain=brain, judge=judge)
@@ -760,6 +902,16 @@ def run(args: argparse.Namespace) -> Path:
     workers: int = getattr(args, "workers", 1)
     write_lock = threading.Lock()
 
+    # --reuse-steps: share runtime snapshots across variants of the same sample.
+    # Key: (sample_id, run_idx). First TC in each group runs steps and stores the
+    # snapshot; subsequent TCs restore from it and skip step execution.
+    reuse_steps: bool = getattr(args, "reuse_steps", False)
+    _snapshots: dict[tuple, StepsSnapshot] = {}
+    _snapshot_events: dict[tuple, threading.Event] = {}
+    _snapshot_registry_lock = threading.Lock()
+
+    runs_output = runs_path_from_eval_path(args.output)
+
     def _run_one(tc_idx: int, tc: TestCase, run_idx: int) -> Optional[TestCaseResult]:
         mod_type_str = tc.modifications[0].mod_type.value if tc.modifications else "none"
         label = f"{tc.id}[{mod_type_str}]"
@@ -769,6 +921,29 @@ def run(args: argparse.Namespace) -> Path:
         tqdm.write(f"\n{label}")
         msg_count = [0]
         tc_start = time.monotonic()
+        raw_events: list[RawEventData] = []
+
+        # Resolve snapshot for --reuse-steps
+        steps_snapshot: Optional[StepsSnapshot] = None
+        snapshot_out: Optional[list] = None
+        if reuse_steps and tc.sample_id:
+            key = (tc.sample_id, run_idx)
+            with _snapshot_registry_lock:
+                if key in _snapshots:
+                    steps_snapshot = _snapshots[key]
+                elif key in _snapshot_events:
+                    wait_event = _snapshot_events[key]
+                else:
+                    wait_event = None
+                    new_event = threading.Event()
+                    _snapshot_events[key] = new_event
+                    snapshot_out = []  # this TC will capture the snapshot
+
+            if steps_snapshot is None and snapshot_out is None:
+                # Another worker is computing it — wait
+                wait_event.wait()
+                with _snapshot_registry_lock:
+                    steps_snapshot = _snapshots.get(key)
 
         def _on_event_result(result: EventResult, is_step: bool, _args=args):
             status = "PASS" if result.passed else "FAIL"
@@ -776,9 +951,9 @@ def run(args: argparse.Namespace) -> Path:
             tqdm.write(f"  [{status}] {result.event_id}{tag}: {result.expected[:70]}")
             if not result.passed:
                 tqdm.write(f"         → {result.reasoning[:120]}")
-            if _args.verbose and result.evidence:
-                indented = result.evidence[:400].replace("\n", "\n           ")
-                tqdm.write(f"         evidence: {indented}")
+
+        def _on_raw_event(raw: RawEventData):
+            raw_events.append(raw)
 
         def _on_mod_applied(mod, _tc=tc):
             tqdm.write(
@@ -803,7 +978,18 @@ def run(args: argparse.Namespace) -> Path:
             progress_callback=_on_message,
             on_event_result=_on_event_result,
             on_mod_applied=_on_mod_applied,
+            on_raw_event=_on_raw_event,
+            steps_snapshot=steps_snapshot,
+            snapshot_out=snapshot_out,
         )
+
+        # Store completed snapshot and signal waiting workers
+        if reuse_steps and snapshot_out and tc.sample_id:
+            key = (tc.sample_id, run_idx)
+            with _snapshot_registry_lock:
+                if snapshot_out:
+                    _snapshots[key] = snapshot_out[0]
+                _snapshot_events[key].set()
         pass_rate = (
             sum(1 for e in event_results if e.passed) / len(event_results)
             if event_results else None
@@ -820,10 +1006,24 @@ def run(args: argparse.Namespace) -> Path:
             modifications=mod_results,
             pass_rate=pass_rate,
         )
+        raw_result = RawTestCaseResult(
+            tc_id=tc.id,
+            sample_id=tc.sample_id,
+            tc_index=tc_idx,
+            seed=seed,
+            name=tc.name,
+            domain=tc.domain,
+            run_index=run_idx,
+            events=raw_events,
+            modifications=mod_results,
+        )
         passed_n = sum(1 for e in event_results if e.passed)
         total_n = len(event_results)
         rate_str = f"{pass_rate:.0%}" if pass_rate is not None else "N/A"
         tqdm.write(f"  → pass={passed_n}/{total_n} ({rate_str})")
+        with write_lock:
+            with open(runs_output, "a") as rf:
+                rf.write(raw_result.model_dump_json() + "\n")
         return result
 
     # Build list of pending (tc_idx, tc, run_idx) tuples
@@ -840,6 +1040,7 @@ def run(args: argparse.Namespace) -> Path:
         timestamp=datetime.now().isoformat(),
         input_path=str(args.input),
         output_path=str(args.output),
+        runs_path=str(runs_output),
         model=args.model,
         provider=args.provider,
         judge_model=judge_model,
@@ -856,6 +1057,12 @@ def run(args: argparse.Namespace) -> Path:
         limit=getattr(args, "limit", None),
         is_continuation=is_continuation,
     )
+
+    # Initialize runs artifact file (truncate on new run, append on continuation)
+    if not is_continuation:
+        runs_output.parent.mkdir(parents=True, exist_ok=True)
+        runs_output.write_text("")  # create/truncate
+    print(f"Runs:   {runs_output}")
 
     with open(args.output, file_mode) as f:
         f.write(run_config.model_dump_json() + "\n")
@@ -1028,6 +1235,17 @@ Examples:
         action="store_true",
         default=False,
         help="Run only the steps (baseline behavior); skip modifications and events",
+    )
+    parser.add_argument(
+        "--reuse-steps",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Run base steps once per sample and reuse the resulting runtime state "
+            "across all TC variants sharing the same sample_id. Saves ~5-6x step "
+            "cost when each sample has multiple variants. Requires sample_id to be set. "
+            "Use --no-reuse-steps to disable. (default: enabled)"
+        ),
     )
     parser.add_argument(
         "--llm-judge",

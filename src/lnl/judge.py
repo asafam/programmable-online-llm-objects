@@ -49,6 +49,17 @@ class LLMJudge(ABC):
         """Return (passed, reasoning)."""
         ...
 
+    def evaluate_with_votes(
+        self, condition: str, evidence: str, context: str = ""
+    ) -> tuple[bool, str, list[dict]]:
+        """Return (passed, reasoning, votes).
+
+        Default implementation wraps the single judge result in a one-item vote list.
+        Override in panel judges to return per-judge breakdowns.
+        """
+        passed, reasoning = self.evaluate(condition, evidence, context)
+        return passed, reasoning, [{"passed": passed, "reasoning": reasoning}]
+
 
 class SubstringJudge(LLMJudge):
     """Fallback judge using substring matching — no API call needed."""
@@ -128,7 +139,13 @@ class GeminiJudge(LLMJudge):
             raise ImportError("google-genai package required. Install with: pip install google-genai")
 
         self.model = model
-        self._client = genai.Client(api_key=api_key or os.environ["GOOGLE_API_KEY"])
+        resolved_key = api_key or os.environ.get("GOOGLE_API_KEY")
+        if not resolved_key:
+            raise ValueError(
+                "Google API key required. Set GOOGLE_API_KEY in your environment or .env file, "
+                "or pass api_key to GeminiJudge."
+            )
+        self._client = genai.Client(api_key=resolved_key)
         self._types = genai_types
 
     def evaluate(self, condition: str, evidence: str, context: str = "") -> tuple[bool, str]:
@@ -159,32 +176,43 @@ class PanelJudge(LLMJudge):
     With 3+ judges: simple majority vote; ties → fail.
     """
 
-    def __init__(self, judges: list[LLMJudge]) -> None:
+    def __init__(self, judges: list[LLMJudge], judge_labels: Optional[list[str]] = None) -> None:
         if not judges:
             raise ValueError("PanelJudge requires at least one judge")
         self._judges = judges
+        self._labels = judge_labels or [f"judge{i + 1}" for i in range(len(judges))]
 
-    def evaluate(self, condition: str, evidence: str, context: str = "") -> tuple[bool, str]:
-        results = [j.evaluate(condition, evidence, context) for j in self._judges]
-        votes = [r[0] for r in results]
-        reasonings = [r[1] for r in results]
+    def evaluate_with_votes(
+        self, condition: str, evidence: str, context: str = ""
+    ) -> tuple[bool, str, list[dict]]:
+        raw = [j.evaluate(condition, evidence, context) for j in self._judges]
+        votes_bool = [r[0] for r in raw]
+        reasonings = [r[1] for r in raw]
 
-        pass_count = sum(votes)
-        total = len(votes)
-
-        # Build per-judge summary
+        pass_count = sum(votes_bool)
+        total = len(votes_bool)
         summaries = "; ".join(
-            f"judge{i + 1}={'PASS' if v else 'FAIL'}: {r[:80]}"
-            for i, (v, r) in enumerate(zip(votes, reasonings))
+            f"{label}={'PASS' if v else 'FAIL'}: {r[:80]}"
+            for label, v, r in zip(self._labels, votes_bool, reasonings)
         )
 
         if pass_count == total - pass_count:
-            # Tied — treat as fail
-            return False, f"Judges tied ({pass_count}/{total} pass) — {summaries}"
+            reasoning = f"Judges tied ({pass_count}/{total} pass) — {summaries}"
+            majority_passed = False
+        else:
+            majority_passed = pass_count > total - pass_count
+            verdict = "PASS" if majority_passed else "FAIL"
+            reasoning = f"{verdict} ({pass_count}/{total} judges agree) — {summaries}"
 
-        majority_passed = pass_count > total - pass_count
-        verdict = "PASS" if majority_passed else "FAIL"
-        return majority_passed, f"{verdict} ({pass_count}/{total} judges agree) — {summaries}"
+        votes = [
+            {"judge": label, "passed": v, "reasoning": r}
+            for label, v, r in zip(self._labels, votes_bool, reasonings)
+        ]
+        return majority_passed, reasoning, votes
+
+    def evaluate(self, condition: str, evidence: str, context: str = "") -> tuple[bool, str]:
+        passed, reasoning, _ = self.evaluate_with_votes(condition, evidence, context)
+        return passed, reasoning
 
 
 def _safe_json_loads(text: str) -> dict:
