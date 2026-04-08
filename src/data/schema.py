@@ -235,6 +235,7 @@ class RunConfig(BaseModel):
     timestamp: str
     input_path: str
     output_path: str
+    runs_path: str = ""   # path to sibling _runs.jsonl artifact file (empty for legacy runs)
     model: str
     provider: str
     judge_model: str
@@ -263,10 +264,21 @@ class EventResult(BaseModel):
     passed: bool
     reasoning: str
     expected: str = ""
-    evidence: str = ""
+    evidence: str = Field(
+        default="",
+        description=(
+            "Deprecated: no longer populated by evaluate.py. "
+            "Full evidence is stored in the sibling _runs.jsonl artifact file. "
+            "Field kept for backward-compatible deserialization of older result files."
+        ),
+    )
     input_tokens: int = 0
     output_tokens: int = 0
     latency_ms: float = 0.0
+    judge_votes: list[dict] = Field(
+        default_factory=list,
+        description="Per-judge votes when a panel judge is used. Each entry: {judge, passed, reasoning}.",
+    )
 
 class ModificationResult(BaseModel):
     """Cost of applying a single modification."""
@@ -274,6 +286,40 @@ class ModificationResult(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     latency_ms: float = 0.0
+
+
+class RawEventData(BaseModel):
+    """Raw execution data for one evaluable event — judge inputs captured before any verdict.
+
+    Written to the _runs.jsonl artifact file alongside each evaluation run.
+    Used by re_evaluate.py to re-judge with a different model or updated expectations.
+    """
+    event_id: str
+    expected: str          # event.expect.action (condition passed to judge)
+    evidence: str          # gather_evidence() output
+    prior_context: str     # _format_prior_state() snapshot before this event
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_ms: float = 0.0
+
+
+class RawTestCaseResult(BaseModel):
+    """Execution snapshot for one TestCase run — no judge verdicts included.
+
+    Written as one line per (tc, run) to the _runs.jsonl artifact file.
+    Contains everything needed to re-judge without re-running the LNL runtime.
+    """
+    record_type: Literal["raw_run"] = "raw_run"
+    tc_id: str
+    sample_id: str = ""
+    tc_index: int = -1
+    seed: Optional[int] = None
+    name: str
+    domain: str
+    run_index: int
+    events: list[RawEventData]               # only events/steps that have expect
+    modifications: list[ModificationResult]
+
 
 class TestCaseResult(BaseModel):
     """Result of running a single TestCase (one run)."""
@@ -376,4 +422,5 @@ def to_lnl_definition(obj: ObjectDef) -> ObjectDefinition:
         skills=list(obj.skills),
         subscriptions=list(obj.subscriptions),
         event_sources=list(obj.event_sources),
+        initial_state=obj.state_description,
     )

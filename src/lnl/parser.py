@@ -83,6 +83,7 @@ def parse_object_text(text: str) -> ObjectDefinition:
         skills=skills,
         subscriptions=subscriptions,
         event_sources=event_sources,
+        initial_state=sections.get("state", ""),
     )
 
 

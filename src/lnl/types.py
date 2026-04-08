@@ -33,6 +33,7 @@ class ObjectDefinition:
     skills: list[str] = field(default_factory=list)
     subscriptions: list[str] = field(default_factory=list)
     event_sources: list[str] = field(default_factory=list)
+    initial_state: str = ""  # optional ## State section from markdown
 
 
 def _utcnow() -> datetime.datetime:
