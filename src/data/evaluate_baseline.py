@@ -775,15 +775,11 @@ async def _execute_tc_async(
         for obj in tc.objects:
             reset_agent_state(f"{obj.object_id}{slot_suffix}", obj.state_description, openclaw_home)
 
-    # Multi-agent: generate a unique session name so this run never collides with
-    # stale in-memory sessions from previous runs.  AGENTS.md is rewritten with the
-    # correct peer sessionKey refs before we open any connection.
-    if not single_agent_id:
-        OpenClawAgent._global_counter += 1
-        run_session_name = f"eval-ma-{OpenClawAgent._global_counter}"
-        rewrite_agents_md(tc.objects, openclaw_home, run_session_name, slot_suffix=slot_suffix)
-    else:
-        run_session_name = None  # unused in single-agent path
+    # Multi-agent: session names are generated PER-EVENT (not per-run) so each
+    # webhook trigger starts with a clean session.  State persists across events
+    # via state.md files; session conversation history does NOT carry over.
+    # run_session_name is unused in multi-agent mode — see _make_event_handles().
+    run_session_name = None
 
     # Build trigger map: event_id → list of triggered events (test-case schema)
     trigger_map: dict[str, list[Any]] = {}
@@ -840,64 +836,74 @@ async def _execute_tc_async(
     mod_results: list[ModificationResult] = partial_mods if partial_mods is not None else []
     prior_context: str = ""
 
-    # ── Open ONE connection; register ALL agent sessions before any message is sent ──
-    # This ensures every label is claimed upfront so agentToAgent routing works without
-    # 'label already in use' collisions between sequential messages.
-    async with await OpenClawClient.connect(**_openclaw_connect_kwargs(gateway_url, openclaw_home)) as client:
-        session_names: dict[str, str] = {}
-        handles: dict[str, Any] = {}
+    # Pre-compute peer graph (used by per-event handle setup).
+    obj_peer_ids: dict[str, set[str]] = {
+        obj.object_id: {p.object_id for p in obj.peers}
+        for obj in tc.objects
+    }
 
+    async def _make_event_handles(
+        client: Any,
+        event_target: str,
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        """Create fresh handles + session name for one event.
+
+        Each event gets its own unique session name so it starts with a clean
+        conversation context.  State persists across events via state.md files;
+        session history does NOT carry over (which would cause locked sessions
+        and confirmation-seeking carry-over from the previous event).
+
+        Leaf agents (no peers) are pre-warmed so they're registered before the
+        entry agent's agentToAgent calls reach them.  Intermediate agents are
+        NOT pre-warmed — an init ping puts them in a chatbot state.
+        """
+        OpenClawAgent._global_counter += 1
+        sname = f"eval-ma-{OpenClawAgent._global_counter}"
+        rewrite_agents_md(tc.objects, openclaw_home, sname, slot_suffix=slot_suffix)
+
+        ev_handles: dict[str, Any] = {}
+        ev_session_names: dict[str, str] = {}
+        for obj in tc.objects:
+            agent_id = f"{obj.object_id}{slot_suffix}"
+            ev_session_names[obj.object_id] = sname
+            ev_handles[obj.object_id] = client.get_agent(agent_id, session_name=sname)
+
+        # Pre-warm leaf agents (no peers) only.
+        leaf_handles = {
+            oid: h for oid, h in ev_handles.items()
+            if oid != event_target and not obj_peer_ids.get(oid)
+        }
+        init_msg = (
+            "[System]: Session initialisation ping — acknowledge with 'ready' only. "
+            "Do NOT call any tools or peers."
+        )
+        if leaf_handles:
+            tasks = [h.execute(init_msg) for h in leaf_handles.values()]
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        return ev_handles, ev_session_names
+
+    # ── One persistent connection for the whole TC run ────────────────────────
+    async with await OpenClawClient.connect(**_openclaw_connect_kwargs(gateway_url, openclaw_home)) as client:
+
+        # Single-agent: one session for the whole run (no per-event refresh needed).
         if single_agent_id:
             OpenClawAgent._global_counter += 1
             sname = f"eval-{single_agent_id}-{OpenClawAgent._global_counter}"
-            session_names[single_agent_id] = sname
-            handles[single_agent_id] = client.get_agent(single_agent_id, session_name=sname)
-        else:
-            # Multi-agent: use a unique per-run session name so each run's sessions
-            # never collide with stale in-memory sessions from previous runs.
-            # AGENTS.md was already rewritten above with matching peer sessionKey refs.
-            for obj in tc.objects:
-                agent_id = f"{obj.object_id}{slot_suffix}"
-                session_names[obj.object_id] = run_session_name
-                handles[obj.object_id] = client.get_agent(agent_id, session_name=run_session_name)
-
-            # Pre-warm peer agent sessions before the first real message fires.
-            # get_agent() makes no network call; sessions are only registered on first
-            # execute().  The entry-point agent (first step's target) doesn't need
-            # pre-warming — its session registers on S001.  Its PEERS do: if they're
-            # not registered yet when the entry agent calls sessions_send, the call
-            # blocks for up to the timeoutSeconds.
-            #
-            # Pre-warm LEAF agents only (those with no peers).
-            # Leaf agents must be registered before the cascade reaches them via
-            # agentToAgent; without pre-warming, the first sessions_send to them
-            # blocks until the session registers (up to timeoutSeconds).
-            #
-            # Intermediate agents (those with peers, e.g. sales-call-coach) are
-            # intentionally NOT pre-warmed: an init ping creates conversational
-            # context ("Let me know if you'd like to proceed") that causes
-            # confirmation-seeking behavior on subsequent real messages, leaving
-            # the session busy.  They register on first real message.
-            obj_peer_ids: dict[str, set[str]] = {
-                obj.object_id: {p.object_id for p in obj.peers}
-                for obj in tc.objects
-            }
-            entry_target = messages[0]["target"] if messages else None
-            leaf_handles = {
-                obj_id: handle
-                for obj_id, handle in handles.items()
-                if obj_id != entry_target and not obj_peer_ids.get(obj_id)
-            }
-            init_msg = "[System]: Session initialisation ping — acknowledge with 'ready' only. Do NOT call any tools or peers."
-            if leaf_handles:
-                leaf_tasks = [h.execute(init_msg) for h in leaf_handles.values()]
-                await asyncio.gather(*leaf_tasks, return_exceptions=True)
+            handles: dict[str, Any] = {single_agent_id: client.get_agent(single_agent_id, session_name=sname)}
+            session_names: dict[str, str] = {single_agent_id: sname}
 
         for msg in messages:
             if steps_only and msg["kind"] != "step":
                 break
 
             target_id = msg["target"]
+
+            # Multi-agent: fresh handles per event so each trigger starts with a
+            # clean session.  (Single-agent reuses the same handle throughout.)
+            if not single_agent_id:
+                handles, session_names = await _make_event_handles(client, target_id)
+
             lookup_id = single_agent_id if single_agent_id else target_id
             handle = handles.get(lookup_id)
             if handle is None:
@@ -1469,7 +1475,9 @@ async def _run_all_tcs_concurrent(
                         passed_n = sum(1 for e in event_results if e.passed)
                         total_n = len(event_results)
                         rate_str = f"{pass_rate:.0%}" if pass_rate is not None else "N/A"
-                        print(f"  → pass={passed_n}/{total_n} ({rate_str})  elapsed={tc_elapsed_ms/1000:.1f}s")
+                        _tc_s = tc_elapsed_ms / 1000
+                        _elapsed_str = f"{int(_tc_s) // 60:02d}:{int(_tc_s) % 60:02d}.{int((_tc_s % 1) * 1000):03d}"
+                        print(f"\n  → pass={passed_n}/{total_n} ({rate_str})  elapsed={_elapsed_str}")
             except Exception as exc:
                 async with results_lock:
                     print(f"  TC {tc.id} [slot={slot}] FAILED: {exc}", file=sys.stderr)
