@@ -998,7 +998,7 @@ def run(args: argparse.Namespace) -> Path:
             sum(1 for e in event_results if e.passed) / len(event_results)
             if event_results else None
         )
-        elapsed_s = int(time.monotonic() - tc_start)
+        elapsed_s = time.monotonic() - tc_start
         result = TestCaseResult(
             tc_id=tc.id,
             sample_id=tc.sample_id,
@@ -1015,9 +1015,9 @@ def run(args: argparse.Namespace) -> Path:
         passed_n = sum(1 for e in event_results if e.passed)
         total_n = len(event_results)
         rate_str = f"{pass_rate:.0%}" if pass_rate is not None else "N/A"
-        elapsed_str = f"{elapsed_s // 60:02d}:{elapsed_s % 60:02d}"
+        elapsed_str = f"{int(elapsed_s) // 60:02d}:{int(elapsed_s) % 60:02d}.{int((elapsed_s % 1) * 1000):03d}"
 
-        parts = [f"  → pass={passed_n}/{total_n} ({rate_str})  elapsed={elapsed_str}"]
+        parts = [f"\n  → pass={passed_n}/{total_n} ({rate_str})  elapsed={elapsed_str}"]
         detail = format_tc_event_detail(event_results)
         if detail:
             parts.append(f"     {detail}")
