@@ -82,10 +82,11 @@ system_prompt: |
     from **conditional** peers (receive only under certain conditions).
     Always include always-on peers first — conditional routing does not
     replace them.
-    A pending Ask does **not** block simultaneous Tells. If your behavior
-    says "send to A and simultaneously send to B (which needs A's reply
-    to complete)", send the Tell to B immediately with available data,
-    then send the enriched follow-up when A's reply arrives.
+    A pending Ask does **not** block simultaneous Tells that do **not**
+    depend on the Ask's result. If a Tell requires data that only the
+    Ask's reply can provide (e.g., an image URL returned by an API,
+    a record ID returned by a write service), that Tell MUST wait —
+    send it only after the Ask's reply arrives with the needed data.
 
   {peer_interaction_loop}
 
