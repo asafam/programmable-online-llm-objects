@@ -54,24 +54,15 @@ class Message:
     in_reply_to: Optional[str] = None    # ID of the message being replied to
     reference: Optional[str] = None      # LLM-assigned correlation tag (copied from OutgoingMessage)
     expects_reply: bool = False          # True = Ask (sender wants a reply); False = Tell (propagated from OutgoingMessage)
-    plan_id: Optional[str] = None        # runtime-stamped: plan this message belongs to (if any)
-    step_id: Optional[str] = None        # runtime-stamped: plan step this message fulfills (if any)
 
 
 @dataclass
 class OutgoingMessage:
-    """An outgoing message produced by the LLM.
-
-    `plan_id` / `step_id` / `in_reply_to` / `is_reply` are runtime-populated
-    via auto-correlation — the LLM never authors them.
-    """
+    """An outgoing message produced by the LLM."""
     recipient: str
     content: str
+    reference: Optional[str] = None   # LLM-assigned correlation tag for request-reply tracking
     expects_reply: bool = False        # True = Ask (sender wants a reply); False = Tell (fire-and-forget)
-    plan_id: Optional[str] = None      # runtime-stamped: plan this message dispatches a step of, OR the originating plan when this is a reply to a pending inbound Ask
-    step_id: Optional[str] = None      # runtime-stamped: plan step this message fulfills (or the originating plan's step)
-    in_reply_to: Optional[str] = None  # runtime-stamped: message id of the originating Ask (when this is a reply)
-    is_reply: bool = False             # runtime-stamped: true when this outgoing fulfills a pending inbound Ask (routed as MessageType.REPLY)
 
 
 @dataclass
@@ -132,8 +123,6 @@ class ProcessingResult:
     depth_remaining: int = 10  # propagated from the processed message
     sequence: int = 0          # assigned by Runtime for ordering concurrent results
     source_message_id: str = ""  # ID of the message that was processed
-    source_plan_id: Optional[str] = None   # plan_id on the processed message (propagated to replies)
-    source_step_id: Optional[str] = None   # step_id on the processed message (propagated to replies)
 
 
 @dataclass
@@ -142,64 +131,6 @@ class StateDelta:
     op: str    # "set" | "delete" | "append"
     key: str
     value: Any = None  # required for set/append; ignored for delete
-
-
-# Steps that legitimately need async correlation (cross-drain-cycle replies).
-# Tool calls resolve synchronously within a single ReAct loop and don't belong here.
-PLAN_STEP_KINDS = ("ask", "tell")
-
-# Terminal plan/step statuses — the runtime prunes terminated plans from the
-# snapshot rendered into the prompt but keeps them in the archive for debugging.
-PLAN_TERMINAL_STATUSES = ("complete", "cancelled", "failed")
-STEP_TERMINAL_STATUSES = ("done", "failed", "skipped")
-
-
-@dataclass
-class PlanStep:
-    """A single step in a plan — typically one peer message with its correlation."""
-    id: str                              # runtime-minted: "{plan_id}-s{n}"
-    kind: str                            # "ask" | "tell"
-    description: str                     # NL description of what this step accomplishes
-    status: str = "planned"              # "planned" | "dispatched" | "done" | "failed" | "skipped"
-    target: Optional[str] = None         # peer id
-    message_id: Optional[str] = None     # bus message id once dispatched
-    dispatched_at: Optional[datetime.datetime] = None
-    result_summary: Optional[str] = None  # short NL note once the step resolves
-
-
-@dataclass
-class Plan:
-    """A multi-step execution plan owned by an LLM-object.
-
-    Plans encapsulate in-flight coordination with peers — what the object is
-    mid-way through doing. Domain state (object.state) is kept clean of
-    transient bookkeeping.
-    """
-    id: str                              # runtime-minted: "plan-{object_id}-{n}"
-    goal: str                            # NL description of the overall goal
-    trigger_message_id: str              # id of the incoming message that spawned this plan
-    steps: list[PlanStep] = field(default_factory=list)
-    status: str = "active"               # "active" | "complete" | "cancelled" | "failed"
-    created_at: datetime.datetime = field(default_factory=_utcnow)
-    updated_at: datetime.datetime = field(default_factory=_utcnow)
-
-
-@dataclass
-class PlanUpdate:
-    """A single plan change emitted by the LLM at any ReAct step.
-
-    Analogous to StateDelta: one op per step, accumulated and applied by the
-    runtime after the ReAct loop finishes. The LLM never authors plan or step
-    ids — references to existing plans use `plan` (goal-string match against
-    active plans) and, for off-message `update_step`, `step_index`.
-    """
-    op: str                              # "create" | "add_step" | "update_step" | "complete" | "cancel"
-    plan: Optional[str] = None           # goal-string ref to an active plan (for add_step/update_step/complete/cancel)
-    step_index: Optional[int] = None     # 0-based step index for off-message update_step
-    goal: Optional[str] = None           # for "create"
-    steps: Optional[list[dict]] = None   # for "create" / "add_step": [{kind, description, target}]
-    status: Optional[str] = None         # for "update_step": "done" | "failed" | "skipped"
-    result_summary: Optional[str] = None  # for "update_step": short NL note
 
 
 @dataclass
@@ -217,7 +148,6 @@ class ReactStep:
     thought: str
     action: str  # "tool_call" | "finish"
     state_update: Optional[StateDelta] = None  # optional at any step; accumulated by runtime
-    plan_update: Optional[PlanUpdate] = None   # optional at any step; accumulated by runtime
     tool_call: Optional[ToolCall] = None
     finish: Optional[ReactFinish] = None
 

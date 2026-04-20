@@ -432,11 +432,6 @@ class Runtime:
                     depth_remaining=next_depth,
                     id=self._next_msg_id(obj_id),
                     in_reply_to=result.source_message_id,
-                    # Propagate the original message's plan correlation onto its
-                    # reply. The values come from the sender's plan (stamped at
-                    # dispatch time) — the replying LLM never authors them.
-                    plan_id=result.source_plan_id,
-                    step_id=result.source_step_id,
                 )
                 self._bus.deliver(reply_msg)
                 logger.debug("  ↩ reply routed: %s → %s", obj_id, result.in_reply_to)
@@ -444,7 +439,6 @@ class Runtime:
                 logger.warning("Chain depth limit reached; dropping reply from %s to %s", obj_id, result.in_reply_to)
 
         # Deliver outgoing peer messages
-        sender_obj = self._bus.objects.get(obj_id)
         for out in result.outgoing_messages:
             next_depth = result.depth_remaining - 1
             if next_depth <= 0:
@@ -453,41 +447,20 @@ class Runtime:
                     obj_id, out.recipient,
                 )
                 continue
-            msg_id = self._next_msg_id(obj_id)
-            # `is_reply` is set by the sender's auto-correlation when this
-            # outgoing fulfills a pending inbound Ask from the recipient.
-            # Route it as a REPLY and release the asker's awaiting state.
-            msg_type = MessageType.REPLY if out.is_reply else MessageType.DOMAIN
             chained = Message(
                 sender=obj_id,
                 recipient=out.recipient,
-                type=msg_type,
+                type=MessageType.DOMAIN,
                 content=out.content,
                 depth_remaining=next_depth,
-                id=msg_id,
-                in_reply_to=out.in_reply_to,
+                id=self._next_msg_id(obj_id),
+                reference=out.reference,
                 expects_reply=out.expects_reply,
-                plan_id=out.plan_id,
-                step_id=out.step_id,
             )
             self._bus.deliver(chained)
-            # Mark the plan step dispatched with the minted message id so that
-            # (1) a reply correlates back to this step via plan_id/step_id and
-            # (2) heartbeat timeouts can measure elapsed time since dispatch.
-            # This applies only when the outgoing dispatches one of OUR own
-            # plan steps — not when it's a reply to a pending inbound Ask
-            # (which carries the ASKER's plan/step ids, not ours).
-            if out.plan_id and out.step_id and not out.is_reply and sender_obj is not None:
-                sender_obj.mark_step_dispatched(out.plan_id, out.step_id, msg_id)
-            # If this outgoing is a reply to a pending inbound Ask, release
-            # the original asker's awaiting_reply state (same bookkeeping
-            # that should_reply path does for the reply field).
-            if out.is_reply:
-                with self._awaiting_lock:
-                    self._awaiting_reply.get(out.recipient, set()).discard(obj_id)
             logger.debug(
                 "  → outgoing (%s): %s → %s: %s",
-                "reply" if out.is_reply else ("ask" if out.expects_reply else "tell"),
+                "ask" if out.expects_reply else "tell",
                 obj_id, out.recipient, repr(str(out.content)[:80]),
             )
             if out.expects_reply:

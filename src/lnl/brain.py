@@ -22,8 +22,6 @@ from .types import (
     MessageType,
     ObjectDefinition,
     OutgoingMessage,
-    Plan,
-    PlanUpdate,
     ReactFinish,
     ReactStep,
     StateDelta,
@@ -141,80 +139,6 @@ LLM_REACT_SCHEMA: dict[str, Any] = {
             "required": ["op", "key"],
             "additionalProperties": False,
         },
-        "plan_update": {
-            "type": "object",
-            "description": (
-                "Optional. Emit to create a plan, add/update steps, or mark a plan complete/cancelled. "
-                "One op per step. You never author plan or step ids — the runtime owns all correlation. "
-                "Reference existing plans by the `plan` field (goal-string match against Current Plans)."
-            ),
-            "properties": {
-                "op": {
-                    "type": "string",
-                    "enum": ["create", "add_step", "update_step", "complete", "cancel"],
-                    "description": (
-                        "create: start a new plan. "
-                        "add_step: append new steps to an existing plan. "
-                        "update_step: change a step's status / attach a result_summary. "
-                        "complete / cancel: terminate the plan."
-                    ),
-                },
-                "plan": {
-                    "type": "string",
-                    "description": (
-                        "For 'add_step' / 'complete' / 'cancel' / off-message 'update_step': "
-                        "goal of the plan to target, matched against Current Plans "
-                        "(exact goal match preferred; unambiguous substring match as fallback). "
-                        "OMIT for 'update_step' triggered by an incoming reply — the runtime "
-                        "infers the plan from the reply's context."
-                    ),
-                },
-                "step_index": {
-                    "type": "integer",
-                    "description": (
-                        "For off-message 'update_step' only: 0-based index of the step within "
-                        "the plan. Omit for reply-triggered update_step (runtime infers)."
-                    ),
-                    "minimum": 0,
-                },
-                "goal": {
-                    "type": "string",
-                    "description": "For 'create': a short NL description of the plan's goal.",
-                },
-                "steps": {
-                    "type": "array",
-                    "description": (
-                        "For 'create' / 'add_step': the steps to add. Only peer messages belong here — "
-                        "tool calls stay inside the ReAct loop and must NOT be plan steps."
-                    ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "kind": {
-                                "type": "string",
-                                "enum": ["ask", "tell"],
-                                "description": "ask = expects a reply; tell = fire-and-forget.",
-                            },
-                            "description": {"type": "string", "description": "NL description of this step."},
-                            "target": {"type": "string", "description": "Peer id this step targets."},
-                        },
-                        "required": ["kind", "description"],
-                        "additionalProperties": False,
-                    },
-                },
-                "status": {
-                    "type": "string",
-                    "enum": ["done", "failed", "skipped"],
-                    "description": "For 'update_step': new step status (terminal values only; the runtime sets 'planned' and 'dispatched' automatically).",
-                },
-                "result_summary": {
-                    "type": "string",
-                    "description": "For 'update_step': short NL note about the outcome.",
-                },
-            },
-            "required": ["op"],
-            "additionalProperties": False,
-        },
         "finish": {
             "type": "object",
             "description": "Present only when action=finish.",
@@ -230,6 +154,10 @@ LLM_REACT_SCHEMA: dict[str, Any] = {
                             "expects_reply": {
                                 "type": "boolean",
                                 "description": "Set true for Ask messages — when you need information back before you can continue. Leave false (default) for Tell messages: notifications, writes, and one-way forwards.",
+                            },
+                            "reference": {
+                                "type": "string",
+                                "description": "Optional short tag for correlating a reply to this Ask message. Include when expects_reply is true so you can match the reply via [in-reply-to: <reference>].",
                             },
                         },
                         "required": ["recipient", "content"],
@@ -291,8 +219,6 @@ def _message_label(msg: Message) -> str:
         return f"Event from {msg.sender}"
     if msg.type == MessageType.ADMIN:
         return "Admin"
-    if msg.type == MessageType.REPLY:
-        return f"Reply from peer: {msg.sender}"
     if msg.sender == "__user__":
         return "User instruction"
     if msg.expects_reply:
@@ -307,80 +233,60 @@ def _peer_interaction_loop(pending_timeout_seconds: float, heartbeat_interval_se
   Every outgoing message is either an **Ask** or a **Tell**. Set `expects_reply`
   accordingly on each entry in `outgoing_messages`.
 
-  - **Tell (`expects_reply: false`, the DEFAULT)** — informing, writing, or
-    forwarding. No reply expected. Send and immediately finish.
-  - **Ask (`expects_reply: true`)** — you need information back before you can
-    continue. The reply arrives on a later turn as a separate message.
+  **Tell (NOTIFY / WRITE / FORWARD) — `expects_reply: false` (the DEFAULT):**
+  You are informing, storing, or passing an event along — no reply expected.
+  The recipient is told this is a Tell so it knows not to reply. Send the message
+  and immediately proceed to your next action or finish. Do NOT set a PENDING flag.
+  Examples:
+  - Forwarding an event to the next object in the chain
+  - Writing a record to a store
+  - Posting a Slack notification
+  - Triggering a downstream action
 
-  Examples of Tell: forwarding an event, writing a record, posting a
-  notification, triggering a downstream action.
-  Examples of Ask: looking up a manager's email, checking policy rules,
-  querying a directory before assigning work.
+  **Ask (QUERY) — `expects_reply: true`:**
+  You need information back from the peer before you can continue. The recipient
+  is told this is an Ask so it knows to reply. Send your question with
+  `expects_reply: true`, set a `_pending` block in state, and STOP. When their
+  REPLY arrives, read your state to recall your intent, complete the goal, then
+  clear `_pending`.
+  Use this ONLY when you cannot proceed without the peer's answer. Examples:
+  - Looking up a manager's name/email before addressing a notification
+  - Checking policy rules before routing a ticket
+  - Querying an org directory before assigning work
 
-  **Rule:** If you already have all the data you need, send Tells to the
-  relevant peers and finish in one step — no plan needed.
+  **Saving a continuation when going PENDING:** Your `_pending` block must contain
+  everything needed to resume without re-reading the original trigger.
+  Every message is prefixed with "[system time: <timestamp>] [msg-id: <id>]" — use
+  the timestamp as `started_at` so you know when you went pending.
+  When an Ask reply arrives, it carries "[in-reply-to: <id>]" where <id> matches
+  the `reference` you set on the outgoing message — use it to match multiple
+  concurrent pending requests:
+    _pending: {{
+      waiting_for: "<peer-id>",
+      reference: "<short tag you set on the outgoing message>",
+      question: "<exact question sent>",
+      intent: "<what you will do once you have the answer>",
+      started_at: "<timestamp from the [system time: ...] prefix of the current message>",
+      context: {{ <all data from the original message needed to complete the action> }}
+    }}
 
-  ## Plans — tracking in-flight multi-step work
+  **Rule:** If you already have all the data you need to complete your action, send
+  Tell messages to all relevant peers and finish in one step. Never set PENDING
+  after a Tell send.
 
-  **Create a plan if any of:** (a) you will send ≥1 Ask, (b) you will send
-  a sequence of ≥2 peer messages that must ordered-complete, or (c) the
-  sender's request cannot be fully answered within this turn. Otherwise
-  finish directly — no plan needed.
-
-  Plans are semantic: you describe *what* you intend to do; the runtime
-  handles all correlation bookkeeping (which message matches which step,
-  which reply belongs to which ask, which plan a reply came back for).
-  **You never author plan ids or step ids — they do not appear in your JSON
-  output anywhere.**
-
-  **Create a plan** with `plan_update` `op="create"`:
-  - `goal`: short NL description of what you are trying to accomplish
-    (this is also how you refer back to the plan later).
-  - `steps`: list of `{{kind, description, target}}` entries — one per peer
-    message you already know you will send. Only peer Asks/Tells belong here;
-    tool calls stay inside the ReAct loop and are NOT plan steps.
-
-  **Dispatch a step** by emitting a matching entry in `outgoing_messages`
-  with `{{recipient, content, expects_reply}}` — NO correlation fields
-  required. The runtime automatically matches each outgoing message to the
-  first `planned` step whose `target` equals your `recipient` and whose
-  `kind` matches your `expects_reply`, stamps the correlation, and marks
-  the step dispatched. Tell steps flip to `done` immediately on dispatch;
-  Ask steps wait for the reply.
-
-  **Reply arrival** is handled by the runtime: when a correlated reply
-  comes in, the runtime marks the matching step `done` BEFORE you run, so
-  you see the updated plan state in `Current Plans` alongside the reply
-  content. You do not need to emit any update_step just to record that a
-  reply arrived normally.
-
-  **Override auto-outcomes** with `plan_update op="update_step"`:
-  - If a reply is actually a failure (peer said "no" or returned useless
-    data), emit `{{"op": "update_step", "status": "failed",
-    "result_summary": "<why>"}}` on the SAME turn you process the reply —
-    the runtime infers which step from the reply's context, no refs needed.
-  - For off-message updates (marking a step `skipped` without a triggering
-    reply), use `{{"op": "update_step", "plan": "<goal string>",
-    "step_index": <0-based>, "status": "skipped", "result_summary": "..."}}`.
-
-  **Extend a plan** with `plan_update op="add_step"`:
-  `{{"op": "add_step", "plan": "<goal string>", "steps": [{{kind, description, target}}]}}`.
-
-  **Close a plan** with `plan_update op="complete"` once the goal is met,
-  or `op="cancel"` when you abandon it. Reference the plan by its goal
-  string: `{{"op": "complete", "plan": "<goal string>"}}`. Terminated plans
-  are removed from `Current Plans` automatically.
-
-  **Heartbeat review:** A Heartbeat arrives every {heartbeat_interval_seconds:.0f}s.
-  It is prefixed with `[system time: <timestamp>]`. On each Heartbeat, scan
-  `Current Plans`:
-  - For every `dispatched` step, compute elapsed = now - `dispatched_at`.
-  - If elapsed < {pending_timeout_seconds:.0f}s, leave it — the peer may still reply.
-  - If elapsed >= {pending_timeout_seconds:.0f}s, the peer is unresponsive. Either
-    re-dispatch (emit a fresh outgoing message to the same `target`; the
-    runtime will match it to the existing step) or mark the step `failed`
-    via `update_step` (with `plan` + `step_index`) and take a fallback
-    (proceed with a default, escalate, or `cancel` the plan)."""
+  **Heartbeat recovery:** A Heartbeat arrives every {heartbeat_interval_seconds:.0f}s.
+  Like all messages, it is prefixed with "[system time: <timestamp>]" — this is the
+  authoritative current time. On each Heartbeat, check your state for a `_pending`
+  block. If present:
+  - Read the current time from the "[system time: ...]" prefix of the Heartbeat.
+  - Compute elapsed seconds = current_time - `_pending.started_at`.
+  - If elapsed < {pending_timeout_seconds:.0f}s: re-send the original question to
+    `_pending.waiting_for` (with `expects_reply: true`) and remain PENDING (do not
+    update `started_at`).
+  - If elapsed >= {pending_timeout_seconds:.0f}s: the peer is unresponsive. Use
+    `_pending.intent` and `_pending.context` to take the best available fallback
+    action (proceed with a default, escalate, or log a failure), then clear
+    `_pending` from state."""
 
 
 def build_system_prompt(
@@ -390,7 +296,6 @@ def build_system_prompt(
     react_cross_objects: bool = True,
     pending_timeout_seconds: float = 90.0,
     heartbeat_interval_seconds: float = 30.0,
-    current_plans: Optional[list] = None,  # list[Plan] or None
 ) -> str:
     """Build the system prompt from the YAML template and an ObjectDefinition."""
     config = _load_prompt_config()
@@ -416,7 +321,6 @@ def build_system_prompt(
         "peers": peers or "(none)",
         "event_sources": event_sources or "(none)",
         "current_state": (json.dumps(current_state, indent=2) if isinstance(current_state, dict) else current_state.strip()) if current_state else "(empty)",
-        "current_plans": _render_plans(current_plans),
         "tools": tools or "(none)",
         "peer_interaction_loop": _peer_interaction_loop(pending_timeout_seconds, heartbeat_interval_seconds) if react_cross_objects else "",
     }
@@ -424,51 +328,6 @@ def build_system_prompt(
     for key, value in substitutions.items():
         result = result.replace("{" + key + "}", value)
     return result
-
-
-def _render_plans(plans: Optional[list]) -> str:
-    """Render active plans as a compact snapshot for the prompt.
-
-    Plan and step ids are runtime-internal and NOT included — the LLM
-    references plans by `goal` and steps by `step_index`. Each step shows
-    its 0-based index, kind, target, description, status, and dispatched_at
-    timestamp (for heartbeat timeout reasoning).
-    """
-    if not plans:
-        return "(none)"
-    import dataclasses
-    items = []
-    for p in plans:
-        if dataclasses.is_dataclass(p):
-            d = dataclasses.asdict(p)
-        elif isinstance(p, dict):
-            d = dict(p)
-        else:
-            continue
-        rendered = {
-            "goal": d.get("goal", ""),
-            "status": d.get("status", "active"),
-            "steps": [],
-        }
-        for i, step in enumerate(d.get("steps") or []):
-            rs = {
-                "step_index": i,
-                "kind": step.get("kind"),
-                "target": step.get("target"),
-                "description": step.get("description", ""),
-                "status": step.get("status", "planned"),
-            }
-            dispatched_at = step.get("dispatched_at")
-            if hasattr(dispatched_at, "isoformat"):
-                rs["dispatched_at"] = dispatched_at.isoformat()
-            elif dispatched_at:
-                rs["dispatched_at"] = dispatched_at
-            result = step.get("result_summary")
-            if result:
-                rs["result_summary"] = result
-            rendered["steps"].append(rs)
-        items.append(rendered)
-    return json.dumps(items, indent=2, default=str)
 
 
 def _build_chat_messages(
@@ -487,11 +346,9 @@ def _build_chat_messages(
         msgs.append({"role": "user", "content": "[Past messages — already reflected in your state]\n" + "\n".join(history_lines)})
         msgs.append({"role": "assistant", "content": "Understood. What is the new message?"})
     ts = message.timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
-    # Plan correlation is runtime-internal: when a reply arrives, the runtime
-    # has already marked the matching planned step 'done' before the LLM runs,
-    # so the LLM sees the updated plan state in {current_plans} — no raw ids
-    # need to leak into the message prefix.
-    msgs.append({"role": "user", "content": f"[system time: {ts}] [{_message_label(message)}]: {message.content}"})
+    id_tag = f" [msg-id: {message.id}]" if message.id else ""
+    reply_tag = f" [in-reply-to: {message.in_reply_to}]" if message.in_reply_to else ""
+    msgs.append({"role": "user", "content": f"[system time: {ts}]{id_tag}{reply_tag} [{_message_label(message)}]: {message.content}"})
     return msgs
 
 
@@ -1125,41 +982,13 @@ def _parse_state_delta(raw: dict) -> Optional[StateDelta]:
     return StateDelta(op=op, key=key, value=raw.get("value"))
 
 
-def _parse_plan_update(raw: dict) -> Optional[PlanUpdate]:
-    """Parse an optional plan_update dict into a PlanUpdate, or None if absent/invalid."""
-    if not isinstance(raw, dict):
-        return None
-    op = raw.get("op")
-    if not op:
-        return None
-    steps = raw.get("steps")
-    if steps is not None and not isinstance(steps, list):
-        steps = None
-    step_index = raw.get("step_index")
-    if step_index is not None:
-        try:
-            step_index = int(step_index)
-        except (TypeError, ValueError):
-            step_index = None
-    return PlanUpdate(
-        op=op,
-        plan=raw.get("plan"),
-        step_index=step_index,
-        goal=raw.get("goal"),
-        steps=steps,
-        status=raw.get("status"),
-        result_summary=raw.get("result_summary"),
-    )
-
-
 def _parse_react_step(raw: dict) -> ReactStep:
     """Parse a raw LLM dict into a ReactStep."""
     thought = raw.get("thought", "")
     action = raw.get("action", "finish")
 
-    # state_update / plan_update are optional at any step
+    # state_update is optional at any step
     state_update = _parse_state_delta(raw.get("state_update") or {})
-    plan_update = _parse_plan_update(raw.get("plan_update") or {})
 
     if action == "tool_call":
         tc_data = raw.get("tool_call") or {}
@@ -1168,13 +997,7 @@ def _parse_react_step(raw: dict) -> ReactStep:
             tool=tc_data.get("tool", ""),
             arguments=tc_data.get("arguments", {}),
         )
-        return ReactStep(
-            thought=thought,
-            action="tool_call",
-            state_update=state_update,
-            plan_update=plan_update,
-            tool_call=tc,
-        )
+        return ReactStep(thought=thought, action="tool_call", state_update=state_update, tool_call=tc)
 
     # action == "finish"
     f_data = raw.get("finish") or {}
@@ -1185,6 +1008,7 @@ def _parse_react_step(raw: dict) -> ReactStep:
         OutgoingMessage(
             recipient=m["recipient"],
             content=m["content"],
+            reference=m.get("reference"),
             expects_reply=bool(m.get("expects_reply", False)),
         )
         for m in raw_msgs
@@ -1199,13 +1023,7 @@ def _parse_react_step(raw: dict) -> ReactStep:
         outgoing_messages=outgoing,
         updated_definition=updated_def,
     )
-    return ReactStep(
-        thought=thought,
-        action="finish",
-        state_update=state_update,
-        plan_update=plan_update,
-        finish=finish,
-    )
+    return ReactStep(thought=thought, action="finish", state_update=state_update, finish=finish)
 
 
 def _parse_llm_result(result: Any) -> LLMResponse:
@@ -1223,10 +1041,7 @@ def _parse_llm_result(result: Any) -> LLMResponse:
     outgoing = []
     for m in data.get("outgoing_messages", []):
         if isinstance(m, dict):
-            outgoing.append(OutgoingMessage(
-                recipient=m["recipient"],
-                content=m["content"],
-            ))
+            outgoing.append(OutgoingMessage(recipient=m["recipient"], content=m["content"], reference=m.get("reference")))
         elif isinstance(m, OutgoingMessage):
             outgoing.append(m)
 
