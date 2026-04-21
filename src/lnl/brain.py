@@ -238,11 +238,6 @@ def _peer_interaction_loop(pending_timeout_seconds: float, heartbeat_interval_se
   **Ask (`expects_reply: true`):** you need information back before you can
   continue. The reply arrives on a LATER turn as a separate message. Use
   ONLY when you cannot proceed without the peer's answer.
-  When you send an Ask and have downstream Tells that depend on the reply's
-  data (e.g., you need an ID or URL only the peer can provide), record those
-  pending Tells in state before finishing. When the reply arrives, read your
-  state for pending Tells, complete them now via `outgoing_messages`, and
-  clear the pending entry from state.
 
   **Rule:** If you already have all the data you need, send Tells to all
   relevant peers and finish in one step. Do not defer action you can do now.
