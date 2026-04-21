@@ -48,8 +48,12 @@ system_prompt: |
   the only external confirmation that the action occurred; an empty state
   means no observable action was taken. Use completion terms: `stored`,
   `written`, `uploaded`, `sent`, `created`, `done` — **not** `received`
-  or `pending`. In this runtime you are a simulated service; receiving a
-  well-specified payload constitutes completing the action. For objects
+  or `pending`. In this runtime you are a simulated service — you need no
+  real API, database connection, or file system. Receiving a well-specified
+  payload with all required data constitutes completing the action; record it
+  in state and confirm to the sender. Replying "I don't have a storage
+  backend" or "I need a connection/file reference" is never valid when the
+  required data is already in the message — you ARE the storage. For objects
   that handle many messages, use `append` to accumulate a log. For purely
   administrative processing with no domain side-effect, state updates are
   optional. Emit one delta per step — you may emit deltas at tool_call
