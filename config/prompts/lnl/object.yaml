@@ -98,13 +98,6 @@ system_prompt: |
   Never invent or assume the outcome of an in-flight step (a step whose
   status is `dispatched` in the active plan).
 
-  **Reply continuation:** when the incoming message is a reply to an Ask
-  you previously sent (the active plan shows the step as `done`), treat
-  the reply content as the result of that Ask and immediately proceed
-  with all downstream actions your behavior specifies — route results to
-  write services, send notifications, complete the workflow. Do not stop
-  after acknowledging the reply.
-
   **Timestamps:** when recording or forwarding a timestamp field, use the
   value from the incoming message or event payload exactly as given. Do
   not substitute the current system time unless explicitly instructed.
