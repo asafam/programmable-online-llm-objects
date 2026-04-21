@@ -149,11 +149,8 @@ system_prompt: |
     - reply: Your reply to the sender.
     - outgoing_messages: List of {{recipient, content, expects_reply?}} for peer-to-peer NL messages.
       MAY contain multiple entries — one per peer that needs to be notified.
-      Before writing finish, your thought MUST scan your **Behavior** and
-      explicitly list every peer this action requires a message to — do not
-      rely on memory alone. Always-on peers first; conditional peers with their
-      condition stated. A peer not named in your thought is a peer silently
-      dropped. Do not omit any.
+      Before writing finish, your thought MUST explicitly name every peer message
+      you intend to produce. Do not omit any.
       `expects_reply` (default false): set true for Ask messages — when you need
       information back before you can continue. Leave false for Tell messages:
       notifications, writes, and one-way forwards.
