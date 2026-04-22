@@ -1190,7 +1190,7 @@ def _pbar_postfix(pbar, results) -> None:
     if sample_pr is not None:
         fields["sample"] = f"{sample_pr:.1%}"
     if fields:
-        pbar.set_postfix(**fields)
+        pbar.set_postfix(refresh=False, **fields)
 
 
 def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
