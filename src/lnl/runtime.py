@@ -17,7 +17,7 @@ from .bus import BusMetrics, MessageBus
 from .events import EventSourceRegistry
 from .object import LLMObject
 from .parser import parse_object_file, parse_object_text, serialize_object
-from .tools import SpawnExecutor, ToolRegistry
+from .tools import CreateObjectExecutor, ToolRegistry
 from .types import (
     Message,
     MessageLog,
@@ -176,9 +176,9 @@ class Runtime:
         # Wire bus schedule callback — objects schedule themselves when mail arrives
         self._bus.set_schedule_callback(self._schedule_object)
 
-        # Register built-in spawn_object tool when a tool registry is present
+        # Register create_object as a core tool available to all objects
         if self._tool_registry is not None:
-            self._tool_registry.register("spawn_object", SpawnExecutor(self), SpawnExecutor.SPEC)
+            self._tool_registry.register("create_object", CreateObjectExecutor(self), CreateObjectExecutor.SPEC)
 
     def _next_msg_id(self, sender: str) -> str:
         """Return a deterministic message ID: '<sender>-<n>' with a monotonic counter."""

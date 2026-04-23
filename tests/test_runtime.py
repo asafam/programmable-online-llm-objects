@@ -526,7 +526,7 @@ class TestLiveMode:
 
 
 class TestSpawn:
-    """Tests for llm-class registration and spawn_object tool."""
+    """Tests for llm-class registration and create_object tool."""
 
     def _make_rt(self):
         brain = MockBrain()
@@ -558,8 +558,8 @@ class TestSpawn:
         with pytest.raises(KeyError, match="not registered"):
             rt.spawn("truck-001", "truck", {})
 
-    def test_spawn_object_tool_creates_object(self):
-        """fleet-manager receives a registration message and calls spawn_object tool."""
+    def test_create_object_tool_creates_object(self):
+        """fleet-manager receives a registration message and calls create_object tool."""
         rt, brain = self._make_rt()
 
         rt.register_class("truck", ObjectDefinition(
@@ -571,13 +571,13 @@ class TestSpawn:
         rt.create_object(ObjectDefinition(object_id="fleet-manager", role="Spawns trucks."))
         rt.create_object(ObjectDefinition(object_id="dispatcher", role="Coordinates fleet."))
 
-        # fleet-manager: call spawn_object tool, then seed truck-001
+        # fleet-manager: call create_object tool, then seed truck-001
         brain.script("fleet-manager", LLMResponse(
             updated_state={},
             reply="",
             tool_calls=[ToolCall(
                 id="t1",
-                tool="spawn_object",
+                tool="create_object",
                 arguments={"object_id": "truck-001", "class_id": "truck", "params": {"driver_name": "Carlos Rivera"}},
             )],
         ))

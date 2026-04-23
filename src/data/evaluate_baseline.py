@@ -265,6 +265,22 @@ def _build_version() -> str:
 
 _VERSION: str = _build_version()
 
+# ── Infrastructure failure detection ─────────────────────────────────────────
+
+_INFRA_ERROR_PATTERNS: list[str] = [
+    "pairing required",
+    "network connection error",
+    ": terminated",
+]
+
+def _classify_error_type(reasoning_texts: list[str]) -> Optional[str]:
+    """Return 'infra' when reasoning texts match known infra failure patterns."""
+    combined = " ".join(t for t in reasoning_texts if t).lower()
+    if any(p in combined for p in _INFRA_ERROR_PATTERNS):
+        return "infra"
+    return None
+
+
 # ── OpenClaw agent configuration ─────────────────────────────────────────────
 
 def _load_openclaw_token(openclaw_home: Optional[Path] = None) -> Optional[str]:
@@ -1437,7 +1453,18 @@ def execute_test_case(
 
 def default_output_path(input_path: Path) -> Path:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return input_path.parent / "runs" / f"{input_path.stem}_baseline_{ts}.jsonl"
+    repo_root = Path(__file__).parent.parent.parent
+    outputs_root = repo_root / "outputs"
+    try:
+        rel = input_path.resolve().relative_to(outputs_root.resolve())
+        base = outputs_root / rel.parent
+    except ValueError:
+        try:
+            rel = input_path.resolve().relative_to(repo_root.resolve())
+            base = outputs_root / rel.parent
+        except ValueError:
+            base = input_path.parent
+    return base / "runs" / f"{input_path.stem}_baseline_{ts}.jsonl"
 
 
 # ── Summary ──────────────────────────────────────────────────────────────────
@@ -1658,6 +1685,7 @@ async def _run_all_tcs_concurrent(
     workers: Optional[list["WorkerConfig"]] = None,
     pbar=None,
     completed: "frozenset[tuple[int, int]]" = frozenset(),
+    prior_results: Optional[list] = None,
 ) -> list:
     """Run all TCs concurrently up to args.concurrency at a time.
 
@@ -1677,7 +1705,9 @@ async def _run_all_tcs_concurrent(
         slot_queue.put_nowait(s)
 
     results_lock = asyncio.Lock()
-    all_tc_results: list = []
+    prior: list = list(prior_results) if prior_results else []
+    new_tc_results: list = []  # only results added during this run (returned to caller)
+    all_tc_results: list = prior  # full set (prior + new) used for pbar metrics
     # Per-slot dedup: track which sample_ids have been exported for each slot
     seen_exports_per_slot: dict[int, set[str]] = {s: set() for s in range(concurrency)}
 
@@ -1825,6 +1855,7 @@ async def _run_all_tcs_concurrent(
                                 )
                                 async with results_lock:
                                     all_tc_results.append(tc_result)
+                                    new_tc_results.append(tc_result)
                                     output_file.write(tc_result.model_dump_json() + "\n")
                                     output_file.flush()
                                     tqdm.write(f"\n  → TIMEOUT ({_timeout_label})  pass=0/{len(timeout_results)}")
@@ -1848,9 +1879,11 @@ async def _run_all_tcs_concurrent(
                                 modifications=mod_results,
                                 pass_rate=pass_rate,
                                 elapsed_ms=tc_elapsed_ms,
+                                error_type=_classify_error_type([e.reasoning or "" for e in event_results]),
                             )
                             async with results_lock:
                                 all_tc_results.append(tc_result)
+                                new_tc_results.append(tc_result)
                                 output_file.write(tc_result.model_dump_json() + "\n")
                                 output_file.flush()
                                 passed_n = sum(1 for e in event_results if e.passed)
@@ -1904,9 +1937,11 @@ async def _run_all_tcs_concurrent(
                     events=err_results, modifications=err_mod_results,
                     pass_rate=0.0 if err_results else None,
                     elapsed_ms=_err_elapsed_ms,
+                    error_type=_classify_error_type([_err_label]),
                 )
                 async with results_lock:
                     all_tc_results.append(tc_result)
+                    new_tc_results.append(tc_result)
                     output_file.write(tc_result.model_dump_json() + "\n")
                     output_file.flush()
                     tqdm.write(f"  TC {tc.id} [slot={slot}] FAILED: {_err_label}", file=sys.stderr)
@@ -1923,7 +1958,7 @@ async def _run_all_tcs_concurrent(
     for exc in results:
         if isinstance(exc, BaseException):
             tqdm.write(f"  [gather] unhandled task exception: {exc!r}", file=sys.stderr)
-    return all_tc_results
+    return new_tc_results
 
 
 # ── Main runner ──────────────────────────────────────────────────────────────
@@ -2131,13 +2166,21 @@ def run(args: argparse.Namespace) -> Path:
     effective_provider = agent_provider or "openai"
 
     # Continuation: if output file already exists, load completed runs and skip them.
+    # Infrastructure failures (pairing required, network error, terminated) are NOT
+    # added to completed — they will be automatically re-run on resume.
     completed: set[tuple[int, int]] = set()  # (tc_index, run_index)
+    infra_rerun_count = 0
     if args.output.exists():
         for r in _load_tc_results(args.output):
+            if r.error_type == "infra":
+                infra_rerun_count += 1
+                continue  # exclude from completed → will be re-run
             completed.add((r.tc_index, r.run_index))
             all_tc_results.append(r)
         if completed:
             print(f"Resuming: {len(completed)} run(s) already done, skipping.")
+        if infra_rerun_count:
+            print(f"Re-running {infra_rerun_count} infra-failed TC(s) (pairing/network/terminated).")
 
     # Serialize all runtime params (including defaults) for the metadata header
     def _serialize_arg(v: object) -> object:
@@ -2193,6 +2236,7 @@ def run(args: argparse.Namespace) -> Path:
                 test_cases, args, openclaw_home, harness, None,
                 single_agent_id, f, timeout_s, workers=workers, pbar=pbar,
                 completed=frozenset(completed),
+                prior_results=all_tc_results,
             ))
             all_tc_results.extend(new_results)
           elif concurrency > 1 and not single_agent_id:
@@ -2227,6 +2271,7 @@ def run(args: argparse.Namespace) -> Path:
                 test_cases, args, openclaw_home, harness, mock_server,
                 single_agent_id, f, timeout_s, pbar=pbar,
                 completed=frozenset(completed),
+                prior_results=all_tc_results,
             ))
             all_tc_results.extend(new_results)
           # ── Sequential mode ─ runs when concurrency == 1 or single-agent ────────
@@ -2308,6 +2353,7 @@ def run(args: argparse.Namespace) -> Path:
                         events=event_results,
                         modifications=mod_results,
                         pass_rate=pass_rate,
+                        error_type=_classify_error_type([e.reasoning or "" for e in event_results]),
                     )
                     f.write(tc_result.model_dump_json() + "\n")
                     f.flush()
@@ -2344,6 +2390,7 @@ def run(args: argparse.Namespace) -> Path:
                                 name=tc.name, domain=tc.domain, run_index=run_idx,
                                 events=event_results, modifications=mod_results,
                                 pass_rate=pass_rate,
+                                error_type=_classify_error_type([e.reasoning or "" for e in event_results]),
                             )
                             f.write(tc_result.model_dump_json() + "\n")
                             f.flush()

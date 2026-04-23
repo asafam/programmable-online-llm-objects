@@ -350,22 +350,18 @@ def _execute_test_case_inner(
     # Triggered events are dispatched directly by the harness (no mock tool needed).
     final_mock_tools = merge_mock_tools(global_mock_tools or [], tc.mock_tools)
 
-    # Only enable the tool machinery (and LLM_RESPONSE_SCHEMA_WITH_TOOLS) when there
-    # are actual mock tools to wire up. Without mock tools, pass tool_registry=None so
-    # objects use LLM_RESPONSE_SCHEMA (no tool_calls field) and the LLM won't try to
-    # call peer objects as tools via the PassthroughExecutor fallback.
+    # Always create a ToolRegistry so create_object is registered as a core tool
+    # on every Runtime (Runtime.__init__ registers CreateObjectExecutor when registry present).
+    # Mock tools for domain skills are layered on top.
     mock_executors: list = []
     passthrough = PassthroughExecutor()
-    tool_registry: "ToolRegistry | None" = None
-
-    if final_mock_tools:
-        tool_registry = ToolRegistry()
-        tool_registry.register("execute_code", CodeExecutor())
-        tool_registry.register_fallback(passthrough)
-        for mock_tool in final_mock_tools:
-            executor = MockInProcessExecutor(mock_tool)
-            tool_registry.register(mock_tool.tool_name, executor, spec=executor.spec)
-            mock_executors.append(executor)
+    tool_registry: "ToolRegistry" = ToolRegistry()
+    tool_registry.register("execute_code", CodeExecutor())
+    tool_registry.register_fallback(passthrough)
+    for mock_tool in final_mock_tools:
+        executor = MockInProcessExecutor(mock_tool)
+        tool_registry.register(mock_tool.tool_name, executor, spec=executor.spec)
+        mock_executors.append(executor)
 
     # 2. Create Runtime and EventGateway — synchronous mode (no rt.start()).
     # The evaluator dispatches one event at a time and waits; the background
@@ -692,7 +688,19 @@ def execute_test_case(
 
 def default_output_path(input_path: Path) -> Path:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return input_path.parent / "runs" / f"{input_path.stem}_eval_{ts}.jsonl"
+    repo_root = Path(__file__).parent.parent.parent
+    outputs_root = repo_root / "outputs"
+    # If input is already under outputs/, keep it there; otherwise mirror under outputs/
+    try:
+        rel = input_path.resolve().relative_to(outputs_root.resolve())
+        base = outputs_root / rel.parent
+    except ValueError:
+        try:
+            rel = input_path.resolve().relative_to(repo_root.resolve())
+            base = outputs_root / rel.parent
+        except ValueError:
+            base = input_path.parent
+    return base / "runs" / f"{input_path.stem}_eval_{ts}.jsonl"
 
 
 

@@ -423,7 +423,7 @@ class OrchestratorScript(BaseModel):
 
 
 def to_lnl_class_definition(cls_def: LLMClassDef) -> ObjectDefinition:
-    """Convert Pydantic LLMClassDef to dataclass ObjectDefinition with type='class'."""
+    """Convert Pydantic LLMClassDef to dataclass ObjectDefinition."""
     return ObjectDefinition(
         object_id=cls_def.class_id,
         role=cls_def.role,
@@ -436,7 +436,6 @@ def to_lnl_class_definition(cls_def: LLMClassDef) -> ObjectDefinition:
         subscriptions=list(cls_def.subscriptions),
         event_sources=list(cls_def.event_sources),
         initial_state=cls_def.state_description,
-        type="class",
     )
 
 

@@ -183,15 +183,15 @@ class PassthroughExecutor:
         return ToolResult(id=call.id, output=output)
 
 
-class SpawnExecutor:
-    """Executor for the built-in spawn_object tool.
+class CreateObjectExecutor:
+    """Executor for the built-in create_object tool.
 
     Holds a reference to the runtime so it can call runtime.spawn() directly,
     without going through the tool context.
     """
 
     SPEC = ToolSpec(
-        description="Create a new LLM-object instance from a registered llm-class",
+        description="Instantiate a new object from a registered llm-class",
         arguments_schema={
             "type": "object",
             "properties": {
@@ -214,6 +214,16 @@ class SpawnExecutor:
         params = args.get("params") or {}
         try:
             self._runtime.spawn(object_id, class_id, params)
+            # Fire an init event so the object executes its "upon creation" behavior,
+            # analogous to a constructor running when `new` is called.
+            inject = context.get("inject_event")
+            if inject:
+                params_desc = ", ".join(f"{k}={v}" for k, v in params.items()) if params else ""
+                init_msg = f"[system] You have been created from class '{class_id}'."
+                if params_desc:
+                    init_msg += f" Params: {params_desc}."
+                init_msg += " Begin your initialization behavior now."
+                inject(object_id, init_msg, "__system__")
             return ToolResult(id=call.id, output=f"Created {object_id} from class {class_id}")
         except Exception as exc:
             return ToolResult(id=call.id, output="", error=str(exc))
@@ -244,7 +254,7 @@ class ToolRegistry:
         return executor.execute(call, context)
 
     def describe(self) -> str:
-        """Return a text description of all tools for injection into the system prompt."""
+        """Return a text description of tools for injection into the system prompt."""
         lines = []
         for name, spec in self._specs.items():
             lines.append(f"- {name}: {spec.description}")
