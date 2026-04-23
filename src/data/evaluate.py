@@ -71,6 +71,7 @@ from src.data.schema import (
     RunConfig,
     TestCase,
     TestCaseResult,
+    to_lnl_class_definition,
     to_lnl_definition,
 )
 from src.data.utils import (
@@ -179,7 +180,17 @@ def _take_snapshot(
 
 
 def _restore_snapshot(rt, mock_executors: list, snapshot: StepsSnapshot) -> None:
-    """Restore runtime state from a snapshot (overwrites freshly-created objects)."""
+    """Restore runtime state from a snapshot (overwrites freshly-created objects).
+
+    Also re-creates any objects that were dynamically spawned during the steps
+    phase but do not exist in the freshly-initialized runtime.
+    """
+    # Re-create spawned objects missing from the current runtime
+    for obj_id, defn in snapshot.object_definitions.items():
+        if obj_id not in rt._bus._objects:
+            rt.create_object(copy.deepcopy(defn))
+
+    # Restore state, history, and definition for all snapshotted objects
     for obj_id, obj in rt._bus._objects.items():
         if obj_id not in snapshot.object_states:
             continue
@@ -371,6 +382,8 @@ def _execute_test_case_inner(
         rt.set_message_listener(progress_callback)
     gw = EventGateway(rt)
 
+    for cls_def in tc.llm_classes:
+        rt.register_class(cls_def.class_id, to_lnl_class_definition(cls_def))
     for obj_def in tc.objects:
         rt.create_object(to_lnl_definition(obj_def))
 

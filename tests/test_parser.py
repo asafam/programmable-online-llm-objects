@@ -61,7 +61,8 @@ class TestSlugify:
 
 class TestParseObjectText:
     def test_full_definition(self):
-        defn = parse_object_text(FULL_MD)
+        defn, obj_type = parse_object_text(FULL_MD)
+        assert obj_type == "object"
         assert defn.object_id == "guest-manager"
         assert "guest check-in" in defn.role
         assert "checks in" in defn.behavior
@@ -74,7 +75,8 @@ class TestParseObjectText:
         assert defn.event_sources == ["PMS webhook: new reservation created", "PMS webhook: guest check-out completed"]
 
     def test_minimal_definition(self):
-        defn = parse_object_text(MINIMAL_MD)
+        defn, obj_type = parse_object_text(MINIMAL_MD)
+        assert obj_type == "object"
         assert defn.object_id == "simple-worker"
         assert defn.role == "Does simple work."
         assert defn.behavior == ""
@@ -82,6 +84,12 @@ class TestParseObjectText:
         assert defn.skills == []
         assert defn.subscriptions == []
         assert defn.event_sources == []
+
+    def test_class_type(self):
+        md = "# Truck\n\ntype: class\n\n## Role\n\nA truck.\n"
+        defn, obj_type = parse_object_text(md)
+        assert obj_type == "class"
+        assert defn.object_id == "truck"
 
     def test_missing_h1_raises(self):
         with pytest.raises(ValueError, match="Missing H1"):
@@ -94,10 +102,11 @@ class TestParseObjectText:
 
 class TestSerialize:
     def test_roundtrip(self):
-        original = parse_object_text(FULL_MD)
-        serialized = serialize_object(original)
-        roundtripped = parse_object_text(serialized)
+        original, obj_type = parse_object_text(FULL_MD)
+        serialized = serialize_object(original, obj_type)
+        roundtripped, rt_type = parse_object_text(serialized)
 
+        assert rt_type == obj_type
         assert roundtripped.object_id == original.object_id
         assert roundtripped.role == original.role
         assert roundtripped.behavior == original.behavior
@@ -110,8 +119,15 @@ class TestSerialize:
         assert roundtripped.event_sources == original.event_sources
 
     def test_minimal_roundtrip(self):
-        original = parse_object_text(MINIMAL_MD)
-        serialized = serialize_object(original)
-        roundtripped = parse_object_text(serialized)
+        original, obj_type = parse_object_text(MINIMAL_MD)
+        serialized = serialize_object(original, obj_type)
+        roundtripped, _ = parse_object_text(serialized)
         assert roundtripped.object_id == original.object_id
         assert roundtripped.role == original.role
+
+    def test_class_roundtrip(self):
+        md = "# Truck\n\ntype: class\n\n## Role\n\nA truck driven by {driver_name}.\n"
+        original, obj_type = parse_object_text(md)
+        serialized = serialize_object(original, obj_type)
+        _, rt_type = parse_object_text(serialized)
+        assert rt_type == "class"

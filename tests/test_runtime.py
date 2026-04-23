@@ -523,3 +523,110 @@ class TestLiveMode:
             assert rt.state("listener") == {"status": "got event"}
         finally:
             rt.stop()
+
+
+class TestSpawn:
+    """Tests for llm-class registration and spawn_object tool."""
+
+    def _make_rt(self):
+        brain = MockBrain()
+        tool_registry = ToolRegistry()
+        rt = Runtime(brain, tool_registry=tool_registry)
+        return rt, brain
+
+    def test_register_and_spawn_class(self):
+        rt, brain = self._make_rt()
+        brain.set_default(LLMResponse(updated_state={}, reply="ok"))
+
+        truck_class = ObjectDefinition(
+            object_id="truck",
+            role="Fleet vehicle driven by {driver_name} with {capacity}-pallet capacity.",
+            behavior="Introduce yourself to dispatcher on creation.",
+            peers=[PeerDeclaration("dispatcher", "report to")],
+        )
+        rt.register_class("truck", truck_class)
+
+        truck = rt.spawn("truck-001", "truck", {"driver_name": "Carlos Rivera", "capacity": "20"})
+
+        assert truck.object_id == "truck-001"
+        assert "Carlos Rivera" in truck.definition.role
+        assert "20-pallet" in truck.definition.role
+        assert rt._bus.objects.get("truck-001") is not None
+
+    def test_spawn_unknown_class_raises(self):
+        rt, _ = self._make_rt()
+        with pytest.raises(KeyError, match="not registered"):
+            rt.spawn("truck-001", "truck", {})
+
+    def test_spawn_object_tool_creates_object(self):
+        """fleet-manager receives a registration message and calls spawn_object tool."""
+        rt, brain = self._make_rt()
+
+        rt.register_class("truck", ObjectDefinition(
+            object_id="truck",
+            role="Fleet vehicle driven by {driver_name}.",
+            behavior="Upon creation, introduce yourself to dispatcher.",
+            peers=[PeerDeclaration("dispatcher", "introduce on creation; receive assignments")],
+        ))
+        rt.create_object(ObjectDefinition(object_id="fleet-manager", role="Spawns trucks."))
+        rt.create_object(ObjectDefinition(object_id="dispatcher", role="Coordinates fleet."))
+
+        # fleet-manager: call spawn_object tool, then seed truck-001
+        brain.script("fleet-manager", LLMResponse(
+            updated_state={},
+            reply="",
+            tool_calls=[ToolCall(
+                id="t1",
+                tool="spawn_object",
+                arguments={"object_id": "truck-001", "class_id": "truck", "params": {"driver_name": "Carlos Rivera"}},
+            )],
+        ))
+        brain.script("fleet-manager", LLMResponse(
+            updated_state={},
+            reply="Truck registered.",
+            outgoing_messages=[OutgoingMessage(
+                recipient="truck-001",
+                content="You're live. Driver: Carlos Rivera, 20-pallet, general cargo, North depot.",
+            )],
+        ))
+        # truck-001: introduce itself to dispatcher on first message
+        brain.script("truck-001", LLMResponse(
+            updated_state={"status": "available", "driver": "Carlos Rivera"},
+            reply="Hi dispatcher, I'm truck-001, driver Carlos Rivera, available.",
+            outgoing_messages=[OutgoingMessage(
+                recipient="dispatcher",
+                content="I'm truck-001, driver Carlos Rivera, 20-pallet capacity. Available for assignments.",
+            )],
+        ))
+        brain.set_default(LLMResponse(updated_state={}, reply="ok"))
+
+        results = rt.send("fleet-manager", "Register truck-001: driver Carlos Rivera, 20-pallet, general cargo.")
+
+        assert rt._bus.objects.get("truck-001") is not None, "truck-001 was not spawned"
+        assert rt.state("truck-001") == {"status": "available", "driver": "Carlos Rivera"}
+        obj_ids = {r.object_id for r in results}
+        assert "fleet-manager" in obj_ids
+        assert "truck-001" in obj_ids
+        assert "dispatcher" in obj_ids
+
+    def test_load_class_from_file(self, tmp_path):
+        rt, brain = self._make_rt()
+        brain.set_default(LLMResponse(updated_state={}, reply="ok"))
+
+        (tmp_path / "truck.md").write_text(
+            "# Truck\n\ntype: class\n\n## Role\n\nFleet vehicle driven by {driver_name}.\n"
+        )
+        (tmp_path / "dispatcher.md").write_text(
+            "# Dispatcher\n\n## Role\n\nCoordinates the fleet.\n"
+        )
+
+        objects = rt.load_directory(tmp_path)
+
+        assert len(objects) == 1  # only dispatcher is instantiated
+        assert objects[0].object_id == "dispatcher"
+        assert "truck" in rt._classes  # truck registered as class, not object
+        assert rt._bus.objects.get("truck") is None
+
+        truck = rt.spawn("truck-007", "truck", {"driver_name": "Maya Patel"})
+        assert truck.object_id == "truck-007"
+        assert "Maya Patel" in truck.definition.role

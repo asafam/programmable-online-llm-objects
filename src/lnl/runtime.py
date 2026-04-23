@@ -17,7 +17,7 @@ from .bus import BusMetrics, MessageBus
 from .events import EventSourceRegistry
 from .object import LLMObject
 from .parser import parse_object_file, parse_object_text, serialize_object
-from .tools import ToolRegistry
+from .tools import SpawnExecutor, ToolRegistry
 from .types import (
     Message,
     MessageLog,
@@ -136,6 +136,7 @@ class Runtime:
         self._heartbeat_interval_seconds = cfg.heartbeat_interval_seconds
         self._sources: dict[str, Path] = {}  # object_id -> file path
         self._modified: set[str] = set()  # object_ids with unsaved changes
+        self._classes: dict[str, ObjectDefinition] = {}  # class_id -> template definition
         self._event_sources = EventSourceRegistry()
         self._tool_registry = tool_registry
         self._heartbeat = cfg
@@ -175,6 +176,10 @@ class Runtime:
         # Wire bus schedule callback — objects schedule themselves when mail arrives
         self._bus.set_schedule_callback(self._schedule_object)
 
+        # Register built-in spawn_object tool when a tool registry is present
+        if self._tool_registry is not None:
+            self._tool_registry.register("spawn_object", SpawnExecutor(self), SpawnExecutor.SPEC)
+
     def _next_msg_id(self, sender: str) -> str:
         """Return a deterministic message ID: '<sender>-<n>' with a monotonic counter."""
         with self._msg_counter_lock:
@@ -184,30 +189,61 @@ class Runtime:
 
     # --- Loading ---
 
-    def load_file(self, path: str | Path) -> LLMObject:
-        """Load an LLM-object from an MD file."""
+    def load_file(self, path: str | Path) -> LLMObject | None:
+        """Load an MD file: registers as an llm-class if type=class, instantiates otherwise.
+
+        Returns None for class definitions (they are registered but not instantiated).
+        """
         path = Path(path)
-        defn = parse_object_file(path)
+        defn, obj_type = parse_object_file(path)
+        if obj_type == "class":
+            self.register_class(defn.object_id, defn)
+            return None
         obj = self._register_object(defn)
         self._sources[obj.object_id] = path
         return obj
 
     def load_directory(self, path: str | Path) -> list[LLMObject]:
-        """Load all .md files in a directory as LLM-objects."""
+        """Load all .md files in a directory. Class definitions are registered; objects are returned."""
         path = Path(path)
         objects = []
         for md_file in sorted(path.glob("*.md")):
-            objects.append(self.load_file(md_file))
+            obj = self.load_file(md_file)
+            if obj is not None:
+                objects.append(obj)
         return objects
 
     def create_object(self, definition: ObjectDefinition) -> LLMObject:
-        """Create an LLM-object from a definition."""
+        """Instantiate an llm-object from a definition."""
         return self._register_object(definition)
 
     def create_object_from_text(self, markdown: str) -> LLMObject:
-        """Create an LLM-object from markdown text."""
-        defn = parse_object_text(markdown)
+        """Instantiate an llm-object from markdown text."""
+        defn, _ = parse_object_text(markdown)
         return self._register_object(defn)
+
+    def register_class(self, class_id: str, definition: ObjectDefinition) -> None:
+        """Register an llm-class template. Does not create a live object."""
+        self._classes[class_id] = definition
+
+    def spawn(self, object_id: str, class_id: str, params: dict | None = None) -> LLMObject:
+        """Instantiate a registered llm-class into a new live llm-object."""
+        template = self._classes.get(class_id)
+        if template is None:
+            raise KeyError(f"llm-class '{class_id}' is not registered")
+        defn = self._instantiate_class(template, object_id, params or {})
+        return self._register_object(defn)
+
+    def _instantiate_class(self, template: ObjectDefinition, object_id: str, params: dict) -> ObjectDefinition:
+        """Clone a class template, substitute {param} placeholders, and set the instance object_id."""
+        import copy
+        defn = copy.deepcopy(template)
+        defn.object_id = object_id
+        for key, val in params.items():
+            placeholder = "{" + key + "}"
+            defn.role = defn.role.replace(placeholder, str(val))
+            defn.behavior = defn.behavior.replace(placeholder, str(val))
+        return defn
 
     def _register_object(self, definition: ObjectDefinition) -> LLMObject:
         """Create, register on bus, and bind event sources to providers."""
@@ -609,7 +645,7 @@ class Runtime:
                 f"No path specified and no source path known for '{object_id}'"
             )
 
-        save_path.write_text(serialize_object(obj.definition))
+        save_path.write_text(serialize_object(obj.definition, obj_type="object"))
         self._sources[object_id] = save_path
         self._modified.discard(object_id)
         return save_path

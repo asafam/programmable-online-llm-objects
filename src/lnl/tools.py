@@ -183,6 +183,42 @@ class PassthroughExecutor:
         return ToolResult(id=call.id, output=output)
 
 
+class SpawnExecutor:
+    """Executor for the built-in spawn_object tool.
+
+    Holds a reference to the runtime so it can call runtime.spawn() directly,
+    without going through the tool context.
+    """
+
+    SPEC = ToolSpec(
+        description="Create a new LLM-object instance from a registered llm-class",
+        arguments_schema={
+            "type": "object",
+            "properties": {
+                "object_id": {"type": "string", "description": "Unique ID for the new object (e.g. 'truck-001')"},
+                "class_id": {"type": "string", "description": "Name of the registered llm-class to instantiate (e.g. 'truck')"},
+                "params": {"type": "object", "description": "Parameter values substituted into the class template placeholders", "additionalProperties": True},
+            },
+            "required": ["object_id", "class_id"],
+            "additionalProperties": False,
+        },
+    )
+
+    def __init__(self, runtime: Any) -> None:
+        self._runtime = runtime
+
+    def execute(self, call: ToolCall, context: dict[str, Any]) -> ToolResult:
+        args = call.arguments
+        object_id = args.get("object_id", "")
+        class_id = args.get("class_id", "")
+        params = args.get("params") or {}
+        try:
+            self._runtime.spawn(object_id, class_id, params)
+            return ToolResult(id=call.id, output=f"Created {object_id} from class {class_id}")
+        except Exception as exc:
+            return ToolResult(id=call.id, output="", error=str(exc))
+
+
 class ToolRegistry:
     """Maps tool names to executors and their specs."""
 

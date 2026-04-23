@@ -159,6 +159,23 @@ class MockConfig(BaseModel):
     tools: list[MockToolDef]
 
 
+class LLMClassDef(BaseModel):
+    """An llm-class template: a reusable blueprint for spawning llm-object instances."""
+    class_id: str
+    role: str
+    state_description: str = ""
+    behavior: str
+    peers: list[PeerDecl] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    subscriptions: list[str] = Field(default_factory=list)
+    event_sources: list[str] = Field(default_factory=list)
+
+    @field_validator("class_id")
+    @classmethod
+    def slugify_class_id(cls, v: str) -> str:
+        return slugify(v)
+
+
 class TestCase(BaseModel):
     id: str
     sample_id: str = ""  # ID of the originating sample; shared across all TC variants from the same sample
@@ -167,6 +184,7 @@ class TestCase(BaseModel):
     source_type: str
     link: str = ""
     objects: list[ObjectDef] = Field(default_factory=list)
+    llm_classes: list[LLMClassDef] = Field(default_factory=list, description="llm-class templates available for spawning during evaluation")
     steps: list[Step]
     modifications: list[Modification]
     events: list[Event]
@@ -304,6 +322,7 @@ class TestCaseResult(BaseModel):
     modifications: list[ModificationResult]
     pass_rate: Optional[float]  # passed_events / total_events; None if no evaluable events
     elapsed_ms: Optional[float] = None  # wall-clock time for the entire TC run in milliseconds
+    error_type: Optional[str] = None    # "infra" = infrastructure failure (pairing, network, terminated); None = behavioral
 
 class EvalSummary(BaseModel):
     """Aggregate metrics across all test cases and runs."""
@@ -401,6 +420,24 @@ class OrchestratorScript(BaseModel):
     name: str
     time_scale: float = 1.0             # compress time: 0.01 → 1 simulated min = 0.6 real sec
     triggers: list[OrchestratorTrigger]
+
+
+def to_lnl_class_definition(cls_def: LLMClassDef) -> ObjectDefinition:
+    """Convert Pydantic LLMClassDef to dataclass ObjectDefinition with type='class'."""
+    return ObjectDefinition(
+        object_id=cls_def.class_id,
+        role=cls_def.role,
+        behavior=cls_def.behavior,
+        peers=[
+            PeerDeclaration(object_id=p.object_id, relationship=p.relationship)
+            for p in cls_def.peers
+        ],
+        skills=list(cls_def.skills),
+        subscriptions=list(cls_def.subscriptions),
+        event_sources=list(cls_def.event_sources),
+        initial_state=cls_def.state_description,
+        type="class",
+    )
 
 
 def to_lnl_definition(obj: ObjectDef) -> ObjectDefinition:
