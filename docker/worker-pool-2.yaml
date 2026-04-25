@@ -1,0 +1,17 @@
+# LNL OpenClaw Worker Pool — 2 workers
+#
+# Reduced from 4 to limit concurrent OpenAI API requests and avoid rate limiting.
+# Use with: python -m src.data.evaluate_baseline --pool docker/worker-pool-2.yaml
+
+workers:
+  - name: worker-1
+    container_name: lnl-oc-worker-1
+    gateway_url: ws://localhost:19789
+    mock_server_url: http://localhost:19888
+    data_dir: /tmp/lnl-pool/worker-1
+
+  - name: worker-2
+    container_name: lnl-oc-worker-2
+    gateway_url: ws://localhost:19790
+    mock_server_url: http://localhost:19889
+    data_dir: /tmp/lnl-pool/worker-2

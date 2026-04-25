@@ -27,6 +27,16 @@ envsubst '${OPENCLAW_GATEWAY_TOKEN}' \
     < "${HOME}/openclaw.json.tpl" \
     > "${CONFIG_DIR}/openclaw.json"
 
+# Clear the gateway's own device identity so it generates a fresh unpaired
+# identity on every start.  Workers 3/4 had their internal device pre-paired
+# with limited scopes ("operator.read") from a previous manual operation.
+# A fresh identity has never been paired, so shouldSkipLocalBackendSelfPairing
+# bypasses the pairing check for all backend loopback connections.
+# paired.json is intentionally kept so the host CLI device retains its full
+# operator-scope pairing and the Python SDK can connect without re-pairing.
+rm -f "${CONFIG_DIR}/identity/device.json"
+rm -f "${CONFIG_DIR}/identity/device-auth.json"
+
 # ── Start the LNL mock server ─────────────────────────────────────────────────
 echo "[entrypoint] Starting mock server on port 18888..."
 cd /app && python3 -m src.data.mock_server \

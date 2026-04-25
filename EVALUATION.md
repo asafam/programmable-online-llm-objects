@@ -378,6 +378,12 @@ Key metrics in `EvalSummary`:
 
 Per-test-case results (`TestCaseResult` lines) include per-event pass/fail with reasoning, token costs, the `expected` assertion condition, and the `evidence` text that was presented to the judge.
 
+## Analysis
+
+See **[ANALYSIS.md](ANALYSIS.md)** for charts, insights summary, and CLI flags.
+
+---
+
 ## How They Differ
 
 **LNL Runtime**: Creates separate LLM-objects for each component (e.g., `hubspot`, `quote-approvals`, `slack`). Each object has its own system prompt, state, and conversation history. Messages route through a `MessageBus` — when one object processes an event, it can send messages to peers, triggering a chain of LLM calls.

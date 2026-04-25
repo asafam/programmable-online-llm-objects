@@ -290,8 +290,8 @@ class EventResult(BaseModel):
     evidence: str = ""      # gather_evidence() output — what the judge saw
     prior_context: str = "" # _format_prior_state() snapshot before this event
     role: Optional[Literal["pre_mod", "post_mod", "irrelevant"]] = None  # propagated from Event.role
-    input_tokens: int = 0
-    output_tokens: int = 0
+    input_tokens: int = 0   # entry-agent LLM input tokens (baseline) or LNL agent tokens (lnl eval)
+    output_tokens: int = 0  # entry-agent LLM output tokens
     latency_ms: float = 0.0
     judge_input_tokens: int = 0
     judge_output_tokens: int = 0
@@ -299,6 +299,10 @@ class EventResult(BaseModel):
         default_factory=list,
         description="Per-judge votes (always populated). Each entry: {judge, passed, reasoning, input_tokens, output_tokens}.",
     )
+    # Chattiness / roundtrip metrics (baseline eval only)
+    agent_tool_calls: int = 0   # total tool calls made by the entry agent (file reads, sessions_send, external)
+    a2a_calls: int = 0          # sessions_send (agentToAgent) calls made by the entry agent
+    mock_tool_calls: int = 0    # external tool calls across all agents (from mock server log)
 
 class ModificationResult(BaseModel):
     """Cost of applying a single modification."""

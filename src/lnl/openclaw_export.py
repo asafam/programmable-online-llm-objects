@@ -112,27 +112,97 @@ def _agents_md(obj: ObjectDefinition, session_name: str = "main") -> str:
     if obj.peers:
         peers_block = "\n".join(f"- **{p.object_id}**: {p.relationship}" for p in obj.peers)
         peer_ids = [p.object_id for p in obj.peers]
+        # Peer session keys always use "main" — the gateway's default mainKey.
+        # The gateway auto-creates sessions on demand for the mainKey when
+        # sessions_send targets a peer. Custom session names (e.g. "eval-ma-6")
+        # do NOT get auto-created and cause "pairing required" errors.
         peer_examples = "\n".join(
-            f'  - To message `{pid}`: `sessions_send(sessionKey="agent:{pid}:{session_name}", message="<your message>", timeoutSeconds=240)`'
+            f'  - To message `{pid}`: `sessions_send(sessionKey="agent:{pid}:main", message="<your message>", timeoutSeconds=90)`'
             for pid in peer_ids
         )
         comm_section = (
             f"## Communication\n\n"
             f"To send a message to a peer agent, use the `sessions_send` tool with the exact sessionKey below.\n"
             f"**Do NOT use the `message` tool** — that is for external channels (Slack, email, etc.).\n"
-            f"**ALWAYS include `timeoutSeconds=240`** — peers may need to make multiple tool calls and\n"
-            f"send messages to their own downstream peers before responding. Never omit this parameter.\n\n"
+            f"**ALWAYS include `timeoutSeconds=90`** — peers may need to make multiple tool calls before responding. Never omit this parameter.\n\n"
             f"Exact calls for each peer:\n\n"
             f"{peer_examples}\n\n"
-            f"Use external tools (e.g. `slack_send_message`, `zapier_tables_create_record`) "
-            f"for actions on external systems.\n"
+            f"**For actions YOUR behavior defines** (writing a record, sending a notification, etc.),\n"
+            f"call the tool in this response — don't forward that responsibility to a peer.\n"
+            f"If your behavior says to write to Zapier Tables AND then notify a peer, do both:\n"
+            f"call `zapier_tables_create_record` yourself, then `sessions_send` to the peer.\n"
+            f"Only delegate to a peer the actions that peer's behavior owns.\n"
         )
     else:
         peers_block = "(No peers defined.)"
         comm_section = (
             f"## Communication\n\n"
-            f"This agent has no peers. Use the available external tools for all actions.\n"
+            f"This agent has no peers. Call the available external tools directly for all actions.\n"
+            f"Never describe an action without calling the tool — if your behavior says to write a\n"
+            f"record or send a message, do it now by calling the tool.\n"
         )
+
+    tools_section = (
+        "## Available Tools\n\n"
+        "Use these tools for any external system action. Call them directly — do not describe them:\n"
+        "- `slack_send_message(channel, message)` — post a message to a Slack channel\n"
+        "- `slack_list_channels()` — list Slack channels\n"
+        "- `slack_add_reaction(message_id, emoji)` — add a reaction to a Slack message\n"
+        "- `slack_get_user(user)` — get Slack user info\n"
+        "- `zapier_tables_create_record(table, data)` — write a record to a Zapier Table\n"
+        "- `zapier_tables_list_records(table, filter)` — read records from a Zapier Table\n"
+        "- `email_send(to, subject, body)` — send an email\n"
+        "- `email_list_inbox(folder)` — list emails in inbox\n"
+        "- `email_read(message_id)` — read an email\n"
+        "- `jira_create_issue(project, summary, description)` — create a Jira issue\n"
+        "- `jira_update_issue(issue_id, status)` — update a Jira issue\n"
+        "- `jira_get_issue(issue_id)` — get a Jira issue\n"
+        "- `jira_list_issues(project, status)` — list Jira issues\n"
+        "- `webhook_post(url, payload)` — call an external webhook\n"
+        "- `calendar_create_event(title, start, end, attendees, description)` — create a calendar event\n"
+        "- `calendar_update_event(event_id, title, start, end)` — update a calendar event\n"
+        "- `calendar_get_event(event_id)` — get a calendar event\n"
+        "- `calendar_list_events(calendar_id, time_min, time_max)` — list calendar events\n"
+        "- `stripe_create_charge(amount, currency, customer, description)` — create a Stripe charge\n"
+        "- `stripe_get_charge(charge_id)` — get a Stripe charge\n"
+        "- `stripe_list_charges(customer, limit)` — list Stripe charges\n"
+        "- `stripe_refund_charge(charge_id, amount)` — refund a Stripe charge\n"
+        "- `monday_create_item(board_id, item_name, column_values)` — create a Monday.com item\n"
+        "- `monday_update_item(item_id, column_values)` — update a Monday.com item\n"
+        "- `monday_get_item(item_id)` — get a Monday.com item\n"
+        "- `monday_list_items(board_id)` — list Monday.com items\n"
+        "- `salesforce_create_record(object_type, fields)` — create a Salesforce record\n"
+        "- `salesforce_update_record(object_type, record_id, fields)` — update a Salesforce record\n"
+        "- `salesforce_get_record(object_type, record_id)` — get a Salesforce record\n"
+        "- `salesforce_list_records(object_type, filter)` — list Salesforce records\n"
+        "- `airtable_create_record(base_id, table, fields)` — create an Airtable record\n"
+        "- `airtable_update_record(base_id, table, record_id, fields)` — update an Airtable record\n"
+        "- `airtable_get_record(base_id, table, record_id)` — get an Airtable record\n"
+        "- `airtable_list_records(base_id, table, filter)` — list Airtable records\n"
+        "- `hubspot_create_contact(email, first_name, last_name, properties)` — create a HubSpot contact\n"
+        "- `hubspot_update_contact(contact_id, properties)` — update a HubSpot contact\n"
+        "- `hubspot_create_deal(deal_name, amount, stage, contact_id)` — create a HubSpot deal\n"
+        "- `hubspot_update_deal(deal_id, properties)` — update a HubSpot deal\n"
+        "- `hubspot_get_deal(deal_id)` — get a HubSpot deal\n"
+        "- `github_create_issue(repo, title, body, labels)` — create a GitHub issue\n"
+        "- `github_update_issue(repo, issue_number, title, state, body)` — update a GitHub issue\n"
+        "- `github_get_issue(repo, issue_number)` — get a GitHub issue\n"
+        "- `github_list_issues(repo, state)` — list GitHub issues\n"
+        "- `sheets_create_row(spreadsheet_id, sheet, values)` — append a row to Google Sheets\n"
+        "- `sheets_update_row(spreadsheet_id, row, values, sheet)` — update a row in Google Sheets\n"
+        "- `sheets_get_row(spreadsheet_id, row, sheet)` — get a row from Google Sheets\n"
+        "- `sheets_list_rows(spreadsheet_id, sheet, max_rows)` — list rows from Google Sheets\n"
+        "- `asana_create_task(project_id, name, notes, assignee, due_on)` — create an Asana task\n"
+        "- `asana_update_task(task_id, name, completed, notes)` — update an Asana task\n"
+        "- `asana_get_task(task_id)` — get an Asana task\n"
+        "- `asana_list_tasks(project_id, completed)` — list Asana tasks\n"
+        "- `notion_create_page(parent_id, title, content, properties)` — create a Notion page\n"
+        "- `notion_update_page(page_id, title, properties)` — update a Notion page\n"
+        "- `notion_get_page(page_id)` — get a Notion page\n"
+        "- `notion_query_database(database_id, filter)` — query a Notion database\n"
+        "- `twilio_send_sms(to, message, from)` — send an SMS via Twilio\n"
+        "- `twilio_send_message(to, message, channel)` — send a message via Twilio\n\n"
+    )
 
     return (
         f"# Agent: {name}\n\n"
@@ -143,6 +213,7 @@ def _agents_md(obj: ObjectDefinition, session_name: str = "main") -> str:
         f"Your current operational state is tracked in `state.md` in this workspace.\n"
         f"Read it at the start of each interaction to restore context.\n"
         f"After each interaction, write your updated state back to `state.md`.\n\n"
+        + tools_section
         + comm_section
     )
 
@@ -155,7 +226,16 @@ def _soul_md(obj: ObjectDefinition) -> str:
         f"You are {name}, a specialized AI agent in a multi-agent workflow.\n\n"
         f"Your core purpose: {first_sentence}\n\n"
         f"Act with precision, stay within your defined responsibilities, and collaborate\n"
-        f"with your peers as declared in AGENTS.md.\n"
+        f"with your peers as declared in AGENTS.md.\n\n"
+        f"**INIT PROTOCOL (highest priority — overrides everything below):**\n"
+        f"If the entire incoming message is exactly `[SYSTEM:INIT]`, reply with the single\n"
+        f"word `ready` and nothing else. Do not read state.md, do not call any tools,\n"
+        f"do not write anything. Just reply `ready`.\n\n"
+        f"**EXECUTION RULE:** For every action YOUR behavior defines (write a record, send a\n"
+        f"message, create a task, etc.), call the corresponding tool in this response — don't\n"
+        f"describe it. 'I have logged the record' without calling `zapier_tables_create_record`\n"
+        f"is wrong. Actions owned by a downstream peer belong to that peer; call `sessions_send`\n"
+        f"to delegate them, not the peer's tool directly.\n"
     )
 
 
@@ -270,6 +350,37 @@ def _combined_agents_md(objects: list[ObjectDefinition]) -> str:
     return "".join(lines)
 
 
+def _bootstrap_stub_md() -> str:
+    """Stub BOOTSTRAP.md that suppresses the gateway's onboarding flow.
+
+    The gateway creates BOOTSTRAP.md for agents with empty IDENTITY.md, making
+    them ask "Who am I?" and override SOUL.md.  Writing our own stub + a
+    populated IDENTITY.md prevents that trigger entirely.
+    """
+    return (
+        "# BOOTSTRAP.md\n\n"
+        "Identity and behavior are fully configured in SOUL.md.\n"
+        "Skip onboarding — follow SOUL.md instructions directly.\n"
+    )
+
+
+def _identity_md(obj: ObjectDefinition) -> str:
+    """Populated IDENTITY.md so the gateway does not trigger its onboarding flow.
+
+    The gateway creates BOOTSTRAP.md only for agents whose IDENTITY.md has an
+    empty Name field.  Pre-populating name + vibe prevents that trigger.
+    """
+    name = _slug_to_name(obj.object_id)
+    return (
+        f"# IDENTITY.md - Who Am I?\n\n"
+        f"- **Name:** {name}\n"
+        f"- **Creature:** AI workflow agent\n"
+        f"- **Vibe:** precise, reliable, task-focused\n"
+        f"- **Emoji:** 🤖\n"
+        f"- **Avatar:** \n"
+    )
+
+
 def _combined_soul_md(objects: list[ObjectDefinition]) -> str:
     names = ", ".join(_slug_to_name(obj.object_id) for obj in objects)
     return (
@@ -322,6 +433,11 @@ def _build_openclaw_json(objects: list[ObjectDefinition], output_dir: Path) -> d
                 "enabled": True,
                 "allow": all_ids,
             }
+        },
+        "gateway": {
+            # Trust loopback + Docker bridge so inter-agent sessions_send routing
+            # isn't blocked by the WS handshake hardening (issue #21236).
+            "trustedProxies": ["127.0.0.1", "::1", "172.16.0.0/12"],
         },
     }
 
@@ -508,6 +624,12 @@ def _export_objects_to_dir(
         _write_file(ws / "AGENTS.md", _agents_md(obj), written, force=force, dry_run=dry_run)
         _write_file(ws / "SOUL.md", _soul_md(obj), written, force=force, dry_run=dry_run)
         _write_file(ws / "state.md", _state_md(obj), written, force=force, dry_run=dry_run)
+        # Always overwrite IDENTITY.md and BOOTSTRAP.md (force=True).
+        # The gateway creates BOOTSTRAP.md for agents whose IDENTITY.md has an empty
+        # Name field, making them say "Hey, who am I?" instead of executing.
+        # A populated IDENTITY.md + our stub BOOTSTRAP.md together suppress that trigger.
+        _write_file(ws / "IDENTITY.md", _identity_md(obj), written, force=True, dry_run=dry_run)
+        _write_file(ws / "BOOTSTRAP.md", _bootstrap_stub_md(), written, force=True, dry_run=dry_run)
 
         for skill in obj.skills:
             skill_slug = slugify(skill)

@@ -26,6 +26,11 @@
     "restart": true
   },
   "agents": {
+    "defaults": {
+      "llm": {
+        "idleTimeoutSeconds": 300
+      }
+    },
     "list": []
   }
 }

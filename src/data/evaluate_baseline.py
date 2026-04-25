@@ -57,6 +57,8 @@ from src.data.utils import (
     load_jsonl,
 )
 from src.lnl.openclaw_export import (
+    _bootstrap_stub_md,
+    _identity_md,
     export_single_agent_workspace,
     export_workflow_from_objects,
     reset_agent_state,
@@ -201,6 +203,9 @@ def _write_worker_gateway_config(data_dir: Path, operator_token: str) -> None:
     cfg["gateway"]["auth"]["mode"] = "token"
     cfg["gateway"]["auth"]["token"] = operator_token
     cfg["gateway"].setdefault("mode", "local")
+    # Trust loopback + Docker bridge so inter-agent sessions_send routing isn't
+    # blocked by the WS handshake hardening introduced in 2026.2.19-2 (issue #21236).
+    cfg["gateway"]["trustedProxies"] = ["127.0.0.1", "::1", "172.16.0.0/12"]
     cfg.setdefault("plugins", {"allow": ["lnl-mock-external"]})
     cfg.setdefault("tools", {"sessions": {"visibility": "all"}})
     cfg.setdefault("commands", {"native": "auto", "nativeSkills": "auto", "restart": True})
@@ -1152,19 +1157,20 @@ async def _execute_tc_async(
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """Create fresh handles + session name for one event.
 
-        Each event gets its own unique session name so it starts with a clean
-        conversation context.  State persists across events via state.md files;
-        session history does NOT carry over (which prevents locked sessions and
-        stale context from a previous event polluting the current one).
+        Entry agent uses a unique session name per event to prevent conversation
+        history from bleeding across events. Peer agents always use "main" — the
+        gateway's default mainKey that it auto-creates on demand when sessions_send
+        targets them. Custom session names (e.g. "eval-ma-6") do NOT get
+        auto-created and cause "pairing required" errors.
 
-        No pre-warming: OpenClaw auto-registers sessions when sessions_send is
-        called, so peer agents come up on demand without an init ping.
-        Pre-warming caused problems: init pings triggered agents to attempt
-        tool calls (with our executor-focused SOUL.md), causing timeouts.
+        State persists across events via state.md; conversation history is reset
+        per event for peers via sessions.reset on their "main" session key.
         """
         OpenClawAgent._global_counter += 1
         sname = f"eval-ma-{OpenClawAgent._global_counter}"
-        rewrite_agents_md(tc.objects, openclaw_home, sname, slot_suffix=slot_suffix)
+        # No rewrite_agents_md — peer session keys are hardcoded to "main" in
+        # AGENTS.md (set during export). Only the entry agent uses sname, and
+        # that's managed by our Python client handle, not AGENTS.md.
 
         ev_handles: dict[str, Any] = {}
         ev_session_names: dict[str, str] = {}
@@ -1172,6 +1178,26 @@ async def _execute_tc_async(
             agent_id = f"{obj.object_id}{slot_suffix}"
             ev_session_names[obj.object_id] = sname
             ev_handles[obj.object_id] = client.get_agent(agent_id, session_name=sname)
+
+        # Write stub BOOTSTRAP.md + populated IDENTITY.md so the gateway never
+        # triggers its onboarding flow (empty IDENTITY.md Name → BOOTSTRAP.md).
+        _stub = _bootstrap_stub_md()
+        for obj in tc.objects:
+            ws_path = openclaw_home / f"workspace-{obj.object_id}{slot_suffix}"
+            (ws_path / "BOOTSTRAP.md").write_text(_stub)
+            identity_path = ws_path / "IDENTITY.md"
+            if not identity_path.exists() or "Name:" not in identity_path.read_text():
+                identity_path.write_text(_identity_md(obj))
+
+        # Reset peer agents' "main" sessions so each event starts with a clean
+        # conversation history. sessions.reset clears history without deleting
+        # the session key, keeping it routable for incoming sessions_send calls.
+        for obj in tc.objects:
+            peer_key = f"agent:{obj.object_id}{slot_suffix}:main"
+            try:
+                await client.gateway.call("sessions.reset", {"key": peer_key})
+            except Exception:
+                pass  # session may not exist yet — gateway creates on first sessions_send
 
         return ev_handles, ev_session_names
 
@@ -1218,6 +1244,14 @@ async def _execute_tc_async(
                 tqdm.write(f"  [AGENT ERROR] {target_id}: {result.content}", file=sys.stderr)
             content = result.content if result.success else f"(error: {result.content})"
 
+            # Entry-agent chattiness metrics
+            _oc_tool_calls = result.tool_calls  # list[ToolCall] from ExecutionResult
+            _agent_tool_calls = len(_oc_tool_calls)
+            _a2a_calls = sum(1 for c in _oc_tool_calls if c.tool == "sessions_send")
+            _agent_in_tok = result.token_usage.input
+            _agent_out_tok = result.token_usage.output
+            _mock_tool_calls = 0  # updated below if mock_server is active
+
             # Collect tool calls for this event only
             event_tool_calls: list[dict] = []
 
@@ -1229,6 +1263,7 @@ async def _execute_tc_async(
                     # Multi-agent: wait for any agentToAgent cascade to complete
                     await _wait_mock_quiescence(mock_server, slot_id=slot_suffix or "default")
                 event_tool_calls = mock_server.get_log(slot_id=slot_suffix or "default")
+                _mock_tool_calls = len(event_tool_calls)
 
                 # In-process triggers: dispatch tool-triggered messages directly
                 # (mirrors MockInProcessExecutor in evaluate.py)
@@ -1319,6 +1354,12 @@ async def _execute_tc_async(
                         passed=passed, reasoning=reasoning,
                         expected=expect.action, evidence=evidence,
                         prior_context=prior_context, latency_ms=latency_ms,
+                        input_tokens=_agent_in_tok, output_tokens=_agent_out_tok,
+                        judge_input_tokens=_in_tok, judge_output_tokens=_out_tok,
+                        judge_votes=_votes,
+                        agent_tool_calls=_agent_tool_calls,
+                        a2a_calls=_a2a_calls,
+                        mock_tool_calls=_mock_tool_calls,
                     ))
                 prior_context = _read_prior_context(tc, openclaw_home, single_agent_id)
 
@@ -1348,6 +1389,12 @@ async def _execute_tc_async(
                         expected=item.expect.action, evidence=evidence,
                         prior_context=prior_context, latency_ms=latency_ms,
                         role=item.role,
+                        input_tokens=_agent_in_tok, output_tokens=_agent_out_tok,
+                        judge_input_tokens=_in_tok, judge_output_tokens=_out_tok,
+                        judge_votes=_votes,
+                        agent_tool_calls=_agent_tool_calls,
+                        a2a_calls=_a2a_calls,
+                        mock_tool_calls=_mock_tool_calls,
                     ))
                 prior_context = _read_prior_context(tc, openclaw_home, single_agent_id)
 
@@ -1770,6 +1817,14 @@ async def _run_all_tcs_concurrent(
                                 verbose=False,
                             )
                             await asyncio.sleep(3)  # file watcher pickup
+                            # Delete BOOTSTRAP.md so the gateway doesn't run its
+                            # onboarding flow (which overrides SOUL.md and makes
+                            # agents respond "Hey, who am I?" instead of executing).
+                            # The gateway auto-creates this file for new workspaces;
+                            # our SOUL.md already encodes identity and behavior.
+                            for _obj in tc.objects:
+                                _bs = slot_openclaw_home / f"workspace-{_obj.object_id}{slot_suffix}" / "BOOTSTRAP.md"
+                                _bs.unlink(missing_ok=True)
                             seen_exports_per_slot[slot].add(tc.sample_id)
 
                         if slot_mock_server is not None:
@@ -1801,15 +1856,20 @@ async def _run_all_tcs_concurrent(
                                 [single_agent_id] if single_agent_id
                                 else [f"{obj.object_id}{slot_suffix}" for obj in tc.objects]
                             )
+                            _bs_stub = _bootstrap_stub_md()
                             for aid in agent_ids:
                                 _clear_agent_sessions(aid, slot_openclaw_home)
-                                state_file = slot_openclaw_home / f"workspace-{aid}" / "state.md"
-                                state_file.unlink(missing_ok=True)
+                                ws_dir = slot_openclaw_home / f"workspace-{aid}"
+                                (ws_dir / "state.md").unlink(missing_ok=True)
+                                # Overwrite (not delete) so gateway never recreates its onboarding version
+                                _bsp = ws_dir / "BOOTSTRAP.md"
+                                if _bsp.exists():
+                                    _bsp.write_text(_bs_stub)
 
                             mod_type_str = tc.modifications[0].mod_type.value if tc.modifications else "none"
                             tqdm.write(f"\n  {tc.id}[{mod_type_str}] run={run_idx} [slot={slot}]")
                             tc_t0 = time.time()
-                            tc_timeout = getattr(args, "timeout_s", None)
+                            tc_timeout = timeout_s
                             try:
                                 coro = _execute_tc_async(
                                     tc, slot_gateway_url, slot_openclaw_home, harness,
@@ -2061,7 +2121,7 @@ def run(args: argparse.Namespace) -> Path:
     if agent_model and not agent_provider:
         agent_provider = infer_provider(agent_model)
 
-    judge_model = args.judge_model or "claude-sonnet-4-6"
+    judge_model = args.judge_model or agent_model or "gpt-4o"
     judge_provider = args.judge_provider or infer_provider(judge_model)
 
     multi_agent: bool = getattr(args, "multi_agent", False)
@@ -2451,7 +2511,7 @@ Examples:
     parser.add_argument("--openclaw-home", default="~/.openclaw",
                         help="Root OpenClaw directory for agent workspaces (default: ~/.openclaw)")
     parser.add_argument("--judge-model", default=None,
-                        help="Model for LLM-as-judge (default: claude-sonnet-4-6)")
+                        help="Model for LLM-as-judge (default: same as --model, matching evaluate.py behavior)")
     parser.add_argument("--judge-provider", choices=["openai", "anthropic", "google"], default=None,
                         help="Provider for judge model (inferred from --judge-model if not specified)")
     parser.add_argument("--limit", "-n", type=int, default=None,

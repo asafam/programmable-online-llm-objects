@@ -83,6 +83,8 @@ The H1 heading is slugified into the `object_id` ("Guest Manager" becomes `guest
 
 For a complete guide on creating objects, writing definitions, messaging patterns, and using the CLI, see the **[Programming Guide](docs/programming-guide.md)**.
 
+For evaluating the runtime against test cases and analyzing results, see **[EVALUATION.md](EVALUATION.md)** and **[ANALYSIS.md](ANALYSIS.md)**.
+
 ## Usage
 
 ### Library API

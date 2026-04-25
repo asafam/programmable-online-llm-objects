@@ -11,3 +11,6 @@ httpx>=0.27.0
 json5>=0.9.0
 google-genai>=1.70.0
 openclaw-sdk
+plotly>=5.18.0
+matplotlib>=3.8.0
+kaleido>=0.2.1
