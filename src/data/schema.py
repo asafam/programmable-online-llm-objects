@@ -114,6 +114,16 @@ class StateProbeQuestion(BaseModel):
     probe_event: GeneratedEventWithExpect
 
 
+class FidelityEventsList(BaseModel):
+    """Stage A output for the state-fidelity experiment.
+
+    Contains the probe-target entity/field (passed to Stage B) plus all depth events.
+    """
+    probe_target_entity: str          # name/label of the probe-target entity, e.g. "Invoice #1042"
+    probe_target_field: str           # scalar field Stage B should probe, e.g. "status"
+    state_events: list[GeneratedEventWithExpect]
+
+
 class GeneratedModification(BaseModel):
     """LLM output schema — mod_type and ambiguity are set by the script, not the LLM."""
     id: str

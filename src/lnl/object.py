@@ -53,8 +53,8 @@ class LLMObject:
         pending_timeout_seconds: float = 90.0,
         heartbeat_interval_seconds: float = 30.0,
         prompt_file: str = "object.yaml",
-        auto_track_knowledge_gaps: bool = True,
-        auto_ask_peers_on_gap: bool = True,
+        auto_track_knowledge_gaps: bool = False,
+        auto_ask_peers_on_gap: bool = False,
     ) -> None:
         self._definition = definition
         self._brain = brain
@@ -270,7 +270,7 @@ class LLMObject:
 
         if finish.knowledge_gap is not None:
             extended_outgoing = list(finish.outgoing_messages or [])
-            self._handle_knowledge_gap(finish.knowledge_gap, pending_deltas, extended_outgoing)
+            self._handle_knowledge_gap(finish.knowledge_gap, pending_deltas, extended_outgoing, skip_sender=message.sender)
             finish = ReactFinish(
                 reply=finish.reply,
                 updated_state=finish.updated_state,
@@ -482,8 +482,14 @@ class LLMObject:
         gap: KnowledgeGap,
         pending_deltas: list[StateDelta],
         outgoing: list[OutgoingMessage],
+        skip_sender: str | None = None,
     ) -> None:
-        """Record a knowledge gap in state and optionally ask peers."""
+        """Record a knowledge gap in state and optionally ask peers.
+
+        skip_sender: don't auto-ask this peer — prevents cascade loops where
+        a peer replied "I don't know" which would otherwise trigger another
+        auto-ask back to that same peer.
+        """
         if self._auto_track_knowledge_gaps:
             pending_deltas.append(StateDelta(
                 op="append",
@@ -492,6 +498,8 @@ class LLMObject:
             ))
         if self._auto_ask_peers_on_gap and self._definition.peers:
             for peer in self._definition.peers:
+                if peer.object_id == skip_sender:
+                    continue
                 outgoing.append(OutgoingMessage(
                     recipient=peer.object_id,
                     content=f"I don't know the answer to the following — do you? {gap.question}",
