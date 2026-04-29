@@ -48,11 +48,12 @@ class _Transaction:
     decrement() in its completion callback; wait() blocks until count reaches 0.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, on_result: Optional[Callable[[ProcessingResult], None]] = None) -> None:
         self._lock = threading.Lock()
         self._count = 0
         self._done = threading.Event()
         self._done.set()  # starts committed since count=0
+        self.on_result = on_result  # optional per-result callback for this transaction
 
     def increment(self) -> None:
         with self._lock:
@@ -86,6 +87,9 @@ class SystemConfig:
     max_history: int = 6         # history window per object
     # Cross-agent ReAct: include the Peer Interaction Loop section in system prompts
     react_cross_objects: bool = True
+    # Knowledge gaps: auto-track in state and ask peers
+    auto_track_knowledge_gaps: bool = True
+    auto_ask_peers_on_gap: bool = True
 
     @staticmethod
     def load(path: Path | None = None) -> "SystemConfig":
@@ -98,6 +102,7 @@ class SystemConfig:
             return SystemConfig()
         hb = data.get("heartbeat", {})
         lim = data.get("limits", {})
+        kg = data.get("knowledge_gaps", {})
         return SystemConfig(
             heartbeat_enabled=bool(hb.get("enabled", False)),
             heartbeat_interval_seconds=float(hb.get("interval_seconds", 30.0)),
@@ -106,6 +111,8 @@ class SystemConfig:
             max_chain_depth=int(lim.get("max_chain_depth", 10)),
             max_history=int(lim.get("max_history", 6)),
             react_cross_objects=bool(data.get("react_cross_objects", True)),
+            auto_track_knowledge_gaps=bool(kg.get("enabled", True)),
+            auto_ask_peers_on_gap=bool(kg.get("ask_peers", True)),
         )
 
 
@@ -132,8 +139,11 @@ class Runtime:
         self._max_tool_rounds = cfg.max_tool_rounds
         self._max_history = cfg.max_history
         self._react_cross_objects = cfg.react_cross_objects
+        self._auto_track_knowledge_gaps = cfg.auto_track_knowledge_gaps
+        self._auto_ask_peers_on_gap = cfg.auto_ask_peers_on_gap
         self._pending_timeout_seconds = cfg.pending_timeout_seconds
         self._heartbeat_interval_seconds = cfg.heartbeat_interval_seconds
+        self._prompt_file: str = "object.yaml"
         self._sources: dict[str, Path] = {}  # object_id -> file path
         self._modified: set[str] = set()  # object_ids with unsaved changes
         self._classes: dict[str, ObjectDefinition] = {}  # class_id -> template definition
@@ -186,6 +196,15 @@ class Runtime:
             n = self._msg_counter
             self._msg_counter += 1
         return f"{sender}-{n}"
+
+    def set_prompt_file(self, prompt_file: str) -> None:
+        """Set the object system-prompt template filename (relative to config/prompts/lnl/).
+        Must be called before loading objects."""
+        self._prompt_file = prompt_file
+
+    def set_max_history(self, max_history: int) -> None:
+        """Override the conversation history window per object. Must be called before loading objects."""
+        self._max_history = max_history
 
     # --- Loading ---
 
@@ -282,6 +301,9 @@ class Runtime:
             react_cross_objects=self._react_cross_objects,
             pending_timeout_seconds=self._pending_timeout_seconds,
             heartbeat_interval_seconds=self._heartbeat_interval_seconds,
+            prompt_file=self._prompt_file,
+            auto_track_knowledge_gaps=self._auto_track_knowledge_gaps,
+            auto_ask_peers_on_gap=self._auto_ask_peers_on_gap,
         )
         self._bus.register(obj)
         if definition.event_sources:
@@ -316,6 +338,7 @@ class Runtime:
     def send_many(
         self,
         items: list[tuple[str, str, str]],
+        on_result: Optional[Callable[[ProcessingResult], None]] = None,
     ) -> list[ProcessingResult]:
         """Dispatch multiple messages simultaneously in one transaction.
 
@@ -324,6 +347,8 @@ class Runtime:
 
         Args:
             items: list of (recipient, content, sender) tuples.
+            on_result: optional callback fired for each direct result of an input
+                message (filtered by source_message_id; cascades are excluded).
         """
         messages = [
             Message(
@@ -336,6 +361,12 @@ class Runtime:
             )
             for recipient, content, sender in items
         ]
+        if on_result is not None:
+            input_ids = {m.id for m in messages}
+            def _filtered(result: ProcessingResult, _ids: set = input_ids, _cb = on_result) -> None:
+                if result.source_message_id in _ids:
+                    _cb(result)
+            return self._dispatch(messages, on_result=_filtered)
         return self._dispatch(messages)
 
     def process_pending(self) -> list[ProcessingResult]:
@@ -458,6 +489,10 @@ class Runtime:
         if self._on_result_callback:
             self._on_result_callback(result)
 
+        txn = self._current_transaction
+        if txn is not None and txn.on_result is not None:
+            txn.on_result(result)
+
         obj_id = result.object_id
 
         logger.debug(
@@ -559,6 +594,7 @@ class Runtime:
     def _dispatch(
         self,
         messages: list[Message],
+        on_result: Optional[Callable[[ProcessingResult], None]] = None,
     ) -> list[ProcessingResult]:
         """Dispatch messages into the network and block until the transaction commits.
 
@@ -567,7 +603,7 @@ class Runtime:
         Transactions are serialized via _dispatch_lock — only one is in-flight at a time.
         """
         with self._dispatch_lock:
-            transaction = _Transaction()
+            transaction = _Transaction(on_result=on_result)
             self._current_transaction = transaction
             with self._awaiting_lock:
                 self._awaiting_reply.clear()

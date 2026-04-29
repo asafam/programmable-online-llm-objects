@@ -1280,21 +1280,22 @@ async def _execute_tc_async(
                 lookup = single_agent_id or evt.recipient
                 h = evt_handles.get(lookup)
                 if h is None:
-                    return evt, None
+                    return evt, None, 0.0
                 content = f"[Event from {evt.source} at {evt.when}]: {evt.input}"
+                t_evt = time.time()
                 try:
                     res = await h.execute(content)
-                    return evt, res
+                    return evt, res, (time.time() - t_evt) * 1000
                 except Exception as exc:
-                    return evt, exc
+                    return evt, exc, (time.time() - t_evt) * 1000
 
             t0 = time.time()
             if single_agent_id:
                 # Single-agent uses one shared session — concurrent calls race on it
                 # and drop the connection. Run sequentially instead.
-                pairs = [await _one(e) for e in group]
+                pairs = [await _one(e) for e in batch]
             else:
-                pairs = await asyncio.gather(*[_one(e) for e in group])
+                pairs = await asyncio.gather(*[_one(e) for e in batch])
             lat_ms = (time.time() - t0) * 1000
 
             if mock_server:
@@ -1318,13 +1319,16 @@ async def _execute_tc_async(
                             parts.append(f"[{obj.object_id}]:\n{text}")
                 batch_state = "\n\n".join(parts)
 
-            for evt, res in pairs:
+            for evt, res, evt_lat_ms in pairs:
+                # In single-agent mode evt_lat_ms is the individual call time.
+                # In multi-agent mode all calls ran simultaneously so use batch time.
+                display_lat = evt_lat_ms if single_agent_id else lat_ms
                 if evt.expect is None:
                     continue
                 if isinstance(res, Exception) or res is None:
                     event_results.append(EventResult(
                         event_id=evt.id, passed=False, reasoning=f"Dispatch error: {res}",
-                        role=evt.role, latency_ms=lat_ms,
+                        role=evt.role, latency_ms=display_lat,
                     ))
                     continue
                 agent_out = res.content if res.success else f"(error: {res.content})"
@@ -1335,11 +1339,11 @@ async def _execute_tc_async(
                 )
                 passed, reasoning, _votes, _in_tok, _out_tok = harness.evaluate_assertion(
                     evt.expect.action, evidence, ctx)
-                tqdm.write(f"    {evt.id} {'✓' if passed else '✗'} {lat_ms/1000:.1f}s [conc]  {reasoning[:100]}")
+                tqdm.write(f"    {evt.id} {'✓' if passed else '✗'} {display_lat/1000:.1f}s [conc]  {reasoning[:100]}")
                 event_results.append(EventResult(
                     event_id=evt.id, passed=passed, reasoning=reasoning,
                     expected=evt.expect.action, evidence=evidence,
-                    prior_context=ctx, latency_ms=lat_ms,
+                    prior_context=ctx, latency_ms=display_lat,
                     role=evt.role,
                     judge_input_tokens=_in_tok, judge_output_tokens=_out_tok,
                     judge_votes=_votes,
@@ -2129,6 +2133,7 @@ async def _run_all_tcs_concurrent(
                                     events=event_results, modifications=mod_results,
                                     pass_rate=sum(1 for e in event_results if e.passed) / len(event_results) if event_results else None,
                                     elapsed_ms=tc_elapsed_ms,
+                                    error_type="timeout",
                                 )
                                 async with results_lock:
                                     all_tc_results.append(tc_result)
@@ -2280,6 +2285,48 @@ def _print_summary(summary, output_path: Optional[Path] = None, elapsed_s: Optio
           f"  (mean/event: {summary.mean_event_input_tokens:.0f} in / {summary.mean_event_output_tokens:.0f} out)")
     print(f"Judge tokens:        {summary.total_judge_input_tokens:,} in / {summary.total_judge_output_tokens:,} out"
           f"  (mean/event: {summary.total_judge_input_tokens/n_events:.0f} in / {summary.total_judge_output_tokens/n_events:.0f} out)")
+
+
+def _warn_continuation_mismatch(output_path: Path, args: argparse.Namespace) -> None:
+    GUARDED = [
+        ("model",         lambda a: getattr(a, "model", None)),
+        ("judge_model",   lambda a: getattr(a, "judge_model", None) or getattr(a, "model", None)),
+        ("runs",          lambda a: getattr(a, "runs", None)),
+        ("concurrency",   lambda a: getattr(a, "concurrency", None)),
+        ("modifications", lambda a: getattr(a, "modifications", None)),
+        ("seed",          lambda a: getattr(a, "seed", None)),
+        ("limit",         lambda a: getattr(a, "limit", None)),
+        ("timeout",       lambda a: getattr(a, "timeout", None)),
+    ]
+    try:
+        with open(output_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                d = json.loads(line)
+                params = d.get("params") if d.get("type") == "meta" else None
+                if params is None:
+                    continue
+                mismatches = []
+                for field, get_current in GUARDED:
+                    orig = params.get(field)
+                    curr = get_current(args)
+                    if orig is not None and curr is not None and orig != curr:
+                        mismatches.append(f"  {field}: original={orig!r}  current={curr!r}")
+                if mismatches:
+                    print("\n⚠️  WARNING: continuation params differ from original run:")
+                    for m in mismatches:
+                        print(m)
+                    ans = input("\nContinue anyway? [y/N] ").strip().lower()
+                    if ans != "y":
+                        raise SystemExit("Aborted by user.")
+                    print()
+                break
+    except SystemExit:
+        raise
+    except Exception:
+        pass
 
 
 def run(args: argparse.Namespace) -> Path:
@@ -2458,16 +2505,22 @@ def run(args: argparse.Namespace) -> Path:
     completed: set[tuple[int, int]] = set()  # (tc_index, run_index)
     infra_rerun_count = 0
     if args.output.exists():
+        timeout_rerun_count = 0
         for r in _load_tc_results(args.output):
             if r.error_type == "infra":
                 infra_rerun_count += 1
                 continue  # exclude from completed → will be re-run
+            if r.error_type == "timeout":
+                timeout_rerun_count += 1
+                continue  # exclude from completed → will be re-run with higher timeout
             completed.add((r.tc_index, r.run_index))
             all_tc_results.append(r)
         if completed:
             print(f"Resuming: {len(completed)} run(s) already done, skipping.")
         if infra_rerun_count:
             print(f"Re-running {infra_rerun_count} infra-failed TC(s) (pairing/network/terminated).")
+        if timeout_rerun_count:
+            print(f"Re-running {timeout_rerun_count} timed-out TC(s).")
 
     # Serialize all runtime params (including defaults) for the metadata header
     def _serialize_arg(v: object) -> object:
@@ -2476,6 +2529,9 @@ def run(args: argparse.Namespace) -> Path:
         return v
 
     run_params = {k: _serialize_arg(v) for k, v in vars(args).items()}
+    # Store the resolved judge model (args.judge_model may be None, defaulting to agent model)
+    run_params["judge_model"] = judge_model
+    run_params["judge_provider"] = judge_provider
     meta_record = {
         "type": "meta",
         "timestamp": datetime.now().isoformat(),
@@ -2483,6 +2539,8 @@ def run(args: argparse.Namespace) -> Path:
         "params": run_params,
     }
 
+    if completed:
+        _warn_continuation_mismatch(args.output, args)
     concurrency = len(workers) if workers else getattr(args, "parallel", 1)
     file_mode = "a" if completed else "w"
 

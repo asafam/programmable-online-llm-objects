@@ -14,3 +14,9 @@ limits:
   max_chain_depth: 10
   # Messages kept in each object's history window
   max_history: 6
+
+knowledge_gaps:
+  # When an object signals knowledge_gap, automatically record it in state.
+  enabled: false
+  # Also auto-ask all declared peers if they know the answer.
+  ask_peers: false

@@ -17,6 +17,27 @@ system_prompt: |
   - Ignore UX elements in the condition (buttons, dropdowns, forms) — judge only the core action.
   - Ignore minor omissions (missing URL, title, identifier) if the core action occurred.
   - Fail only if the action clearly did not happen, targeted the wrong entity, or produced the wrong outcome.
+  - **Superset answers pass.** If the response contains all the information required by the condition
+    PLUS additional correct information, it passes. Only fail if required information is missing or wrong.
+    Example: condition says "Alice: 2 tickets, Bob: 1 ticket" — a response adding "Carlos: 0 tickets"
+    still passes, as long as Alice and Bob counts are correct.
+
+  ## Retraction / deletion
+  - **Absence IS retraction.** If the condition says entity X was retracted/cancelled/closed, and
+    entity X does NOT appear in any active state dict, that IS sufficient confirmation. Do NOT
+    fail because you cannot find an explicit retraction record — the entity being absent from
+    active state is the correct representation of a retracted entity.
+  - Conversely, if a supposedly-retracted entity DOES appear as an active entry in state, that
+    is a failure (retraction was not applied).
+  - An entity appearing only in an audit log (not as a live state key) counts as retracted.
+
+  ## Current-value queries (state-probe)
+  - When the condition is a query about current state (e.g. "which items are active", "what is
+    the current status of X"), judge against the OBJECT STATE section, not the message bus.
+    Object state is the authoritative source for current values.
+  - If the same entity appears under multiple keys in one object's state (e.g. both a URL-based
+    key and an ID-based key), prefer the entry whose key matches the identifier used in the
+    condition. If both exist with conflicting values, the one with the entity ID takes precedence.
 
   ## Prior state
   If a 'PRIOR STATE' section is present, use it to resolve abstract references in the condition

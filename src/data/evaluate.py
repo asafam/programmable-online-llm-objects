@@ -334,6 +334,8 @@ def _execute_test_case_inner(
     concurrency: int = 0,
     concurrency_seed: int = 42,
     max_modifications: Optional[int] = None,
+    object_prompt: str = "object.yaml",
+    max_history: Optional[int] = None,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase and return event + modification results."""
     from src.lnl.gateway import EventGateway
@@ -373,6 +375,10 @@ def _execute_test_case_inner(
     from src.lnl.runtime import SystemConfig
     sys_cfg = SystemConfig(max_tool_rounds=max_tool_rounds)
     rt = Runtime(brain, tool_registry=tool_registry, max_chain_depth=max_chain_depth, system_config=sys_cfg)
+    if object_prompt != "object.yaml":
+        rt.set_prompt_file(object_prompt)
+    if max_history is not None:
+        rt.set_max_history(max_history)
     if debug_messages and progress_callback:
         rt.set_message_listener(lambda msg: (_print_message(msg), progress_callback(msg)))
     elif debug_messages:
@@ -624,7 +630,8 @@ def _run_test_case_timeline(
         lat = (time.monotonic() - t0) * 1000
         return res, tout, lat, log_snap, exec_s
 
-    def _record_event_result(evt, res, timed_out, lat_ms, log_snap, exec_s, ctx: str = ""):
+    def _record_event_result(evt, res, timed_out, lat_ms, log_snap, exec_s, ctx: str = "",
+                             _in_tok: int = None, _out_tok: int = None):
         if timed_out:
             event_results.append(EventResult(
                 event_id=evt.id,
@@ -636,8 +643,8 @@ def _run_test_case_timeline(
                 latency_ms=lat_ms,
             ))
         else:
-            in_tok = sum(r.metrics.input_tokens for r in res if r.metrics)
-            out_tok = sum(r.metrics.output_tokens for r in res if r.metrics)
+            in_tok  = _in_tok  if _in_tok  is not None else sum(r.metrics.input_tokens  for r in res if r.metrics)
+            out_tok = _out_tok if _out_tok is not None else sum(r.metrics.output_tokens for r in res if r.metrics)
             bus_msgs = rt.message_log[log_snap:]
             new_calls = _new_tool_calls(execs, exec_s)
             evidence = gather_evidence(rt, res, evt.recipient, bus_messages=bus_msgs, tool_calls=new_calls)
@@ -677,22 +684,42 @@ def _run_test_case_timeline(
         exec_s = _snapshot_logs(execs)
         t0 = time.monotonic()
 
+        # Per-event latency: on_result fires (in delivery order) once per input
+        # message as each drain iteration completes. Cascades are filtered out by
+        # source_message_id inside send_many/dispatch_many.
+        evt_latencies: list[float] = []
+        def _record_lat(_result) -> None:
+            evt_latencies.append((time.monotonic() - t0) * 1000)
+
         if all(e.call_type == "send_event" for e in batch):
             items = [
                 (e.recipient, json.dumps({"system": e.source, "content": e.input}), e.source)
                 for e in batch
             ]
-            res, tout = _run_with_timeout(lambda its=items: gw.dispatch_many(its), timeout_s)
+            res, tout = _run_with_timeout(
+                lambda its=items: gw.dispatch_many(its, on_result=_record_lat), timeout_s
+            )
         else:
             items = [(e.recipient, e.input, e.source) for e in batch]
-            res, tout = _run_with_timeout(lambda its=items: rt.send_many(its), timeout_s)
+            res, tout = _run_with_timeout(
+                lambda its=items: rt.send_many(its, on_result=_record_lat), timeout_s
+            )
 
         lat_ms = (time.monotonic() - t0) * 1000
         new_calls = _new_tool_calls(execs, exec_s)
 
-        for evt in batch:
+        # Divide batch token totals equally across events: the combined res list
+        # contains results from all N events, so summing it per-event would
+        # over-attribute by N×.
+        n = len(batch)
+        batch_in_tok  = sum(r.metrics.input_tokens  for r in (res or []) if r.metrics)
+        batch_out_tok = sum(r.metrics.output_tokens for r in (res or []) if r.metrics)
+
+        for i, evt in enumerate(batch):
+            evt_lat = evt_latencies[i] if i < len(evt_latencies) else lat_ms
             evt_ctx = _build_event_ctx(evt, active_mods, ctx)
-            _record_event_result(evt, res or [], tout, lat_ms, log_snap, exec_s, evt_ctx)
+            _record_event_result(evt, res or [], tout, evt_lat, log_snap, exec_s, evt_ctx,
+                                 _in_tok=batch_in_tok // n, _out_tok=batch_out_tok // n)
             if on_event_result:
                 on_event_result(event_results[-1], False)
 
@@ -774,6 +801,8 @@ def execute_test_case(
     concurrency: int = 0,
     concurrency_seed: int = 42,
     max_modifications: Optional[int] = None,
+    object_prompt: str = "object.yaml",
+    max_history: Optional[int] = None,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase with a per-event timeout (seconds).
 
@@ -789,6 +818,8 @@ def execute_test_case(
         concurrency: Number of concurrent events to fire per group (0 = sequential).
         concurrency_seed: Seed for sampling concurrent events from each group (default 42).
         max_modifications: Limit evaluation to the first N modifications (None = all).
+        object_prompt: Object system-prompt template filename (relative to config/prompts/lnl/).
+        max_history: Override conversation history window per object (None = use default 6).
     """
     return _execute_test_case_inner(
         tc, brain, harness,
@@ -806,6 +837,8 @@ def execute_test_case(
         concurrency=concurrency,
         concurrency_seed=concurrency_seed,
         max_modifications=max_modifications,
+        object_prompt=object_prompt,
+        max_history=max_history,
     )
 
 
@@ -888,6 +921,48 @@ def _print_summary(summary, output_path=None, elapsed_s=None) -> None:
           f"  (mean/event: {summary.mean_event_input_tokens:.0f} in / {summary.mean_event_output_tokens:.0f} out)")
     print(f"Judge tokens:        {summary.total_judge_input_tokens:,} in / {summary.total_judge_output_tokens:,} out"
           f"  (mean/event: {summary.total_judge_input_tokens/n_events:.0f} in / {summary.total_judge_output_tokens/n_events:.0f} out)")
+
+
+def _warn_continuation_mismatch(output_path: Path, args: argparse.Namespace) -> None:
+    """Read the original run_config from an existing results file and warn if key
+    params differ from the current invocation. Runs only when continuing a run."""
+    GUARDED = [
+        ("model",         lambda a: getattr(a, "model", None)),
+        ("judge_model",   lambda a: getattr(a, "judge_model", None) or getattr(a, "model", None)),
+        ("runs",          lambda a: getattr(a, "runs", None)),
+        ("concurrency",   lambda a: getattr(a, "concurrency", None)),
+        ("modifications", lambda a: getattr(a, "modifications", None)),
+        ("seed",          lambda a: getattr(a, "seed", None)),
+        ("limit",         lambda a: getattr(a, "limit", None)),
+        ("timeout_s",     lambda a: getattr(a, "timeout", None)),
+    ]
+    try:
+        with open(output_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                d = json.loads(line)
+                if d.get("record_type") == "run_config":
+                    mismatches = []
+                    for field, get_current in GUARDED:
+                        orig = d.get(field)
+                        curr = get_current(args)
+                        if orig is not None and curr is not None and orig != curr:
+                            mismatches.append(f"  {field}: original={orig!r}  current={curr!r}")
+                    if mismatches:
+                        print("\n⚠️  WARNING: continuation params differ from original run:")
+                        for m in mismatches:
+                            print(m)
+                        ans = input("\nContinue anyway? [y/N] ").strip().lower()
+                        if ans != "y":
+                            raise SystemExit("Aborted by user.")
+                        print()
+                    break
+    except SystemExit:
+        raise
+    except Exception:
+        pass
 
 
 def run(args: argparse.Namespace) -> Path:
@@ -1078,6 +1153,7 @@ def run(args: argparse.Namespace) -> Path:
         n_done = len(completed) + len(completed_legacy)
         if n_done:
             print(f"Resuming: {n_done} runs already complete, continuing from checkpoint.")
+            _warn_continuation_mismatch(args.output, args)
     file_mode = "a" if (completed or completed_legacy) else "w"
 
     total_runs = len(test_cases) * args.runs
@@ -1102,8 +1178,10 @@ def run(args: argparse.Namespace) -> Path:
     _snapshot_registry_lock = threading.Lock()
 
     # Shared counters updated across all concurrent workers. Approximate (no lock) — display-only.
-    _event_counter: list[int] = [0]   # judge-evaluated events (updates postfix per event)
-    _msg_counter: list[int] = [0]     # bus messages (updates postfix during TC execution)
+    # Seeded from already-completed results so continuation runs accumulate correctly.
+    _event_counter: list[int] = [sum(len(r.events) for r in all_tc_results)]
+    _in_tok_counter: list[int] = [sum(e.input_tokens or 0 for r in all_tc_results for e in r.events)]
+    _out_tok_counter: list[int] = [sum(e.output_tokens or 0 for r in all_tc_results for e in r.events)]
     _pbar_holder: list = [None]       # set to the tqdm pbar once the loop starts
 
     def _run_one(tc_idx: int, tc: TestCase, run_idx: int) -> Optional[TestCaseResult]:
@@ -1156,8 +1234,10 @@ def run(args: argparse.Namespace) -> Path:
             else:
                 _emit(f"  {'✓'} {result.event_id}{tag}{lat}: {result.reasoning[:80]}")
             _event_counter[0] += 1
+            _in_tok_counter[0] += result.input_tokens or 0
+            _out_tok_counter[0] += result.output_tokens or 0
             if _pbar_holder[0] is not None:
-                _pbar_postfix(_pbar_holder[0], all_tc_results, _event_counter[0], _msg_counter[0])
+                _pbar_postfix(_pbar_holder[0], all_tc_results, _event_counter[0], _in_tok_counter[0], _out_tok_counter[0])
 
         def _on_mod_applied(mod, _tc=tc):
             _emit(
@@ -1167,9 +1247,6 @@ def run(args: argparse.Namespace) -> Path:
 
         def _on_message(_msg, _label=label, _count=msg_count, _start=tc_start):
             _count[0] += 1
-            _msg_counter[0] += 1
-            if _pbar_holder[0] is not None:
-                _pbar_postfix(_pbar_holder[0], all_tc_results, _event_counter[0], _msg_counter[0])
 
         try:
             event_results, mod_results = execute_test_case(
@@ -1187,6 +1264,8 @@ def run(args: argparse.Namespace) -> Path:
                 concurrency=getattr(args, "concurrency", 0),
                 concurrency_seed=getattr(args, "seed", None) or 42,
                 max_modifications=getattr(args, "modifications", None),
+                object_prompt=getattr(args, "object_prompt", "object.yaml"),
+                max_history=getattr(args, "max_history", None),
             )
         finally:
             # Always store snapshot and signal waiting workers — even on failure —
@@ -1259,6 +1338,8 @@ def run(args: argparse.Namespace) -> Path:
         mock_config_paths=[str(p) for p in (getattr(args, "mock_config", None) or [])],
         tc_filter=getattr(args, "tc", None),
         limit=getattr(args, "limit", None),
+        concurrency=getattr(args, "concurrency", None),
+        modifications=getattr(args, "modifications", None),
         is_continuation=is_continuation,
     )
 
@@ -1288,7 +1369,7 @@ def run(args: argparse.Namespace) -> Path:
         with tqdm(total=total_runs, initial=n_skipped, unit="run", desc="Evaluating") as pbar:
             _pbar_holder[0] = pbar
             if all_tc_results:  # continuation — show running metrics immediately
-                _pbar_postfix(pbar, all_tc_results, _event_counter[0], _msg_counter[0])
+                _pbar_postfix(pbar, all_tc_results, _event_counter[0], _in_tok_counter[0], _out_tok_counter[0])
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 for phase_label, phase_runs in run_phases:
                     if not phase_runs:
@@ -1308,7 +1389,7 @@ def run(args: argparse.Namespace) -> Path:
                                 f.write(tc_result.model_dump_json() + "\n")
                                 f.flush()
                                 all_tc_results.append(tc_result)
-                                _pbar_postfix(pbar, all_tc_results, _event_counter[0], _msg_counter[0])
+                                _pbar_postfix(pbar, all_tc_results, _event_counter[0], _in_tok_counter[0], _out_tok_counter[0])
                         except Exception as e:
                             tqdm.write(f"FAILED {label} run={run_idx}: {e}", file=sys.stderr)
                         pbar.update(1)
@@ -1356,7 +1437,7 @@ def _running_metrics(results: "list[TestCaseResult]") -> tuple[Optional[float], 
     return mean_pr, sample_pr
 
 
-def _pbar_postfix(pbar, results, events_done: int = 0, msgs_done: int = 0) -> None:
+def _pbar_postfix(pbar, results, events_done: int = 0, in_tok: int = 0, out_tok: int = 0) -> None:
     """Update pbar postfix with running mean + sample pass rates + live counters."""
     mean_pr, sample_pr = _running_metrics(results)
     fields: dict[str, str] = {}
@@ -1364,8 +1445,7 @@ def _pbar_postfix(pbar, results, events_done: int = 0, msgs_done: int = 0) -> No
         fields["mean"] = f"{mean_pr:.1%}"
     if sample_pr is not None:
         fields["sample"] = f"{sample_pr:.1%}"
-    fields["evts"] = str(events_done)
-    fields["msgs"] = str(msgs_done)
+    fields["tok"] = f"{in_tok//1000}k↑{out_tok//1000}k↓"
     pbar.set_postfix(refresh=False, **fields)
 
 
@@ -1666,6 +1746,11 @@ Examples:
         help="Provider for judge model (inferred from judge-model if not specified). Ignored when --llm-judge is set.",
     )
     parser.add_argument(
+        "--object-prompt",
+        default="object.yaml",
+        help="Object system-prompt template filename relative to config/prompts/lnl/ (default: object.yaml).",
+    )
+    parser.add_argument(
         "--max-tool-rounds",
         type=int,
         default=10,
@@ -1676,6 +1761,13 @@ Examples:
         type=int,
         default=20,
         help="Max message chain depth per event (default: 20). Increase for workflows with many round-trips.",
+    )
+    parser.add_argument(
+        "--max-history",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Override conversation history window per object (default: 6). Use 0 to disable history entirely.",
     )
     parser.add_argument(
         "--mock-config",

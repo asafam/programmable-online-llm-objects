@@ -41,6 +41,9 @@ class Event(BaseModel):
     after_mod_ids: list[str] = Field(default_factory=list)
     # IDs of modifications that must have fired before this event is evaluated.
     # Empty → baseline (no mods active). Supersedes role-based inference for multi-mod scenarios.
+    depends_on: list[str] = Field(default_factory=list)
+    # IDs of prior events whose correct processing is required to answer/judge this event.
+    # Used by state-probe TCs to condition probe accuracy on supporting events only.
     concurrent_group: Optional[str] = None
     # If set, this event belongs to a named concurrent group (e.g. "cgroup_pre_M001").
     # Events in the same group are dispatched together in one transaction at eval time.
@@ -76,6 +79,39 @@ class EventExpectations(BaseModel):
 class ConcurrentGroupEvents(BaseModel):
     """LLM output for a concurrent event group — one focused generation call per group."""
     events: list[GeneratedEvent]
+
+
+class GeneratedEventWithExpect(BaseModel):
+    """LLM output for a state-probe event — expect is included in the generation (no separate pass)."""
+    id: str
+    call_type: str
+    source: str
+    recipient: str
+    input: str
+    when: str
+    role: Optional[Literal["pre_mod", "post_mod", "irrelevant"]] = None
+    after_mod_ids: list[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list)
+    triggered_by: Optional[str] = None
+    trigger_delay_minutes: float = 0.0
+    trigger_delay_seconds: float = 0.0
+    expect: Optional[EventExpect] = None
+
+
+class StateProbeScenario(BaseModel):
+    """LLM output for a state-probe test case generation (legacy single-call)."""
+    state_events: list[GeneratedEventWithExpect]  # N state-mutating events (expect filled by LLM)
+    probe_events: list[GeneratedEventWithExpect]  # K probe questions (expect filled by LLM)
+
+
+class StateEventsList(BaseModel):
+    """Stage A output: only the N state-mutating events for a state-probe TC."""
+    state_events: list[GeneratedEventWithExpect]
+
+
+class StateProbeQuestion(BaseModel):
+    """Stage B output: one probe question of a specific type, with its supporting events."""
+    probe_event: GeneratedEventWithExpect
 
 
 class GeneratedModification(BaseModel):
@@ -291,6 +327,8 @@ class RunConfig(BaseModel):
     mock_config_paths: list[str] = Field(default_factory=list)
     tc_filter: Optional[list[str]] = None
     limit: Optional[int] = None
+    concurrency: Optional[int] = None
+    modifications: Optional[int] = None
     is_continuation: bool = False
 
 

@@ -1,6 +1,7 @@
 """LNL — Live Natural Language Programming Runtime."""
 from .types import (
     InferenceMetrics,
+    KnowledgeGap,
     LLMResponse,
     Message,
     MessageLog,
@@ -30,6 +31,7 @@ from .tools import CodeExecutor, MockToolExecutor, ToolExecutor, ToolRegistry
 __all__ = [
     # Types
     "InferenceMetrics",
+    "KnowledgeGap",
     "LLMResponse",
     "Message",
     "MessageLog",

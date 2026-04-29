@@ -19,9 +19,11 @@ from .types import (
     PLAN_TERMINAL_STATUSES,
     STEP_TERMINAL_STATUSES,
     InferenceMetrics,
+    KnowledgeGap,
     Message,
     MessageType,
     ObjectDefinition,
+    OutgoingMessage,
     PeerDeclaration,
     Plan,
     PlanStep,
@@ -33,6 +35,7 @@ from .types import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 
 class LLMObject:
@@ -49,6 +52,9 @@ class LLMObject:
         react_cross_objects: bool = True,
         pending_timeout_seconds: float = 90.0,
         heartbeat_interval_seconds: float = 30.0,
+        prompt_file: str = "object.yaml",
+        auto_track_knowledge_gaps: bool = True,
+        auto_ask_peers_on_gap: bool = True,
     ) -> None:
         self._definition = definition
         self._brain = brain
@@ -64,6 +70,9 @@ class LLMObject:
         self._react_cross_objects = react_cross_objects
         self._pending_timeout_seconds = pending_timeout_seconds
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._prompt_file = prompt_file
+        self._auto_track_knowledge_gaps = auto_track_knowledge_gaps
+        self._auto_ask_peers_on_gap = auto_ask_peers_on_gap
         # Plan state — a single active plan per object at a time. The LLM
         # reasons about steps by position (0-based) — it never authors ids.
         self._active_plan: Optional[Plan] = None
@@ -205,6 +214,7 @@ class LLMObject:
             pending_timeout_seconds=self._pending_timeout_seconds,
             heartbeat_interval_seconds=self._heartbeat_interval_seconds,
             active_plan=self.active_plan,
+            prompt_file=self._prompt_file,
         )
         messages = _build_chat_messages(sys_prompt, self._history, message)
 
@@ -257,6 +267,17 @@ class LLMObject:
 
         if finish is None:
             finish = ReactFinish(reply="")
+
+        if finish.knowledge_gap is not None:
+            extended_outgoing = list(finish.outgoing_messages or [])
+            self._handle_knowledge_gap(finish.knowledge_gap, pending_deltas, extended_outgoing)
+            finish = ReactFinish(
+                reply=finish.reply,
+                updated_state=finish.updated_state,
+                outgoing_messages=extended_outgoing,
+                updated_definition=finish.updated_definition,
+                knowledge_gap=finish.knowledge_gap,
+            )
 
         if pending_deltas:
             current = _coerce_state(self._state)
@@ -455,6 +476,27 @@ class LLMObject:
                 out.plan_step_index = asker_step_index
                 out.is_reply = True
         return outgoing
+
+    def _handle_knowledge_gap(
+        self,
+        gap: KnowledgeGap,
+        pending_deltas: list[StateDelta],
+        outgoing: list[OutgoingMessage],
+    ) -> None:
+        """Record a knowledge gap in state and optionally ask peers."""
+        if self._auto_track_knowledge_gaps:
+            pending_deltas.append(StateDelta(
+                op="append",
+                key="knowledge_gaps",
+                value={"question": gap.question, "context": gap.context, "resolved": False},
+            ))
+        if self._auto_ask_peers_on_gap and self._definition.peers:
+            for peer in self._definition.peers:
+                outgoing.append(OutgoingMessage(
+                    recipient=peer.object_id,
+                    content=f"I don't know the answer to the following — do you? {gap.question}",
+                    expects_reply=True,
+                ))
 
     def _auto_mark_step_on_reply(self, step_index: int) -> None:
         """Runtime hook: when a correlated reply arrives tagged with a step

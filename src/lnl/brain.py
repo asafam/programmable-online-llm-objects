@@ -17,6 +17,7 @@ import yaml
 
 from .types import (
     InferenceMetrics,
+    KnowledgeGap,
     LLMResponse,
     Message,
     MessageType,
@@ -183,6 +184,20 @@ LLM_REACT_SCHEMA: dict[str, Any] = {
                     },
                     "additionalProperties": False,
                 },
+                "knowledge_gap": {
+                    "type": "object",
+                    "description": (
+                        "Optional. Include ONLY when you genuinely do not know and cannot determine "
+                        "the answer from your state or tools. Omit when you can answer or infer. "
+                        "When present, the runtime records the gap and asks your peers automatically."
+                    ),
+                    "properties": {
+                        "question": {"type": "string", "description": "The specific question or topic you cannot answer."},
+                        "context": {"type": "string", "description": "Optional: what you do know, or why you're uncertain."},
+                    },
+                    "required": ["question"],
+                    "additionalProperties": False,
+                },
             },
             "required": ["reply"],
             "additionalProperties": False,
@@ -198,13 +213,16 @@ _PROMPT_CONFIG: Optional[dict] = None
 _PROMPTS_DIR = Path(__file__).parent.parent.parent / "config" / "prompts" / "lnl"
 
 
-def _load_prompt_config() -> dict:
-    """Load the prompt config from config/prompts/lnl/object.yaml."""
+def _load_prompt_config(prompt_file: str = "object.yaml") -> dict:
+    """Load the prompt config from config/prompts/lnl/<prompt_file>."""
     global _PROMPT_CONFIG
-    if _PROMPT_CONFIG is None:
-        with open(_PROMPTS_DIR / "object.yaml") as f:
-            _PROMPT_CONFIG = yaml.safe_load(f)
-    return _PROMPT_CONFIG
+    if prompt_file == "object.yaml":
+        if _PROMPT_CONFIG is None:
+            with open(_PROMPTS_DIR / prompt_file) as f:
+                _PROMPT_CONFIG = yaml.safe_load(f)
+        return _PROMPT_CONFIG
+    with open(_PROMPTS_DIR / prompt_file) as f:
+        return yaml.safe_load(f)
 
 
 def _message_label(msg: Message) -> str:
@@ -269,9 +287,10 @@ def build_system_prompt(
     pending_timeout_seconds: float = 90.0,
     heartbeat_interval_seconds: float = 30.0,
     active_plan: Optional["Plan"] = None,  # type: ignore[name-defined]
+    prompt_file: str = "object.yaml",
 ) -> str:
     """Build the system prompt from the YAML template and an ObjectDefinition."""
-    config = _load_prompt_config()
+    config = _load_prompt_config(prompt_file)
     template = config["system_prompt"]
 
     peers = ""
@@ -1011,11 +1030,19 @@ def _parse_react_step(raw: dict) -> ReactStep:
     updated_def = f_data.get("updated_definition") or None
     if updated_def == {}:
         updated_def = None
+    raw_gap = f_data.get("knowledge_gap") or None
+    knowledge_gap = None
+    if isinstance(raw_gap, dict) and raw_gap.get("question"):
+        knowledge_gap = KnowledgeGap(
+            question=raw_gap["question"],
+            context=raw_gap.get("context", ""),
+        )
     finish = ReactFinish(
         reply=f_data.get("reply", ""),
         updated_state=updated_state,
         outgoing_messages=outgoing,
         updated_definition=updated_def,
+        knowledge_gap=knowledge_gap,
     )
     return ReactStep(
         thought=thought, action="finish",

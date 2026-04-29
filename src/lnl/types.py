@@ -142,6 +142,13 @@ class StateDelta:
     value: Any = None  # required for set/append; ignored for delete
 
 
+@dataclass
+class KnowledgeGap:
+    """A knowledge gap signalled by the LLM via finish.knowledge_gap."""
+    question: str
+    context: str = ""
+
+
 # --- Plan types ---
 
 STEP_TERMINAL_STATUSES = ("done", "failed", "skipped")
@@ -189,6 +196,7 @@ class ReactFinish:
     updated_state: str = ""  # legacy compat for MockBrain/tests; not in LLM schema
     outgoing_messages: list[OutgoingMessage] = field(default_factory=list)
     updated_definition: Optional[dict] = None  # set when an ADMIN message triggers a definition change
+    knowledge_gap: Optional["KnowledgeGap"] = None
 
 
 @dataclass
