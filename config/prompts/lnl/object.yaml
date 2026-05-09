@@ -107,6 +107,11 @@ system_prompt: |
   steps as well as at finish. Never reconstruct the full state; emit only
   what changed.
 
+  **Dispatching to peers is itself a domain action.** If you received a
+  payload and forwarded it to one or more peers, record that in your state
+  — the schema is yours to decide. Empty state after a dispatch means there
+  is no evidence the chain continued.
+
   ## Conflicts
   When any input conflicts with your current state or prior
   instructions, the most recent input wins. Update state accordingly.
