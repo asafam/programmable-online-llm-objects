@@ -409,6 +409,7 @@ class OpenAIBrain(LLMBrain):
             "model": self.model,
             "messages": messages,
             "temperature": self._temperature,
+            "max_completion_tokens": 32000,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -450,6 +451,7 @@ class OpenAIBrain(LLMBrain):
             "model": self.model,
             "messages": messages,
             "temperature": self._temperature,
+            "max_completion_tokens": 32000,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {"name": "react_step", "schema": LLM_REACT_SCHEMA},
@@ -478,6 +480,138 @@ class OpenAIBrain(LLMBrain):
         return _parse_react_step(raw), metrics
 
 
+class AzureBrain(LLMBrain):
+    """Brain backed by Azure OpenAI."""
+
+    def __init__(
+        self,
+        model: str = "gpt-5.4-mini",
+        api_key: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        api_version: Optional[str] = None,
+        temperature: float = 0.0,
+        seed: Optional[int] = 42,
+    ) -> None:
+        try:
+            from openai import AzureOpenAI
+        except ImportError:
+            raise ImportError("openai package required. Install with: pip install openai")
+
+        self.model = model
+        self._temperature = temperature
+        self._seed = seed
+        resolved_endpoint = endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
+        if not resolved_endpoint:
+            raise ValueError("Azure endpoint required. Set AZURE_OPENAI_ENDPOINT or pass endpoint=.")
+        resolved_version = api_version or os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+        resolved_key = api_key or os.environ.get("AZURE_OPENAI_API_KEY")
+        if not resolved_key:
+            raise ValueError("Azure API key required. Set AZURE_OPENAI_API_KEY or pass api_key=.")
+        self._client = AzureOpenAI(
+            api_key=resolved_key,
+            azure_endpoint=resolved_endpoint,
+            api_version=resolved_version,
+        )
+
+    def call(
+        self,
+        messages: list[dict],
+        schema: dict,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[LLMResponse, InferenceMetrics]:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self._temperature,
+            "max_completion_tokens": 32000,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "llm_response",
+                    "schema": schema,
+                },
+            },
+        }
+        if self._seed is not None:
+            kwargs["seed"] = self._seed
+
+        t0 = time.time()
+        try:
+            resp = self._client.chat.completions.create(**kwargs)
+        except Exception as e:
+            self._raise_if_content_filter(e, object_id)
+            raise
+        latency_ms = (time.time() - t0) * 1000
+
+        metrics = InferenceMetrics(
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                f"Azure OpenAI response truncated (finish_reason=length) for object {object_id}. "
+                "The output exceeded the model's max_tokens limit."
+            )
+        raw = _safe_json_loads(choice.message.content or "{}")
+        return _parse_llm_result(raw), metrics
+
+    def react_call(
+        self,
+        messages: list[dict],
+        *,
+        object_id: str | None = None,
+    ) -> tuple[ReactStep, InferenceMetrics]:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self._temperature,
+            "max_completion_tokens": 32000,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "react_step", "schema": LLM_REACT_SCHEMA},
+            },
+        }
+        if self._seed is not None:
+            kwargs["seed"] = self._seed
+
+        t0 = time.time()
+        try:
+            resp = self._client.chat.completions.create(**kwargs)
+        except Exception as e:
+            self._raise_if_content_filter(e, object_id)
+            raise
+        latency_ms = (time.time() - t0) * 1000
+
+        metrics = InferenceMetrics(
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                f"Azure OpenAI response truncated (finish_reason=length) for object {object_id}. "
+                "The output exceeded the model's max_tokens limit."
+            )
+        raw = _safe_json_loads(choice.message.content or "{}")
+        return _parse_react_step(raw), metrics
+
+    @staticmethod
+    def _raise_if_content_filter(exc: Exception, object_id: str | None) -> None:
+        body = getattr(exc, "body", None) or {}
+        code = (body.get("error") or {}).get("code") if isinstance(body, dict) else None
+        if code == "content_filter":
+            raise RuntimeError(
+                f"Azure content filter triggered for object {object_id} (jailbreak detection). Skipping."
+            ) from None
+
+
 class AnthropicBrain(LLMBrain):
     """Brain backed by the Anthropic API."""
 
@@ -486,6 +620,7 @@ class AnthropicBrain(LLMBrain):
         model: str = "claude-sonnet-4-20250514",
         api_key: Optional[str] = None,
         temperature: float = 0.0,
+        thinking: str | None = None,
     ) -> None:
         try:
             import anthropic as _anthropic
@@ -494,10 +629,16 @@ class AnthropicBrain(LLMBrain):
 
         self.model = model
         self._temperature = temperature
+        self._thinking = thinking
         self._client = _anthropic.Anthropic(
             api_key=api_key or os.environ["ANTHROPIC_API_KEY"],
             timeout=600.0,  # 10 min HTTP timeout — prevents httpx.ReadTimeout on slow responses
         )
+
+    def _thinking_kwargs(self) -> dict:
+        if self._thinking is not None:
+            return {"thinking": {"type": self._thinking}}
+        return {}
 
     @staticmethod
     def _enforce_strict_schema(schema: dict) -> None:
@@ -546,6 +687,7 @@ class AnthropicBrain(LLMBrain):
                     "schema": strict_schema,
                 },
             },
+            **self._thinking_kwargs(),
         )
         latency_ms = (time.time() - t0) * 1000
 
@@ -604,6 +746,7 @@ class AnthropicBrain(LLMBrain):
                         "schema": strict_schema,
                     },
                 },
+                **self._thinking_kwargs(),
             )
         except Exception as e:
             # output_config may be unsupported for this model/version — fall back to
@@ -619,6 +762,7 @@ class AnthropicBrain(LLMBrain):
                     temperature=self._temperature,
                     system=sys_prompt,
                     messages=user_messages,
+                    **self._thinking_kwargs(),
                 )
             else:
                 raise

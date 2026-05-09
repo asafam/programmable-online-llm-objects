@@ -336,6 +336,7 @@ def _execute_test_case_inner(
     max_modifications: Optional[int] = None,
     object_prompt: str = "object.yaml",
     max_history: Optional[int] = None,
+    tracked_harness=None,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase and return event + modification results."""
     from src.lnl.gateway import EventGateway
@@ -406,6 +407,7 @@ def _execute_test_case_inner(
         concurrency=concurrency,
         concurrency_seed=concurrency_seed,
         max_modifications=max_modifications,
+        tracked_harness=tracked_harness,
     )
 
 
@@ -505,6 +507,7 @@ def _run_test_case_timeline(
     concurrency: int = 0,       # number of concurrent events per group (0 = sequential)
     concurrency_seed: int = 42, # seed for sampling concurrent events from each group
     max_modifications: Optional[int] = None,  # limit to first N modifications (None = all)
+    tracked_harness=None,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Execute steps and timeline events against a live runtime."""
     event_results: list[EventResult] = []
@@ -632,6 +635,13 @@ def _run_test_case_timeline(
 
     def _record_event_result(evt, res, timed_out, lat_ms, log_snap, exec_s, ctx: str = "",
                              _in_tok: int = None, _out_tok: int = None):
+        if evt.expect is None:
+            return  # background event — no judgment
+        active_harness = (
+            tracked_harness
+            if tracked_harness is not None and getattr(evt, "role", None) == "irrelevant"
+            else harness
+        )
         if timed_out:
             event_results.append(EventResult(
                 event_id=evt.id,
@@ -647,8 +657,12 @@ def _run_test_case_timeline(
             out_tok = _out_tok if _out_tok is not None else sum(r.metrics.output_tokens for r in res if r.metrics)
             bus_msgs = rt.message_log[log_snap:]
             new_calls = _new_tool_calls(execs, exec_s)
-            evidence = gather_evidence(rt, res, evt.recipient, bus_messages=bus_msgs, tool_calls=new_calls)
-            passed, reasoning, votes, j_in_tok, j_out_tok = harness.evaluate_assertion(evt.expect.action, evidence, ctx)
+            if active_harness is tracked_harness:
+                # Memory-fidelity judge: only object states, no tool calls / bus traffic
+                evidence = gather_evidence(rt, res, evt.recipient)
+            else:
+                evidence = gather_evidence(rt, res, evt.recipient, bus_messages=bus_msgs, tool_calls=new_calls)
+            passed, reasoning, votes, j_in_tok, j_out_tok = active_harness.evaluate_assertion(evt.expect.action, evidence, ctx)
             event_results.append(EventResult(
                 event_id=evt.id,
                 passed=passed,
@@ -803,6 +817,7 @@ def execute_test_case(
     max_modifications: Optional[int] = None,
     object_prompt: str = "object.yaml",
     max_history: Optional[int] = None,
+    tracked_harness=None,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase with a per-event timeout (seconds).
 
@@ -839,6 +854,7 @@ def execute_test_case(
         max_modifications=max_modifications,
         object_prompt=object_prompt,
         max_history=max_history,
+        tracked_harness=tracked_harness,
     )
 
 
@@ -1013,6 +1029,10 @@ def run(args: argparse.Namespace) -> Path:
                     sys.exit(1)
                 selected.extend(matched)
         test_cases = selected
+    elif getattr(args, "sample", None):
+        import random as _random
+        _rng = _random.Random(getattr(args, "sample_seed", None))
+        test_cases = _rng.sample(test_cases, min(args.sample, len(test_cases)))
     elif args.limit:
         test_cases = test_cases[: args.limit]
 
@@ -1086,17 +1106,23 @@ def run(args: argparse.Namespace) -> Path:
         if provider == "openai":
             from src.lnl.brain import OpenAIBrain
             return OpenAIBrain(model=model, seed=seed)
+        elif provider == "azure":
+            from src.lnl.brain import AzureBrain
+            return AzureBrain(model=model)
         elif provider == "google":
             from src.lnl.brain import GeminiBrain
             return GeminiBrain(model=model)
         else:
             from src.lnl.brain import AnthropicBrain
-            return AnthropicBrain(model=model)
+            return AnthropicBrain(model=model, thinking=getattr(args, "thinking", None))
 
     def _make_judge(provider, model):
         if provider == "openai":
             from src.lnl.judge import OpenAIJudge
             return OpenAIJudge(model=model)
+        elif provider == "azure":
+            from src.lnl.judge import AzureJudge
+            return AzureJudge(model=model)
         elif provider == "google":
             from src.lnl.judge import GeminiJudge
             return GeminiJudge(model=model)
@@ -1115,6 +1141,17 @@ def run(args: argparse.Namespace) -> Path:
 
     from src.lnl.benchmark import BenchmarkHarness
     harness = BenchmarkHarness(brain=brain, judge=judge)
+
+    # Optional memory-fidelity judge for tracked events (probe-dataset TCs).
+    tracked_harness: Optional["BenchmarkHarness"] = None
+    tracked_judge_path = getattr(args, "tracked_judge", None)
+    if tracked_judge_path:
+        import yaml as _yaml
+        tracked_prompt = _yaml.safe_load(Path(tracked_judge_path).read_text())["system_prompt"].strip()
+        tracked_judge_inst = _make_judge(judge_provider, judge_model)
+        tracked_judge_inst._system_prompt = tracked_prompt
+        tracked_harness = BenchmarkHarness(brain=brain, judge=tracked_judge_inst)
+        print(f"Tracked judge: {tracked_judge_path}")
 
     # Load shared mock tool configs from --mock-config files
     global_mock_tools: list[MockToolDef] = []
@@ -1266,6 +1303,7 @@ def run(args: argparse.Namespace) -> Path:
                 max_modifications=getattr(args, "modifications", None),
                 object_prompt=getattr(args, "object_prompt", "object.yaml"),
                 max_history=getattr(args, "max_history", None),
+                tracked_harness=tracked_harness,
             )
         finally:
             # Always store snapshot and signal waiting workers — even on failure —
@@ -1329,6 +1367,7 @@ def run(args: argparse.Namespace) -> Path:
         judge_model=judge_model,
         judge_provider=judge_provider,
         judge_specs=[f"{p}/{m}" for p, m in parsed_judges] if len(parsed_judges) > 1 else [],
+        tracked_judge=str(tracked_judge_path) if tracked_judge_path else None,
         runs=args.runs,
         workers=workers,
         timeout_s=timeout_s,
@@ -1522,9 +1561,14 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
     samples_completion = mean([mean(v) for v in by_tc_completion.values()]) if by_tc_completion else None
     samples_completion_std = _per_tc_std(by_tc_completion)
 
-    # Inconclusive TCs: TCs where any run had at least one step failure
+    # Inconclusive TCs: TCs where any run had at least one step failure.
+    # Probe TCs (no pre_mod events) are exempt: step failures there are unrelated
+    # to modification evaluation and should not suppress probe/tracked metrics.
+    tcs_with_pre_mod = {r.tc_id for r in results if any(e.role == "pre_mod" for e in r.events)}
     inconclusive_tc_ids: set[str] = set()
     for r in results:
+        if r.tc_id not in tcs_with_pre_mod:
+            continue
         step_evts = [e for e in r.events if _STEP_EVENT_ID.match(e.event_id)]
         if step_evts and any(not e.passed for e in step_evts):
             inconclusive_tc_ids.add(r.tc_id)
@@ -1741,9 +1785,26 @@ Examples:
     )
     parser.add_argument(
         "--judge-provider",
-        choices=["openai", "anthropic", "google"],
+        choices=["openai", "azure", "anthropic", "google"],
         default=None,
         help="Provider for judge model (inferred from judge-model if not specified). Ignored when --llm-judge is set.",
+    )
+    parser.add_argument(
+        "--tracked-judge",
+        type=Path,
+        default=None,
+        metavar="YAML",
+        help=(
+            "Path to a judge YAML with a `system_prompt` key. When set, events with "
+            "role='irrelevant' and expect set (tracked events in probe-dataset TCs) "
+            "are judged using this prompt instead of the default judge prompt."
+        ),
+    )
+    parser.add_argument(
+        "--thinking",
+        choices=["disabled", "enabled"],
+        default=None,
+        help="Set Anthropic extended thinking mode (disabled/enabled). Default: not set (model default).",
     )
     parser.add_argument(
         "--object-prompt",
@@ -1788,6 +1849,20 @@ Examples:
         metavar="FILE",
         type=Path,
         help="Recompute and reprint summary stats from an existing results JSONL file without re-running evaluation.",
+    )
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Randomly sample N test cases from the input (use with --sample-seed for reproducibility).",
+    )
+    parser.add_argument(
+        "--sample-seed",
+        type=int,
+        default=None,
+        metavar="S",
+        help="Random seed for --sample (default: None = non-reproducible).",
     )
     return parser
 

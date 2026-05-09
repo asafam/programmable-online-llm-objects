@@ -550,7 +550,7 @@ class LLMObject:
                     for m in new_outgoing
                 ]
                 self._active_plan = Plan(
-                    goal=f"Handle: {message.content[:60]}",
+                    goal=f"Handle: {str(message.content)[:60]}",
                     steps=steps,
                     status="active",
                 )

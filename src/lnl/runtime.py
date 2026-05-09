@@ -466,7 +466,11 @@ class Runtime:
             with self._futures_lock:
                 self._active_futures.pop(_oid, None)
             if f.exception():
-                logger.exception("Error reading object %s", _oid, exc_info=f.exception())
+                exc = f.exception()
+                if "content filter" in str(exc).lower():
+                    logger.warning("Error reading object %s: %s", _oid, exc)
+                else:
+                    logger.exception("Error reading object %s", _oid, exc_info=exc)
             if _transaction:
                 _transaction.decrement()
 

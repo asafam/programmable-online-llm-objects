@@ -53,7 +53,7 @@ def infer_provider(model: str) -> str:
     else:
         raise ValueError(
             f"Cannot infer provider from model '{model}'. "
-            f"Use --provider to specify 'openai' or 'anthropic'."
+            f"Use --provider to specify 'openai', 'azure', or 'anthropic'."
         )
 
 

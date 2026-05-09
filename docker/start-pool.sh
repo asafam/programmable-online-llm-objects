@@ -107,6 +107,16 @@ CMD="${1:-up}"
 
 case "${CMD}" in
     up)
+        echo "Cleaning worker data directories..."
+        for n in 1 2 3 4; do
+            worker_dir="${POOL_DATA_DIR:-/tmp/lnl-pool}/worker-${n}"
+            if [ -d "${worker_dir}" ]; then
+                # Remove accumulated workspace dirs and gateway noise; preserve identity/devices
+                find "${worker_dir}" -mindepth 1 -maxdepth 1 \
+                    ! -name "identity" ! -name "devices" \
+                    -exec rm -rf {} +
+            fi
+        done
         echo "Starting LNL OpenClaw worker pool..."
         docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans
         echo ""
@@ -123,6 +133,14 @@ case "${CMD}" in
     restart)
         echo "Restarting LNL OpenClaw worker pool..."
         docker compose -f "${COMPOSE_FILE}" down
+        for n in 1 2 3 4; do
+            worker_dir="${POOL_DATA_DIR:-/tmp/lnl-pool}/worker-${n}"
+            if [ -d "${worker_dir}" ]; then
+                find "${worker_dir}" -mindepth 1 -maxdepth 1 \
+                    ! -name "identity" ! -name "devices" \
+                    -exec rm -rf {} +
+            fi
+        done
         docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans
         ;;
     logs)

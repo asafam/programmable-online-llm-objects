@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 
-from .brain import AnthropicBrain, MockBrain, OpenAIBrain
+from .brain import AnthropicBrain, AzureBrain, MockBrain, OpenAIBrain
 from .runtime import SystemConfig, Runtime
 
 
@@ -15,6 +15,8 @@ def _make_brain(args: argparse.Namespace):
     model = args.model
     if provider == "openai":
         return OpenAIBrain(model=model or "gpt-4o-mini")
+    elif provider == "azure":
+        return AzureBrain(model=model or "gpt-5.4-mini")
     elif provider == "anthropic":
         return AnthropicBrain(model=model or "claude-3-5-sonnet-latest")
     elif provider == "mock":
@@ -29,7 +31,7 @@ def main(argv: list[str] | None = None) -> None:
         prog="lnl",
         description="Live Natural Language Programming Runtime",
     )
-    parser.add_argument("--provider", default="openai", choices=["openai", "anthropic", "mock"])
+    parser.add_argument("--provider", default="openai", choices=["openai", "azure", "anthropic", "mock"])
     parser.add_argument("--model", default=None)
 parser.add_argument("--max-chain-depth", type=int, default=10)
 

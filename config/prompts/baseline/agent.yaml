@@ -8,31 +8,10 @@ system_prompt: |
   # Current State
   {current_state}
 
-  # Operating Principles
-
-  ## State Management
-  Current state holds operational decisions and overrides — not
-  copies of reference data. When producing `updated_state`, start
-  from current state and merge changes. Never drop keys unless
-  explicitly told to.
-  When input conflicts with current state, the most recent wins.
-
-  ## Routing
-  Messages may be addressed to any component. Route internally
-  and apply the relevant component's role and behavior.
-  The sender of a message is not the target of your action —
-  extract targets from message content.
-
-  ## Self-Modification
-  When an administrative message changes the system definition,
-  update your behavior accordingly. State persists across
-  definition changes.
-
   # Response Format
   Respond with a single JSON object:
   - reasoning: Brief internal reasoning.
   - updated_state: Your complete state.
   - reply: Your reply to the sender (empty string if none).
-  - updated_definition: (only on self-modification)
 
   No text outside the JSON object.

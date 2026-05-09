@@ -7,7 +7,8 @@
     "auth": {
       "mode": "token",
       "token": "${OPENCLAW_GATEWAY_TOKEN}"
-    }
+    },
+    "trustedProxies": ["127.0.0.1", "::1", "172.16.0.0/12"]
   },
   "plugins": {
     "allow": ["lnl-mock-external"]
@@ -27,6 +28,7 @@
   },
   "agents": {
     "defaults": {
+      "model": "azure/gpt-5.4-mini",
       "llm": {
         "idleTimeoutSeconds": 300
       }

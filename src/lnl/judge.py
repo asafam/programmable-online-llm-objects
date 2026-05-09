@@ -75,7 +75,8 @@ class SubstringJudge(LLMJudge):
 class OpenAIJudge(LLMJudge):
     """Judge backed by the OpenAI API."""
 
-    def __init__(self, model: str = "gpt-4o-mini", api_key: Optional[str] = None) -> None:
+    def __init__(self, model: str = "gpt-4o-mini", api_key: Optional[str] = None,
+                 system_prompt: Optional[str] = None) -> None:
         import os
 
         try:
@@ -85,10 +86,56 @@ class OpenAIJudge(LLMJudge):
 
         self.model = model
         self._client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"])
+        self._system_prompt = system_prompt
 
     def evaluate(self, condition: str, evidence: str, context: str = "") -> tuple[bool, str, int, int]:
         messages = [
-            {"role": "system", "content": _judge_system_prompt()},
+            {"role": "system", "content": self._system_prompt or _judge_system_prompt()},
+            {"role": "user", "content": _user_msg(condition, evidence, context)},
+        ]
+        resp = self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        raw = _safe_json_loads(resp.choices[0].message.content or "{}")
+        in_tok = resp.usage.prompt_tokens if resp.usage else 0
+        out_tok = resp.usage.completion_tokens if resp.usage else 0
+        return bool(raw.get("passed", False)), str(raw.get("reasoning", "")), in_tok, out_tok
+
+
+class AzureJudge(LLMJudge):
+    """Judge backed by Azure OpenAI."""
+
+    def __init__(self, model: str = "gpt-5.4-mini", api_key: Optional[str] = None,
+                 endpoint: Optional[str] = None, api_version: Optional[str] = None,
+                 system_prompt: Optional[str] = None) -> None:
+        import os
+
+        try:
+            from openai import AzureOpenAI
+        except ImportError:
+            raise ImportError("openai package required. Install with: pip install openai")
+
+        self.model = model
+        resolved_endpoint = endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
+        if not resolved_endpoint:
+            raise ValueError("Azure endpoint required. Set AZURE_OPENAI_ENDPOINT or pass endpoint=.")
+        resolved_version = api_version or os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+        resolved_key = api_key or os.environ.get("AZURE_OPENAI_API_KEY")
+        if not resolved_key:
+            raise ValueError("Azure API key required. Set AZURE_OPENAI_API_KEY or pass api_key=.")
+        self._client = AzureOpenAI(
+            api_key=resolved_key,
+            azure_endpoint=resolved_endpoint,
+            api_version=resolved_version,
+        )
+        self._system_prompt = system_prompt
+
+    def evaluate(self, condition: str, evidence: str, context: str = "") -> tuple[bool, str, int, int]:
+        messages = [
+            {"role": "system", "content": self._system_prompt or _judge_system_prompt()},
             {"role": "user", "content": _user_msg(condition, evidence, context)},
         ]
         resp = self._client.chat.completions.create(
@@ -106,7 +153,8 @@ class OpenAIJudge(LLMJudge):
 class AnthropicJudge(LLMJudge):
     """Judge backed by the Anthropic API."""
 
-    def __init__(self, model: str = "claude-haiku-4-5-20251001", api_key: Optional[str] = None) -> None:
+    def __init__(self, model: str = "claude-haiku-4-5-20251001", api_key: Optional[str] = None,
+                 system_prompt: Optional[str] = None) -> None:
         import os
 
         try:
@@ -119,13 +167,14 @@ class AnthropicJudge(LLMJudge):
             api_key=api_key or os.environ["ANTHROPIC_API_KEY"],
             timeout=120.0,  # 2 min HTTP timeout for judge (short prompts, shouldn't need more)
         )
+        self._system_prompt = system_prompt
 
     def evaluate(self, condition: str, evidence: str, context: str = "") -> tuple[bool, str, int, int]:
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=512,
             temperature=0.0,
-            system=_judge_system_prompt(),
+            system=self._system_prompt or _judge_system_prompt(),
             messages=[{"role": "user", "content": _user_msg(condition, evidence, context)}],
             output_config={"format": {"type": "json_schema", "schema": _JUDGE_SCHEMA}},
         )
@@ -139,7 +188,8 @@ class AnthropicJudge(LLMJudge):
 class GeminiJudge(LLMJudge):
     """Judge backed by the Google Gemini API."""
 
-    def __init__(self, model: str = "gemini-2.5-pro", api_key: Optional[str] = None) -> None:
+    def __init__(self, model: str = "gemini-2.5-pro", api_key: Optional[str] = None,
+                 system_prompt: Optional[str] = None) -> None:
         import os
 
         try:
@@ -157,6 +207,7 @@ class GeminiJudge(LLMJudge):
             )
         self._client = genai.Client(api_key=resolved_key)
         self._types = genai_types
+        self._system_prompt = system_prompt
 
     def evaluate(self, condition: str, evidence: str, context: str = "") -> tuple[bool, str, int, int]:
         config = self._types.GenerateContentConfig(
@@ -164,7 +215,7 @@ class GeminiJudge(LLMJudge):
             max_output_tokens=512,
             response_mime_type="application/json",
             response_schema=_JUDGE_SCHEMA,
-            system_instruction=_judge_system_prompt(),
+            system_instruction=self._system_prompt or _judge_system_prompt(),
         )
         user_content = self._types.Content(
             role="user",

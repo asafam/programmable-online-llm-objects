@@ -27,7 +27,7 @@ def infer_provider(model: str) -> str:
     else:
         raise ValueError(
             f"Cannot infer provider from model '{model}'. "
-            f"Use --provider to specify 'openai', 'anthropic', or 'google'."
+            f"Use --provider to specify 'openai', 'azure', 'anthropic', or 'google'."
         )
 
 
@@ -157,15 +157,15 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--provider",
         "-p",
-        choices=["openai", "anthropic", "google"],
+        choices=["openai", "azure", "anthropic", "google"],
         default=None,
-        help="LLM provider (inferred from model if not specified)",
+        help="LLM provider (inferred from model if not specified). Use 'azure' for Azure OpenAI deployments.",
     )
     parser.add_argument(
         "--model",
         "-m",
         default="claude-sonnet-4-6",
-        help="Model name (default: claude-sonnet-4-6). Provider is inferred: claude-* → anthropic, gpt-*/o1-*/o3-* → openai, gemini-* → google",
+        help="Model name (default: claude-sonnet-4-6). Provider is inferred: claude-* → anthropic, gpt-*/o1-*/o3-* → openai, gemini-* → google. For Azure, use --provider azure with the deployment name.",
     )
     parser.add_argument(
         "--seed",

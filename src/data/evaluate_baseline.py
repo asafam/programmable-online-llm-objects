@@ -168,6 +168,29 @@ def _load_pool_config(path: Path) -> list[WorkerConfig]:
     return workers
 
 
+def _clean_pool_worker_dirs(workers: list[WorkerConfig]) -> None:
+    """Wipe accumulated workspace/config/log files from each worker data_dir.
+
+    Preserves identity/ and devices/ (auth files written by start-pool.sh).
+    Called once at the start of every pool-mode eval run so workers start clean.
+    """
+    import shutil
+    _KEEP = {"identity", "devices"}
+    for w in workers:
+        if not w.data_dir.is_dir():
+            continue
+        removed = []
+        for child in w.data_dir.iterdir():
+            if child.name not in _KEEP:
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink(missing_ok=True)
+                removed.append(child.name)
+        if removed:
+            print(f"  [{w.name}] cleaned {len(removed)} entries from {w.data_dir}")
+
+
 def _load_device_operator_token() -> Optional[str]:
     """Read the local SDK device operator token from ~/.openclaw/identity/device-auth.json.
 
@@ -959,6 +982,12 @@ def gather_evidence(
     return "\n\n".join(parts) if parts else "(no observable output)"
 
 
+def state_only_evidence(state_content: str) -> str:
+    """Evidence for the memory-fidelity judge: only the persisted state, no tool calls or response."""
+    s = state_content.strip()
+    return f"Updated state:\n{s}" if s else "(no state recorded)"
+
+
 # ── OpenClaw agent wrapper ───────────────────────────────────────────────────
 
 class OpenClawAgent:
@@ -1102,6 +1131,8 @@ async def _execute_tc_async(
     max_modifications: Optional[int] = None,
     event_concurrency: int = 0,
     concurrency_seed: int = 42,
+    tracked_harness=None,
+    thinking: Optional[str] = None,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Async core: open persistent sessions for ALL agents simultaneously, then send messages.
 
@@ -1115,7 +1146,11 @@ async def _execute_tc_async(
     without collision — they're all live for the duration of this TC run.
     """
     from openclaw_sdk import OpenClawClient
+    from openclaw_sdk.core.config import ExecutionOptions
     from src.lnl.openclaw_export import rewrite_agents_md
+
+    _oc_thinking = {"disabled": "off", "enabled": "enabled"}.get(thinking, thinking) if thinking else None
+    _exec_opts = ExecutionOptions(thinking=_oc_thinking) if _oc_thinking is not None else None
 
     # Reset state before run.
     if single_agent_id:
@@ -1284,7 +1319,7 @@ async def _execute_tc_async(
                 content = f"[Event from {evt.source} at {evt.when}]: {evt.input}"
                 t_evt = time.time()
                 try:
-                    res = await h.execute(content)
+                    res = await h.execute(content, options=_exec_opts)
                     return evt, res, (time.time() - t_evt) * 1000
                 except Exception as exc:
                     return evt, exc, (time.time() - t_evt) * 1000
@@ -1332,12 +1367,20 @@ async def _execute_tc_async(
                     ))
                     continue
                 agent_out = res.content if res.success else f"(error: {res.content})"
-                evidence = gather_evidence(
-                    agent_out,
-                    tool_calls=batch_tool_calls if mock_server else None,
-                    state_content=batch_state,
+                _active_harness = (
+                    tracked_harness
+                    if tracked_harness is not None and evt.role == "irrelevant"
+                    else harness
                 )
-                passed, reasoning, _votes, _in_tok, _out_tok = harness.evaluate_assertion(
+                if _active_harness is tracked_harness:
+                    evidence = state_only_evidence(batch_state)
+                else:
+                    evidence = gather_evidence(
+                        agent_out,
+                        tool_calls=batch_tool_calls if mock_server else None,
+                        state_content=batch_state,
+                    )
+                passed, reasoning, _votes, _in_tok, _out_tok = _active_harness.evaluate_assertion(
                     evt.expect.action, evidence, ctx)
                 tqdm.write(f"    {evt.id} {'✓' if passed else '✗'} {display_lat/1000:.1f}s [conc]  {reasoning[:100]}")
                 event_results.append(EventResult(
@@ -1392,7 +1435,7 @@ async def _execute_tc_async(
             _tok_before = await _snapshot_session_tokens(client.gateway, _all_sess_keys)
 
             t0 = time.time()
-            result = await handle.execute(msg["content"])
+            result = await handle.execute(msg["content"], options=_exec_opts)
             latency_ms = (time.time() - t0) * 1000
             if not result.success:
                 tqdm.write(f"  [AGENT ERROR] {target_id}: {result.content}", file=sys.stderr)
@@ -1465,7 +1508,7 @@ async def _execute_tc_async(
                         triggered_content = f"[Event from {trigger.source}]: {trigger_msg}"
                         if verbose:
                             tqdm.write(f"  [TRIGGER→{tgt_id}] {triggered_content[:120]}")
-                        await tgt_handle.execute(triggered_content)
+                        await tgt_handle.execute(triggered_content, options=_exec_opts)
                         if single_agent_id:
                             await asyncio.sleep(0.3)
                         else:
@@ -1542,12 +1585,20 @@ async def _execute_tc_async(
             else:  # event
                 item = msg["item"]
                 if item.expect is not None:
-                    evidence = gather_evidence(
-                        content,
-                        tool_calls=event_tool_calls if mock_server else None,
-                        state_content=post_event_state,
+                    _active_harness = (
+                        tracked_harness
+                        if tracked_harness is not None and item.role == "irrelevant"
+                        else harness
                     )
-                    passed, reasoning, _votes, _in_tok, _out_tok = harness.evaluate_assertion(
+                    if _active_harness is tracked_harness:
+                        evidence = state_only_evidence(post_event_state)
+                    else:
+                        evidence = gather_evidence(
+                            content,
+                            tool_calls=event_tool_calls if mock_server else None,
+                            state_content=post_event_state,
+                        )
+                    passed, reasoning, _votes, _in_tok, _out_tok = _active_harness.evaluate_assertion(
                         item.expect.action, evidence, prior_context)
                     tqdm.write(f"    {item.id} {'✓' if passed else '✗'} {latency_ms/1000:.1f}s  {reasoning[:120]}")
                     if verbose:
@@ -1585,6 +1636,8 @@ def _execute_test_case_inner(
     max_modifications: Optional[int] = None,
     event_concurrency: int = 0,
     concurrency_seed: int = 42,
+    tracked_harness=None,
+    thinking: Optional[str] = None,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Sync wrapper: delegate to _execute_tc_async with persistent multi-agent sessions."""
     gateway_url = next(iter(agents.values()))._gateway_url if agents else None
@@ -1596,6 +1649,8 @@ def _execute_test_case_inner(
         max_modifications=max_modifications,
         event_concurrency=event_concurrency,
         concurrency_seed=concurrency_seed,
+        tracked_harness=tracked_harness,
+        thinking=thinking,
     ))
 
 
@@ -1613,6 +1668,8 @@ def execute_test_case(
     max_modifications: Optional[int] = None,
     event_concurrency: int = 0,
     concurrency_seed: int = 42,
+    tracked_harness=None,
+    thinking: Optional[str] = None,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase with an optional wall-clock timeout."""
     if timeout_s is None:
@@ -1623,7 +1680,9 @@ def execute_test_case(
                                         slot_suffix=slot_suffix,
                                         max_modifications=max_modifications,
                                         event_concurrency=event_concurrency,
-                                        concurrency_seed=concurrency_seed)
+                                        concurrency_seed=concurrency_seed,
+                                        tracked_harness=tracked_harness,
+                                        thinking=thinking)
 
     partial_events: list[EventResult] = []
     partial_mods: list[ModificationResult] = []
@@ -1633,7 +1692,7 @@ def execute_test_case(
             _execute_test_case_inner, tc, agents, openclaw_home,
             harness, mock_server, verbose, steps_only, single_agent_id,
             partial_events, partial_mods, slot_suffix, max_modifications,
-            event_concurrency, concurrency_seed,
+            event_concurrency, concurrency_seed, tracked_harness, thinking,
         )
         try:
             return future.result(timeout=timeout_s)
@@ -1734,17 +1793,19 @@ def _running_metrics(results: "list[TestCaseResult]") -> tuple[Optional[float], 
 
 
 def _pbar_postfix(pbar, results) -> None:
-    """Update pbar postfix with running mean + sample pass rates."""
+    """Update pbar postfix with running mean + sample pass rates + token counters."""
     if pbar is None:
         return
     mean_pr, sample_pr = _running_metrics(results)
+    in_tok  = sum(e.input_tokens  or 0 for r in results for e in r.events)
+    out_tok = sum(e.output_tokens or 0 for r in results for e in r.events)
     fields: dict[str, str] = {}
     if mean_pr is not None:
         fields["mean"] = f"{mean_pr:.1%}"
     if sample_pr is not None:
         fields["sample"] = f"{sample_pr:.1%}"
-    if fields:
-        pbar.set_postfix(refresh=False, **fields)
+    fields["tok"] = f"{in_tok//1000}k↑{out_tok//1000}k↓"
+    pbar.set_postfix(refresh=False, **fields)
 
 
 def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
@@ -1811,8 +1872,12 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
     samples_completion = mean([mean(v) for v in by_tc_completion.values()]) if by_tc_completion else None
     samples_completion_std = _per_tc_std(by_tc_completion)
 
+    # Probe TCs (no pre_mod events) are exempt: step failures there don't invalidate probe metrics.
+    tcs_with_pre_mod = {r.tc_id for r in results if any(e.role == "pre_mod" for e in r.events)}
     inconclusive_tc_ids: set[str] = set()
     for r in results:
+        if r.tc_id not in tcs_with_pre_mod:
+            continue
         if any(_STEP_EVENT_ID.match(e.event_id) and not e.passed for e in r.events):
             inconclusive_tc_ids.add(r.tc_id)
 
@@ -1921,6 +1986,7 @@ async def _run_all_tcs_concurrent(
     pbar=None,
     completed: "frozenset[tuple[int, int]]" = frozenset(),
     prior_results: Optional[list] = None,
+    tracked_harness=None,
 ) -> list:
     """Run all TCs concurrently up to args.concurrency at a time.
 
@@ -2082,6 +2148,8 @@ async def _run_all_tcs_concurrent(
                                     max_modifications=getattr(args, "modifications", None),
                                     event_concurrency=getattr(args, "concurrency", 0),
                                     concurrency_seed=getattr(args, "seed", None) or 42,
+                                    tracked_harness=tracked_harness,
+                                    thinking=getattr(args, "thinking", None),
                                 )
                                 if tc_timeout:
                                     event_results, mod_results = await asyncio.wait_for(coro, timeout=tc_timeout)
@@ -2369,6 +2437,10 @@ def run(args: argparse.Namespace) -> Path:
                     sys.exit(1)
                 selected.extend(matched)
         test_cases = selected
+    elif getattr(args, "sample", None):
+        import random as _random
+        _rng = _random.Random(getattr(args, "sample_seed", None))
+        test_cases = _rng.sample(test_cases, min(args.sample, len(test_cases)))
     elif args.limit:
         test_cases = test_cases[: args.limit]
 
@@ -2406,6 +2478,8 @@ def run(args: argparse.Namespace) -> Path:
     workers: Optional[list[WorkerConfig]] = None
     if pool_config_path:
         workers = _load_pool_config(Path(pool_config_path))
+        print("Cleaning pool worker directories...")
+        _clean_pool_worker_dirs(workers)
         # Pool mode: each worker authenticates with its own token from data_dir/openclaw.json.
         # Clear any global env var so _openclaw_connect_kwargs reads per-worker tokens instead.
         os.environ.pop("OPENCLAW_GATEWAY_TOKEN", None)
@@ -2483,6 +2557,9 @@ def run(args: argparse.Namespace) -> Path:
     if judge_provider == "openai":
         from src.lnl.judge import OpenAIJudge
         judge = OpenAIJudge(model=judge_model)
+    elif judge_provider == "azure":
+        from src.lnl.judge import AzureJudge
+        judge = AzureJudge(model=judge_model)
     elif judge_provider == "google":
         from src.lnl.judge import GeminiJudge
         judge = GeminiJudge(model=judge_model)
@@ -2492,6 +2569,26 @@ def run(args: argparse.Namespace) -> Path:
 
     from src.lnl.benchmark import BenchmarkHarness
     harness = BenchmarkHarness(judge=judge)
+
+    # Optional memory-fidelity judge for tracked events (probe-dataset TCs).
+    tracked_harness: Optional["BenchmarkHarness"] = None
+    tracked_judge_path = getattr(args, "tracked_judge", None)
+    if tracked_judge_path:
+        import yaml as _yaml
+        tracked_prompt = _yaml.safe_load(Path(tracked_judge_path).read_text())["system_prompt"].strip()
+        if judge_provider == "openai":
+            from src.lnl.judge import OpenAIJudge
+            tracked_judge_inst = OpenAIJudge(model=judge_model, system_prompt=tracked_prompt)
+        elif judge_provider == "azure":
+            from src.lnl.judge import AzureJudge
+            tracked_judge_inst = AzureJudge(model=judge_model, system_prompt=tracked_prompt)
+        elif judge_provider == "google":
+            from src.lnl.judge import GeminiJudge
+            tracked_judge_inst = GeminiJudge(model=judge_model, system_prompt=tracked_prompt)
+        else:
+            from src.lnl.judge import AnthropicJudge
+            tracked_judge_inst = AnthropicJudge(model=judge_model, system_prompt=tracked_prompt)
+        tracked_harness = BenchmarkHarness(judge=tracked_judge_inst)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2582,6 +2679,7 @@ def run(args: argparse.Namespace) -> Path:
                 single_agent_id, f, timeout_s, workers=workers, pbar=pbar,
                 completed=frozenset(completed),
                 prior_results=all_tc_results,
+                tracked_harness=tracked_harness,
             ))
             all_tc_results.extend(new_results)
           elif concurrency > 1 and not single_agent_id:
@@ -2617,6 +2715,7 @@ def run(args: argparse.Namespace) -> Path:
                 single_agent_id, f, timeout_s, pbar=pbar,
                 completed=frozenset(completed),
                 prior_results=all_tc_results,
+                tracked_harness=tracked_harness,
             ))
             all_tc_results.extend(new_results)
           # ── Sequential mode ─ runs when concurrency == 1 or single-agent ────────
@@ -2685,6 +2784,8 @@ def run(args: argparse.Namespace) -> Path:
                         single_agent_id=single_agent_id,
                         event_concurrency=getattr(args, "concurrency", 0),
                         concurrency_seed=getattr(args, "seed", None) or 42,
+                        tracked_harness=tracked_harness,
+                        thinking=getattr(args, "thinking", None),
                     )
                     pass_rate = (
                         sum(1 for e in event_results if e.passed) / len(event_results)
@@ -2729,6 +2830,8 @@ def run(args: argparse.Namespace) -> Path:
                                 single_agent_id=single_agent_id,
                                 event_concurrency=getattr(args, "concurrency", 0),
                                 concurrency_seed=getattr(args, "seed", None) or 42,
+                                tracked_harness=tracked_harness,
+                                thinking=getattr(args, "thinking", None),
                             )
                             pass_rate = (
                                 sum(1 for e in event_results if e.passed) / len(event_results)
@@ -2787,11 +2890,11 @@ Examples:
                         help="Output JSONL path (default: {stem}_baseline.jsonl next to input)")
     parser.add_argument("--runs", type=int, default=1,
                         help="Number of runs per test case (default: 1)")
-    parser.add_argument("--timeout", type=float, default=180.0, metavar="SECONDS",
-                        help="Wall-clock timeout per test case run (default: 180)")
+    parser.add_argument("--timeout", type=float, default=900.0, metavar="SECONDS",
+                        help="Wall-clock timeout per test case run (default: 900)")
     parser.add_argument("--model", "-m", default="claude-sonnet-4-6", metavar="MODEL",
                         help="Model for OpenClaw agents (default: claude-sonnet-4-6). Provider inferred from name.")
-    parser.add_argument("--provider", "-p", choices=["openai", "anthropic", "google"], default=None,
+    parser.add_argument("--provider", "-p", choices=["openai", "azure", "anthropic", "google"], default=None,
                         help="LLM provider (overrides inference from --model)")
     parser.add_argument("--verbose", "-v", action="store_true", default=False,
                         help="Print each message and agent response with per-event pass/fail")
@@ -2801,8 +2904,14 @@ Examples:
                         help="Root OpenClaw directory for agent workspaces (default: ~/.openclaw)")
     parser.add_argument("--judge-model", default=None,
                         help="Model for LLM-as-judge (default: same as --model, matching evaluate.py behavior)")
-    parser.add_argument("--judge-provider", choices=["openai", "anthropic", "google"], default=None,
+    parser.add_argument("--judge-provider", choices=["openai", "azure", "anthropic", "google"], default=None,
                         help="Provider for judge model (inferred from --judge-model if not specified)")
+    parser.add_argument("--tracked-judge", type=Path, default=None, metavar="YAML",
+                        help=(
+                            "Path to a judge YAML with a `system_prompt` key. When set, events with "
+                            "role='irrelevant' and expect set (tracked events in probe-dataset TCs) "
+                            "are judged using this prompt instead of the default judge prompt."
+                        ))
     parser.add_argument("--limit", "-n", type=int, default=None,
                         help="Process only the first N test cases")
     parser.add_argument("--tc", nargs="+", metavar="INDEX_OR_ID",
@@ -2813,6 +2922,10 @@ Examples:
                         help="Port for the mock server (default: 18888)")
     parser.add_argument("--mock-llm-mode", action="store_true", default=False,
                         help="Use LLM to generate mock responses instead of YAML scripts")
+    parser.add_argument("--thinking",
+                        choices=["disabled", "enabled"],
+                        default=None,
+                        help="Set extended thinking mode for OpenClaw agent execute() calls (disabled/enabled). Default: not set (model default).")
     parser.add_argument("--steps-only", action="store_true", default=False,
                         help="Run only the steps phase (no modifications/events). "
                              "Deduplicates by sample_id.")
@@ -2849,6 +2962,10 @@ Examples:
     parser.add_argument("--stats", default=None, metavar="FILE", type=Path,
                         help="Recompute and reprint summary stats from an existing results JSONL "
                              "file without re-running evaluation. All other args are ignored.")
+    parser.add_argument("--sample", type=int, default=None, metavar="N",
+                        help="Randomly sample N test cases from the input (use with --sample-seed for reproducibility).")
+    parser.add_argument("--sample-seed", type=int, default=None, metavar="S",
+                        help="Random seed for --sample (default: None = non-reproducible).")
     return parser
 
 

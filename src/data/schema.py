@@ -124,6 +124,57 @@ class FidelityEventsList(BaseModel):
     state_events: list[GeneratedEventWithExpect]
 
 
+# ── Probe dataset schemas ─────────────────────────────────────────────────────
+
+class ProbeType(str, Enum):
+    direct_lookup = "direct_lookup"              # single field of one tracked entity
+    aggregate = "aggregate"                       # sum/count over tracked entity set
+    conditional_aggregate = "conditional_aggregate"  # filter then aggregate
+    retraction_status = "retraction_status"       # is entity X still active / which of [...] are active
+
+
+class TrackedEntitySpec(BaseModel):
+    """One entity to track: creation + transitions + corrections will be generated for it."""
+    entity_id: str       # e.g. "QUOTE-123"
+    entity_type: str     # e.g. "quote", "order"
+    n_corrections: int   # how many same-field correction events to generate (2–4)
+    retracted: bool = False  # if True, a retraction event is appended after corrections
+
+
+class ProbeTargetSpec(BaseModel):
+    """One probe question to ask — references one or more tracked entities."""
+    probe_id: str
+    probe_type: ProbeType
+    target_entities: list[str]   # entity_ids this probe references
+
+
+class ProbeTargetsList(BaseModel):
+    """Stage A output: probe targets + tracked entities for a probe-dataset TC."""
+    shared_correction_field: str           # e.g. "discount_rate", "amount" — ALL entities correct this same field
+    tracked_entities: list[TrackedEntitySpec]
+    probe_targets: list[ProbeTargetSpec]   # ~equal mix of the 3 ProbeTypes
+
+
+class RelevantEventsList(BaseModel):
+    """Stage B output: events for one tracked entity (creation + transitions + corrections)."""
+    entity_id: str
+    state_events: list[GeneratedEventWithExpect]
+    # expect.action = memory-fidelity assertion: "State for {entity_id} should now reflect …"
+
+
+class ProbeQuestion(BaseModel):
+    """Stage C output: one probe question with ground truth in expect.action."""
+    probe_event: GeneratedEventWithExpect
+    # expect.action = ground truth answer text
+    # depends_on = IDs of relevant events this probe requires (2–7)
+
+
+class BackgroundEventsList(BaseModel):
+    """Stage D output: interference events (no expect — judge skips them)."""
+    state_events: list[GeneratedEventWithExpect]
+    # expect must be None on all events — background events are interference only
+
+
 class GeneratedModification(BaseModel):
     """LLM output schema — mod_type and ambiguity are set by the script, not the LLM."""
     id: str
@@ -327,6 +378,11 @@ class RunConfig(BaseModel):
     judge_specs: list[str] = Field(
         default_factory=list,
         description="All judge specs (provider/model) when using --llm-judge. Empty for single-judge runs.",
+    )
+    tracked_judge: Optional[str] = Field(
+        default=None,
+        description="Path to YAML override prompt used to judge tracked (role=irrelevant) events. "
+                    "None means the default per-event judge was used.",
     )
     runs: int
     workers: int
