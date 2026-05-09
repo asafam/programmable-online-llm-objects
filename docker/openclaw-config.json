@@ -10,6 +10,23 @@
     },
     "trustedProxies": ["127.0.0.1", "::1", "172.16.0.0/12"]
   },
+  "models": {
+    "providers": {
+      "azure": {
+        "api": "openai-completions",
+        "baseUrl": "${AZURE_OPENAI_ENDPOINT}openai/v1",
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "AZURE_OPENAI_API_KEY"
+        },
+        "models": [
+          {"id": "gpt-5.4-mini", "name": "GPT-5.4 mini (Azure)"},
+          {"id": "gpt-5.4", "name": "GPT-5.4 (Azure)"}
+        ]
+      }
+    }
+  },
   "plugins": {
     "allow": ["lnl-mock-external"]
   },

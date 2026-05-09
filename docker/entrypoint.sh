@@ -23,7 +23,7 @@ CONFIG_DIR="${HOME}/.openclaw"
 mkdir -p "${CONFIG_DIR}"
 # Always write from the baked-in template so the gateway gets a clean config.
 # Template lives outside .openclaw so a pool bind-mount doesn't hide it.
-envsubst '${OPENCLAW_GATEWAY_TOKEN}' \
+envsubst '${OPENCLAW_GATEWAY_TOKEN} ${AZURE_OPENAI_ENDPOINT}' \
     < "${HOME}/openclaw.json.tpl" \
     > "${CONFIG_DIR}/openclaw.json"
 
