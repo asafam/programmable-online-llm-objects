@@ -106,6 +106,36 @@ the existing forwarding language is already comprehensive enough.
 
 ---
 
+## Post-commit ablations (on top of commit e3bd922)
+
+Baseline for this phase: **0.743** (dispatch rule). Confirmation run showed 0.779 — variance is real.
+
+| Change | Pass rate | Delta | Decision |
+|---|---|---|---|
+| Silent action event drop → reply instead (E) | 0.741 | ~0pt | ✅ kept (makes E failures visible) |
+| Active Plan dispatch guard ("if dispatched, don't re-send") | 0.654 | -8.7pt | ❌ reverted |
+
+### Silent action event rule — kept
+
+Added after "never silently drop a query":
+
+> If you receive an action event you consider outside your scope, reply
+> with a brief explanation rather than silently doing nothing.
+
+Neutral on eval (-0.2pt), kept for debuggability.
+
+### Active Plan dispatch guard — rejected
+
+Added to Active Plan description:
+
+> Check it before dispatching — if a step is already `dispatched`, do not re-send it.
+
+Caused -8.7pt regression. Objects saw any prior `dispatched` step and suppressed
+legitimate new dispatches. Same over-activation pattern as other "make objects
+more thorough" additions.
+
+---
+
 ## Confirmation run
 
 After reverting C, ran the prompt as-is (caching restructure + dispatch rule only).

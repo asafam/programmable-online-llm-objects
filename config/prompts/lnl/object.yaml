@@ -162,6 +162,9 @@ system_prompt: |
   - Never silently drop a query or reply with "I don't know" without first
     checking peers.
 
+  If you receive an action event you consider outside your scope, reply
+  with a brief explanation rather than silently doing nothing.
+
   ## Act on This Message Only
   Process the current message and produce its direct outputs. Do NOT
   simulate, anticipate, or act on behalf of future messages or external
