@@ -10,8 +10,10 @@ from dataclasses import asdict
 from typing import Callable, Optional
 
 from .brain import (
+    VALID_STEP_KINDS,
     LLMBrain,
     _build_chat_messages,
+    _normalize_step_kind,
     build_evaluator_prompt,
     build_planner_prompt,
     build_system_prompt,
@@ -533,9 +535,13 @@ class LLMObject:
 
         # Reply-driven auto-mark: if this message is a correlated reply to
         # a step in our active plan, mark that step done BEFORE the LLM runs,
-        # so the rendered plan snapshot reflects reality.
+        # so the rendered plan snapshot reflects reality. Captures the reply
+        # payload onto step.result so downstream steps can reference it.
         if message.plan_step_index is not None:
-            self._auto_mark_step_on_reply(message.plan_step_index, trace_id)
+            self._auto_mark_step_on_reply(
+                message.plan_step_index, trace_id,
+                reply_content=message.content,
+            )
 
         # Record pending inbound Asks so a later reply-to-asker (possibly in
         # a different turn, e.g. nested A→B→C→B→A) auto-correlates back with
@@ -710,10 +716,10 @@ class LLMObject:
                 or any(isinstance(c, dict) and c.get("status") == "FAIL" for c in criteria)
             )
             if not actionable_fail:
-                # Close effect steps — they have no outgoing messages to
+                # Close reason steps — they have no outgoing messages to
                 # auto-close them; evaluator PASS is the completion signal.
                 if verdict == "PASS":
-                    self._mark_effect_steps_done(trace_id)
+                    self._mark_reason_steps_done(trace_id)
                     self._auto_close_plan_if_complete(trace_id)
                 break
 
@@ -834,6 +840,13 @@ class LLMObject:
             except Exception as exc:
                 result = ToolResult(id=tc.id, output="", error=f"Tool execution raised an exception: {exc}")
 
+            # If the LLM tagged this tool_call with a plan step index, capture
+            # the result on plan.steps[idx].result preserving structured shape.
+            if tc.plan_step_index is not None and trace_id is not None:
+                self._capture_tool_result_on_step(
+                    trace_id, tc.plan_step_index, result,
+                )
+
             messages.append({"role": "assistant", "content": json.dumps({
                 "thought": step.thought,
                 "action": "tool_call",
@@ -911,18 +924,20 @@ class LLMObject:
         """
         # Shape 1: create or replace.
         if update.goal is not None and update.steps is not None:
-            new_steps = [
-                PlanStep(
-                    kind=s.get("kind", ""),
+            new_steps = []
+            for s in update.steps:
+                if not isinstance(s, dict):
+                    continue
+                kind = _normalize_step_kind(s.get("kind", ""))
+                new_steps.append(PlanStep(
+                    kind=kind,
                     description=s.get("description", ""),
-                    target=s.get("target") if s.get("kind") in ("ask", "tell") else None,
+                    target=s.get("target") if kind in ("ask", "tell", "tool") else None,
                     status=s.get("status") or "planned",
                     result_summary=s.get("result_summary"),
-                )
-                for s in update.steps if isinstance(s, dict)
-            ]
+                ))
             # Drop invalid kinds.
-            new_steps = [s for s in new_steps if s.kind in ("ask", "tell", "effect")]
+            new_steps = [s for s in new_steps if s.kind in VALID_STEP_KINDS]
             with self._plans_lock:
                 prev = self._active_plans.get(trace_id) if trace_id is not None else None
                 if prev is not None:
@@ -992,13 +1007,13 @@ class LLMObject:
             for raw in update.add_steps or []:
                 if not isinstance(raw, dict):
                     continue
-                kind = raw.get("kind")
-                if kind not in ("ask", "tell", "effect"):
+                kind = _normalize_step_kind(raw.get("kind") or "")
+                if kind not in VALID_STEP_KINDS:
                     continue
                 plan.steps.append(PlanStep(
                     kind=kind,
                     description=raw.get("description", ""),
-                    target=raw.get("target") if kind in ("ask", "tell") else None,
+                    target=raw.get("target") if kind in ("ask", "tell", "tool") else None,
                     status=raw.get("status") or "planned",
                     result_summary=raw.get("result_summary"),
                 ))
@@ -1102,9 +1117,16 @@ class LLMObject:
                     expects_reply=True,
                 ))
 
-    def _auto_mark_step_on_reply(self, step_index: int, trace_id: Optional[str] = None) -> None:
+    def _auto_mark_step_on_reply(
+        self,
+        step_index: int,
+        trace_id: Optional[str] = None,
+        reply_content: Optional[str] = None,
+    ) -> None:
         """Runtime hook: when a correlated reply arrives tagged with a step
-        index, mark that step done on the plan for `trace_id` (unless already terminal)."""
+        index, mark that step done on the plan for `trace_id` (unless already
+        terminal) AND capture the reply payload on step.result as NL."""
+        now = datetime.datetime.now(datetime.timezone.utc)
         with self._plans_lock:
             plan = self._active_plans.get(trace_id) if trace_id is not None else None
             if plan is None or step_index < 0 or step_index >= len(plan.steps):
@@ -1112,7 +1134,11 @@ class LLMObject:
             step = plan.steps[step_index]
             if step.status not in STEP_TERMINAL_STATUSES:
                 step.status = "done"
-                plan.last_progress_at = datetime.datetime.now(datetime.timezone.utc)
+                if reply_content is not None and step.result is None:
+                    step.result = reply_content
+                    step.result_kind = "nl"
+                step.completed_at = now
+                plan.last_progress_at = now
         self._auto_close_plan_if_complete(trace_id)
 
     def _auto_create_plan_from_outgoing(self, outgoing: list, message: "Message") -> None:  # noqa: F821
@@ -1176,22 +1202,66 @@ class LLMObject:
                         existing.add(key)
                 plan.last_progress_at = datetime.datetime.now(datetime.timezone.utc)
 
-    def _mark_effect_steps_done(self, trace_id: Optional[str] = None) -> None:
-        """Mark all 'effect' kind steps that are still in 'planned' status as 'done'
+    def _capture_tool_result_on_step(
+        self,
+        trace_id: str,
+        step_index: int,
+        result: ToolResult,
+    ) -> None:
+        """When a tool call carries a plan_step_index, store its result on that
+        step. Parses output as JSON when possible to preserve structured shape;
+        falls back to the raw string otherwise. Flips status planned → done."""
+        # Parse output: if it looks like JSON, capture the structured value.
+        captured: object = result.output
+        if isinstance(result.output, str) and result.output.strip():
+            stripped = result.output.strip()
+            if stripped.startswith(("{", "[")) or stripped in ("true", "false", "null") or stripped.replace(".", "", 1).lstrip("-").isdigit():
+                try:
+                    captured = json.loads(stripped)
+                except (json.JSONDecodeError, ValueError):
+                    pass  # keep as string
+        now = datetime.datetime.now(datetime.timezone.utc)
+        with self._plans_lock:
+            plan = self._active_plans.get(trace_id)
+            if plan is None or step_index < 0 or step_index >= len(plan.steps):
+                return
+            step = plan.steps[step_index]
+            if step.status not in STEP_TERMINAL_STATUSES:
+                if result.error:
+                    step.status = "failed"
+                    step.result = {"output": result.output, "error": result.error}
+                else:
+                    step.status = "done"
+                    step.result = captured
+                step.result_kind = "tool"
+                step.completed_at = now
+                plan.last_progress_at = now
+
+    def _mark_reason_steps_done(self, trace_id: Optional[str] = None) -> None:
+        """Mark all 'reason' kind steps that are still in 'planned' status as 'done'
         on the plan for `trace_id`. Called after the evaluator grades the turn
-        PASS — effect steps have no outgoing message to auto-close them, so
-        PASS is the completion signal."""
+        PASS — reason steps have no outgoing message to auto-close them, so
+        PASS is the completion signal. If a step has a result_summary, copy it
+        onto result with result_kind='reason'."""
+        now = datetime.datetime.now(datetime.timezone.utc)
         with self._plans_lock:
             plan = self._active_plans.get(trace_id) if trace_id is not None else None
             if plan is None:
                 return
             mutated = False
             for step in plan.steps:
-                if step.kind == "effect" and step.status == "planned":
+                if step.kind == "reason" and step.status == "planned":
                     step.status = "done"
+                    step.completed_at = now
+                    if step.result is None and step.result_summary:
+                        step.result = step.result_summary
+                        step.result_kind = "reason"
                     mutated = True
             if mutated:
-                plan.last_progress_at = datetime.datetime.now(datetime.timezone.utc)
+                plan.last_progress_at = now
+
+    # Back-compat alias — older callers may still reference the effect name.
+    _mark_effect_steps_done = _mark_reason_steps_done
 
     def _auto_close_plan_if_complete(self, trace_id: Optional[str] = None) -> None:
         """If the active plan for `trace_id` has at least one step and ALL

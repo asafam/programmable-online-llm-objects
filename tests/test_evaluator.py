@@ -521,7 +521,8 @@ def test_process_message_no_evaluator_runs_single_cycle():
 
 
 def test_plan_dict_to_plan_accepts_effect_steps():
-    """plan_dict_to_plan converts effect steps into PlanStep with target=None."""
+    """plan_dict_to_plan accepts the legacy 'effect' kind and normalizes
+    it to 'reason' (back-compat alias)."""
     from src.lnl.brain import plan_dict_to_plan
     plan = plan_dict_to_plan({
         "goal": "Store the order",
@@ -535,7 +536,7 @@ def test_plan_dict_to_plan_accepts_effect_steps():
     })
     assert len(plan.steps) == 1
     step = plan.steps[0]
-    assert step.kind == "effect"
+    assert step.kind == "reason"  # normalized from "effect"
     assert step.target is None  # "self" is normalized to None
     assert "order_id" in step.description
     assert step.status == "planned"
@@ -556,7 +557,7 @@ def test_plan_dict_to_plan_mixed_effect_and_tell():
         ],
     })
     assert len(plan.steps) == 2
-    assert plan.steps[0].kind == "effect"
+    assert plan.steps[0].kind == "reason"  # normalized from "effect"
     assert plan.steps[0].target is None
     assert plan.steps[1].kind == "tell"
     assert plan.steps[1].target == "peer-A"
@@ -583,29 +584,30 @@ def test_mark_effect_steps_done_on_evaluator_pass():
     from src.lnl.types import Plan, PlanStep
     obj._active_plans["t1"] = Plan(
         goal="Store record",
-        steps=[PlanStep(kind="effect", description="Record in state", target=None, status="planned")],
+        steps=[PlanStep(kind="reason", description="Record in state", target=None, status="planned")],
         status="active",
         trace_id="t1",
     )
     result = obj.process_message(_domain_msg())
-    # After PASS, effect step should be done and plan closed
+    # After PASS, reason step should be done and plan closed
     assert obj.active_plan is None  # auto-closed after all steps terminal
     assert len(obj.completed_plans) == 1
     assert result.reply == "stored"
 
 
-def test_build_evaluator_prompt_includes_effect_step():
-    """Effect steps are rendered in the plan section with kind=effect and no target."""
+def test_build_evaluator_prompt_includes_reason_step():
+    """Reason steps (formerly 'effect') are rendered in the plan section with
+    kind=reason and no target."""
     from src.lnl.types import Plan, PlanStep
     plan = Plan(
         goal="Store order",
-        steps=[PlanStep(kind="effect", description="Record in state", target=None, status="planned")],
+        steps=[PlanStep(kind="reason", description="Record in state", target=None, status="planned")],
         status="active",
     )
     prompt = build_evaluator_prompt(
         _make_definition(0), current_state={}, plan=plan,
         outgoing_messages=[], reply="stored", message=_domain_msg(),
     )
-    assert "effect" in prompt
+    assert "reason" in prompt
     assert "Record in state" in prompt
     assert "{plan_section}" not in prompt

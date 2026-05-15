@@ -83,6 +83,9 @@ class ToolCall:
     id: str
     tool: str
     arguments: dict
+    # Optional: when the LLM tags a tool call with a plan step index, the
+    # runtime auto-captures ToolResult onto plan.steps[plan_step_index].result.
+    plan_step_index: Optional[int] = None
 
 
 @dataclass
@@ -170,11 +173,18 @@ PLAN_TERMINAL_STATUSES = ("complete", "cancelled")
 class PlanStep:
     """One step in an active plan. The LLM never references steps by id —
     it sees them by position (0-based index) in the rendered plan."""
-    kind: str                            # "ask" | "tell"
+    kind: str                            # "ask" | "tell" | "tool" | "reason"
     description: str
-    target: Optional[str] = None
+    target: Optional[str] = None         # peer_id for ask/tell; tool name for tool; None for reason
     status: str = "planned"              # "planned" | "dispatched" | "done" | "failed" | "skipped"
     result_summary: Optional[str] = None
+    # Runtime-captured result, preserving the source's native shape:
+    # - NL string for peer replies (ask)
+    # - structured dict/list/scalar for tool returns
+    # - short note for reason steps (LLM-emitted at closure)
+    result: Optional[Any] = None
+    result_kind: Optional[str] = None    # "nl" | "tool" | "reason"
+    completed_at: Optional[datetime.datetime] = None
 
 
 @dataclass

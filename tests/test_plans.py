@@ -548,3 +548,98 @@ class TestConcurrentTraces:
         # t1 closes (only step is now done); t2 remains active and untouched
         assert "t1" not in obj._active_plans
         assert obj._active_plans["t2"].steps[0].status == "dispatched"
+
+    def test_reply_payload_captured_on_step_result(self):
+        """The reply's content auto-populates step.result with result_kind='nl'
+        — downstream steps can reference it from the rendered plan."""
+        obj = LLMObject(_defn(), MockBrain())
+        from src.lnl.types import Plan, PlanStep
+        obj._active_plans["t1"] = Plan(
+            goal="G", trace_id="t1", status="active",
+            steps=[
+                PlanStep(kind="ask", target="peer", description="get email", status="dispatched"),
+                PlanStep(kind="tell", target="other", description="forward", status="planned"),
+            ],
+        )
+        obj._auto_mark_step_on_reply(0, trace_id="t1", reply_content="john@snow.com")
+        step = obj._active_plans["t1"].steps[0]
+        assert step.status == "done"
+        assert step.result == "john@snow.com"
+        assert step.result_kind == "nl"
+        assert step.completed_at is not None
+
+    def test_tool_call_with_step_index_captures_structured_result(self):
+        """A tool_call tagged with plan_step_index lands the tool's parsed
+        output on step.result with result_kind='tool', and flips status to done."""
+        from src.lnl.types import Plan, PlanStep, ToolResult
+        obj = LLMObject(_defn(), MockBrain())
+        obj._active_plans["t1"] = Plan(
+            goal="G", trace_id="t1", status="active",
+            steps=[
+                PlanStep(kind="tool", target="python", description="compute discount", status="planned"),
+                PlanStep(kind="tell", target="other", description="emit", status="planned"),
+            ],
+        )
+        # Simulate a tool returning structured JSON
+        obj._capture_tool_result_on_step(
+            "t1", 0,
+            ToolResult(id="tc1", output='{"discount": 0.15, "qty": 2}'),
+        )
+        step = obj._active_plans["t1"].steps[0]
+        assert step.status == "done"
+        assert step.result == {"discount": 0.15, "qty": 2}
+        assert step.result_kind == "tool"
+        assert step.completed_at is not None
+
+    def test_tool_call_failure_captures_error_and_marks_failed(self):
+        from src.lnl.types import Plan, PlanStep, ToolResult
+        obj = LLMObject(_defn(), MockBrain())
+        obj._active_plans["t1"] = Plan(
+            goal="G", trace_id="t1", status="active",
+            steps=[PlanStep(kind="tool", target="python", description="x", status="planned")],
+        )
+        obj._capture_tool_result_on_step(
+            "t1", 0,
+            ToolResult(id="tc1", output="", error="ZeroDivisionError"),
+        )
+        step = obj._active_plans["t1"].steps[0]
+        assert step.status == "failed"
+        assert step.result == {"output": "", "error": "ZeroDivisionError"}
+        assert step.result_kind == "tool"
+
+    def test_tool_call_non_json_output_stays_string(self):
+        from src.lnl.types import Plan, PlanStep, ToolResult
+        obj = LLMObject(_defn(), MockBrain())
+        obj._active_plans["t1"] = Plan(
+            goal="G", trace_id="t1", status="active",
+            steps=[PlanStep(kind="tool", target="python", description="x", status="planned")],
+        )
+        obj._capture_tool_result_on_step(
+            "t1", 0,
+            ToolResult(id="tc1", output="hello world"),
+        )
+        step = obj._active_plans["t1"].steps[0]
+        assert step.result == "hello world"  # not JSON-parseable, stored as string
+        assert step.result_kind == "tool"
+
+    def test_reply_payload_visible_in_system_prompt(self):
+        """Captured step.result is rendered into the LLM's system prompt
+        for downstream steps to consume natively."""
+        from src.lnl.brain import build_system_prompt
+        from src.lnl.types import Plan, PlanStep
+        obj = LLMObject(_defn(), MockBrain())
+        obj._active_plans["t1"] = Plan(
+            goal="G", trace_id="t1", status="active",
+            steps=[
+                PlanStep(
+                    kind="ask", target="peer", description="get email",
+                    status="done", result="john@snow.com", result_kind="nl",
+                ),
+                PlanStep(kind="tell", target="other", description="forward", status="planned"),
+            ],
+        )
+        prompt = build_system_prompt(
+            obj.definition, obj.state, active_plan=obj.plan_for("t1"),
+        )
+        assert "john@snow.com" in prompt
+        assert "(nl)" in prompt

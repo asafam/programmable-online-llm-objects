@@ -124,6 +124,15 @@ LLM_REACT_SCHEMA: dict[str, Any] = {
                 "id": {"type": "string", "description": "Unique ID for this call."},
                 "tool": {"type": "string", "description": "Tool name."},
                 "arguments": {"type": "object", "additionalProperties": True},
+                "plan_step_index": {
+                    "type": ["integer", "null"],
+                    "description": (
+                        "Optional: index of the active plan step this tool call satisfies. "
+                        "When set, the runtime captures the tool's structured return value "
+                        "onto plan.steps[plan_step_index].result so downstream steps can "
+                        "reference it directly."
+                    ),
+                },
             },
             "required": ["id", "tool", "arguments"],
             "additionalProperties": False,
@@ -267,7 +276,9 @@ def _peer_interaction_loop(pending_timeout_seconds: float, heartbeat_interval_se
 
 def _render_active_plan(plan: Optional[Plan]) -> str:
     """Render the active plan for the prompt. Hides internal ids; LLM sees
-    goal, status, and steps with 0-based indices."""
+    goal, status, and steps with 0-based indices. Captured step results are
+    rendered in their native shape (NL for peer replies, JSON for tool returns)
+    so downstream steps can reference them directly without state-write hops."""
     if plan is None:
         return "(none)"
     lines = [f"goal: {plan.goal}", f"status: {plan.status}", "steps:"]
@@ -275,8 +286,21 @@ def _render_active_plan(plan: Optional[Plan]) -> str:
         lines.append("  (empty)")
     for i, s in enumerate(plan.steps):
         target = f" → {s.target}" if s.target else ""
-        rs = f"  result: {s.result_summary}" if s.result_summary else ""
-        lines.append(f"  [{i}] {s.kind}{target}: \"{s.description}\"  status={s.status}{rs}")
+        lines.append(f"  [{i}] {s.kind}{target}: \"{s.description}\"  status={s.status}")
+        if s.result is not None:
+            kind_tag = f" ({s.result_kind})" if s.result_kind else ""
+            if isinstance(s.result, str):
+                rendered = f'"{s.result}"' if len(s.result) <= 240 else f'"{s.result[:237]}..."'
+            else:
+                try:
+                    rendered = json.dumps(s.result, ensure_ascii=False, default=str)
+                    if len(rendered) > 480:
+                        rendered = rendered[:477] + "..."
+                except (TypeError, ValueError):
+                    rendered = repr(s.result)[:480]
+            lines.append(f"      result{kind_tag}: {rendered}")
+        elif s.result_summary:
+            lines.append(f"      result: {s.result_summary}")
     return "\n".join(lines)
 
 
@@ -389,6 +413,17 @@ def build_evaluator_prompt(
     )
 
 
+VALID_STEP_KINDS = ("ask", "tell", "tool", "reason")
+
+
+def _normalize_step_kind(raw: str) -> str:
+    """Normalize step kind, accepting 'effect' as a back-compat alias for 'reason'."""
+    k = (raw or "").strip().lower()
+    if k == "effect":
+        return "reason"
+    return k
+
+
 def plan_dict_to_plan(plan_dict: dict, trace_id: Optional[str] = None) -> "Plan":  # type: ignore[name-defined]
     """Convert a raw plan dict (matching PLANNER_RESPONSE_SCHEMA) into a Plan
     object the runtime can use. Filters out the terminal `final` step — it's
@@ -400,12 +435,12 @@ def plan_dict_to_plan(plan_dict: dict, trace_id: Optional[str] = None) -> "Plan"
     for s in steps_in:
         if not isinstance(s, dict):
             continue
-        kind = (s.get("kind") or "").strip().lower()
-        if kind not in ("tell", "ask", "effect"):
+        kind = _normalize_step_kind(s.get("kind") or "")
+        if kind not in VALID_STEP_KINDS:
             # `final` marker step — drop. Auto-close handles plan completion.
             continue
-        # effect steps have no peer target ("self" or "" → None)
-        target = s.get("target") if kind in ("tell", "ask") else None
+        # ask/tell target a peer; tool targets a tool name; reason has no target
+        target = s.get("target") if kind in ("ask", "tell", "tool") else None
         steps_out.append(PlanStep(
             kind=kind,
             description=s.get("description", "") or "",
@@ -1513,10 +1548,12 @@ def _parse_react_step(raw: dict) -> ReactStep:
 
     if action == "tool_call":
         tc_data = raw.get("tool_call") or {}
+        psi = tc_data.get("plan_step_index")
         tc = ToolCall(
             id=tc_data.get("id", ""),
             tool=tc_data.get("tool", ""),
             arguments=tc_data.get("arguments", {}),
+            plan_step_index=psi if isinstance(psi, int) else None,
         )
         return ReactStep(
             thought=thought, action="tool_call",
