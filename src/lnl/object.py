@@ -68,6 +68,8 @@ class LLMObject:
         evaluator_brain: "Optional[LLMBrain]" = None,
         planner_prompt_file: str = "planner.yaml",
         log_synthetic_message: "Optional[Callable[[Message], None]]" = None,
+        stale_plan_seconds: float = 180.0,
+        max_active_plans: int = 32,
     ) -> None:
         self._definition = definition
         self._brain = brain
@@ -121,6 +123,8 @@ class LLMObject:
         self._active_plans: dict[str, Plan] = {}
         self._completed_plans: deque[Plan] = deque(maxlen=64)
         self._plans_lock = threading.Lock()
+        self._stale_plan_seconds = stale_plan_seconds
+        self._max_active_plans = max_active_plans
         # Pending inbound Asks: sender → (message_id, plan_step_index).
         # When the object eventually emits an outgoing to this sender, the
         # runtime stamps it as a reply and propagates the asker's plan
@@ -554,6 +558,8 @@ class LLMObject:
             with self._pending_inbound_lock:
                 self._pending_inbound_asks[message.sender] = (message.id, message.plan_step_index)
 
+        # Retire stale or excess plans before doing any work for this trace.
+        self._sweep_stale_plans()
         # Auto-close stale completed plans so LLM sees a fresh view.
         self._auto_close_plan_if_complete(trace_id)
 
@@ -1262,6 +1268,39 @@ class LLMObject:
 
     # Back-compat alias — older callers may still reference the effect name.
     _mark_effect_steps_done = _mark_reason_steps_done
+
+    def _sweep_stale_plans(self) -> None:
+        """Retire plans that haven't progressed within stale_plan_seconds; if
+        active-plan count exceeds the cap, also force-retire the oldest by
+        last_progress_at. Cheap — single iteration over the dict."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        threshold = datetime.timedelta(seconds=self._stale_plan_seconds)
+        with self._plans_lock:
+            stale_tids: list[str] = []
+            for tid, plan in self._active_plans.items():
+                if (now - plan.last_progress_at) > threshold:
+                    stale_tids.append(tid)
+            for tid in stale_tids:
+                plan = self._active_plans.pop(tid)
+                plan.status = "abandoned"
+                self._completed_plans.append(plan)
+                logger.debug(
+                    "Retired stale plan for %s (trace=%s, idle=%.0fs)",
+                    self.object_id, tid, (now - plan.last_progress_at).total_seconds(),
+                )
+            # Cardinality cap: force-retire oldest until we're under the cap.
+            while len(self._active_plans) > self._max_active_plans:
+                oldest_tid, oldest_plan = min(
+                    self._active_plans.items(),
+                    key=lambda kv: kv[1].last_progress_at,
+                )
+                self._active_plans.pop(oldest_tid)
+                oldest_plan.status = "abandoned"
+                self._completed_plans.append(oldest_plan)
+                logger.warning(
+                    "Force-retired plan for %s (trace=%s) — active-plan cap %d reached",
+                    self.object_id, oldest_tid, self._max_active_plans,
+                )
 
     def _auto_close_plan_if_complete(self, trace_id: Optional[str] = None) -> None:
         """If the active plan for `trace_id` has at least one step and ALL

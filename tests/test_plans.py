@@ -643,3 +643,56 @@ class TestConcurrentTraces:
         )
         assert "john@snow.com" in prompt
         assert "(nl)" in prompt
+
+
+class TestPlanRetirement:
+    """Stage 3: stale plans get force-retired; cardinality cap evicts oldest."""
+
+    def test_stale_plan_retired_as_abandoned(self):
+        import datetime as _dt
+        from src.lnl.types import Plan, PlanStep
+        obj = LLMObject(_defn(), MockBrain(), stale_plan_seconds=0.5)
+        # Pretend the plan hasn't progressed in 10s
+        old = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=10)
+        obj._active_plans["t1"] = Plan(
+            goal="G", trace_id="t1", status="active",
+            steps=[PlanStep(kind="ask", target="x", description="d", status="dispatched")],
+            created_at=old, last_progress_at=old,
+        )
+        obj._sweep_stale_plans()
+        assert "t1" not in obj._active_plans
+        assert len(obj.completed_plans) == 1
+        assert obj.completed_plans[0].status == "abandoned"
+
+    def test_cardinality_cap_evicts_oldest(self):
+        import datetime as _dt
+        from src.lnl.types import Plan, PlanStep
+        obj = LLMObject(_defn(), MockBrain(), max_active_plans=2, stale_plan_seconds=99999)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        # Three plans of different ages; cap is 2 → oldest evicted
+        for i, age in enumerate([30, 20, 10]):
+            tid = f"t{i}"
+            t = now - _dt.timedelta(seconds=age)
+            obj._active_plans[tid] = Plan(
+                goal=tid, trace_id=tid, status="active",
+                steps=[PlanStep(kind="ask", target="x", description="d", status="dispatched")],
+                created_at=t, last_progress_at=t,
+            )
+        obj._sweep_stale_plans()
+        # t0 (oldest at 30s) must be evicted; t1 and t2 stay
+        assert "t0" not in obj._active_plans
+        assert "t1" in obj._active_plans
+        assert "t2" in obj._active_plans
+        assert len(obj.completed_plans) == 1
+        assert obj.completed_plans[0].status == "abandoned"
+        assert obj.completed_plans[0].trace_id == "t0"
+
+    def test_fresh_plans_not_retired(self):
+        from src.lnl.types import Plan, PlanStep
+        obj = LLMObject(_defn(), MockBrain(), stale_plan_seconds=99999)
+        obj._active_plans["t1"] = Plan(
+            goal="G", trace_id="t1", status="active",
+            steps=[PlanStep(kind="ask", target="x", description="d", status="dispatched")],
+        )
+        obj._sweep_stale_plans()
+        assert "t1" in obj._active_plans

@@ -111,6 +111,12 @@ class SystemConfig:
     # to bound cost.
     enable_evaluator: bool = False
     evaluator_max_cycles_per_trace: int = 3
+    # Plan retirement policy. Plans that don't progress for stale_plan_seconds
+    # are moved from _active_plans to _completed_plans with status='abandoned'.
+    # If the active-plan count exceeds the cardinality cap, the oldest by
+    # last_progress_at is force-retired.
+    stale_plan_seconds: float = 180.0
+    max_active_plans_per_object: int = 32
 
     @staticmethod
     def load(path: Path | None = None) -> "SystemConfig":
@@ -139,6 +145,8 @@ class SystemConfig:
             enable_planner=bool(data.get("enable_planner", False)),
             enable_evaluator=bool(data.get("enable_evaluator", False)),
             evaluator_max_cycles_per_trace=int(data.get("evaluator_max_cycles_per_trace", 3)),
+            stale_plan_seconds=float(data.get("stale_plan_seconds", 180.0)),
+            max_active_plans_per_object=int(data.get("max_active_plans_per_object", 32)),
         )
 
 
@@ -398,6 +406,8 @@ class Runtime:
             evaluator_brain=self._evaluator_brain,
             planner_prompt_file=self._planner_prompt_file,
             log_synthetic_message=self._bus.log_synthetic,
+            stale_plan_seconds=self._heartbeat.stale_plan_seconds,
+            max_active_plans=self._heartbeat.max_active_plans_per_object,
         )
         self._bus.register(obj)
         if definition.event_sources:
