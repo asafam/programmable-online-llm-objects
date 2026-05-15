@@ -645,6 +645,86 @@ class TestConcurrentTraces:
         assert "(nl)" in prompt
 
 
+class TestFailurePropagation:
+    """Stage 5: structured failure signalling on REPLY messages flips the
+    asker's plan step to status='failed' instead of 'done'."""
+
+    def test_failed_reply_flips_step_to_failed(self):
+        from src.lnl.types import Plan, PlanStep
+        obj = LLMObject(_defn(), MockBrain())
+        obj._active_plans["t1"] = Plan(
+            goal="G", trace_id="t1", status="active",
+            steps=[
+                PlanStep(kind="ask", target="peer", description="ask peer", status="dispatched"),
+                PlanStep(kind="tell", target="other", description="forward", status="planned"),
+            ],
+        )
+        obj._auto_mark_step_on_reply(
+            0, trace_id="t1",
+            reply_content="couldn't find the customer",
+            reply_status="failed",
+            reply_error="customer not found",
+        )
+        step = obj._active_plans["t1"].steps[0]
+        assert step.status == "failed"
+        assert step.result == {"reply": "couldn't find the customer", "error": "customer not found"}
+        assert step.result_kind == "failure"
+
+    def test_ok_reply_still_flips_to_done(self):
+        from src.lnl.types import Plan, PlanStep
+        obj = LLMObject(_defn(), MockBrain())
+        obj._active_plans["t1"] = Plan(
+            goal="G", trace_id="t1", status="active",
+            steps=[
+                PlanStep(kind="ask", target="peer", description="x", status="dispatched"),
+                PlanStep(kind="tell", target="other", description="y", status="planned"),
+            ],
+        )
+        obj._auto_mark_step_on_reply(
+            0, trace_id="t1", reply_content="hello", reply_status="ok",
+        )
+        step = obj._active_plans["t1"].steps[0]
+        assert step.status == "done"
+        assert step.result == "hello"
+        assert step.result_kind == "nl"
+
+    def test_runtime_synthesizes_failure_reply_on_status(self):
+        """When an object's ProcessingResult.status='failed', the runtime
+        propagates a status='failed' REPLY to the awaiting asker, whose plan
+        step flips to 'failed'."""
+        brain = MockBrain()
+        # objA asks objB; objB explicitly fails
+        brain.script_react(ReactStep(
+            thought="ask peer-b",
+            action="finish",
+            finish=ReactFinish(
+                reply="",
+                outgoing_messages=[OutgoingMessage(recipient="peer-b", content="?", expects_reply=True)],
+            ),
+        ))
+        brain.script_react(ReactStep(
+            thought="cannot do",
+            action="finish",
+            finish=ReactFinish(
+                reply="I cannot do that",
+                outgoing_messages=[],
+                status="failed",
+                error="no permission",
+            ),
+        ))
+        brain.set_default(LLMResponse(updated_state={}, reply=""))
+
+        rt = Runtime(brain)
+        a = rt.create_object(_defn("obj-a", peers=[PeerDeclaration("peer-b", "x")]))
+        rt.create_object(_defn("peer-b"))
+        rt.send("obj-a", "go")
+        # objA's plan step for ask peer-b should be failed
+        plan = list(a.active_plans.values())[0] if a.active_plans else a.completed_plans[-1]
+        assert plan.steps[0].status == "failed"
+        assert plan.steps[0].result_kind == "failure"
+        assert "no permission" in (plan.steps[0].result or {}).get("error", "")
+
+
 class TestPlanRetirement:
     """Stage 3: stale plans get force-retired; cardinality cap evicts oldest."""
 

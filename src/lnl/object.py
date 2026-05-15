@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from typing import Callable, Optional
 
@@ -70,6 +71,7 @@ class LLMObject:
         log_synthetic_message: "Optional[Callable[[Message], None]]" = None,
         stale_plan_seconds: float = 180.0,
         max_active_plans: int = 32,
+        tool_pool_size: int = 4,
     ) -> None:
         self._definition = definition
         self._brain = brain
@@ -143,6 +145,72 @@ class LLMObject:
         # Lazily initialized so objects that never call the tool pay nothing.
         # Not part of NL `_state` — never serialized into the prompt.
         self._repl_namespace: Optional[dict] = None
+        # Per-object thread pool for async tool execution. Lazily initialized
+        # so objects that never call tools (pure peer-dispatchers) pay nothing.
+        # Tool callbacks post a REPLY message back to this object's mailbox,
+        # treating tool returns identically to peer replies.
+        self._tool_pool: Optional[ThreadPoolExecutor] = None
+        self._tool_pool_size = tool_pool_size
+        self._tool_pool_lock = threading.Lock()
+
+    def _get_tool_pool(self) -> ThreadPoolExecutor:
+        """Lazy accessor for the per-object tool-execution pool.
+
+        Created on first use; never instantiated for objects that don't
+        dispatch tools. Double-checked locking keeps creation thread-safe.
+        """
+        if self._tool_pool is None:
+            with self._tool_pool_lock:
+                if self._tool_pool is None:
+                    self._tool_pool = ThreadPoolExecutor(
+                        max_workers=self._tool_pool_size,
+                        thread_name_prefix=f"tool-{self.object_id[:12]}",
+                    )
+        return self._tool_pool
+
+    def shutdown_tool_pool(self) -> None:
+        """Shut down this object's tool pool if one was created.
+
+        Safe to call multiple times. Non-blocking (wait=False) — in-flight
+        tool callbacks may still complete but cannot post new replies to
+        a torn-down runtime.
+        """
+        with self._tool_pool_lock:
+            if self._tool_pool is not None:
+                self._tool_pool.shutdown(wait=False)
+                self._tool_pool = None
+
+    def _execute_tool(
+        self,
+        tc: ToolCall,
+        trace_id: Optional[str],
+    ) -> ToolResult:
+        """Pool-worker function: execute one tool synchronously.
+
+        Tool calls are conceptually Asks — always block the orchestrator
+        until the result arrives. The per-object pool exists purely to run
+        multiple tools from the same LLM response in parallel. The caller
+        waits on the future, captures the result on the plan step (if
+        tagged), and feeds the result back into the LLM's next iteration.
+        """
+        ctx = self._tool_context_factory(self) if self._tool_context_factory else {}
+        try:
+            result = self._tool_registry.execute(tc, ctx)
+        except Exception as exc:
+            result = ToolResult(
+                id=tc.id, output="", error=f"Tool execution raised: {exc}",
+            )
+
+        if tc.plan_step_index is not None and trace_id is not None:
+            try:
+                self._capture_tool_result_on_step(
+                    trace_id, tc.plan_step_index, result,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to capture tool result on plan step for %s", self.object_id,
+                )
+        return result
 
     def _get_repl_namespace(self) -> dict:
         """Lazy accessor for the per-object Python REPL namespace.
@@ -530,6 +598,8 @@ class LLMObject:
             outgoing_messages=finish.outgoing_messages,
             updated_definition=finish.updated_definition,
             knowledge_gap=finish.knowledge_gap,
+            status=finish.status,
+            error=finish.error,
         )
 
     # --- Core Processing (ReAct loop with internal self-correction) ---
@@ -545,13 +615,16 @@ class LLMObject:
         trace_id = message.trace_id
 
         # Reply-driven auto-mark: if this message is a correlated reply to
-        # a step in our active plan, mark that step done BEFORE the LLM runs,
-        # so the rendered plan snapshot reflects reality. Captures the reply
-        # payload onto step.result so downstream steps can reference it.
+        # a step in our active plan, mark that step done (or failed, when
+        # the reply carries status='failed') BEFORE the LLM runs, so the
+        # rendered plan snapshot reflects reality. Captures the reply payload
+        # onto step.result so downstream steps can reference it.
         if message.plan_step_index is not None:
             self._auto_mark_step_on_reply(
                 message.plan_step_index, trace_id,
                 reply_content=message.content,
+                reply_status=message.status,
+                reply_error=message.error,
             )
 
         # Record pending inbound Asks so a later reply-to-asker (possibly in
@@ -656,12 +729,14 @@ class LLMObject:
         # the last cycle's reply.
         accumulated_outgoing: list[OutgoingMessage] = []
         final_reply = ""
+        final_status: Optional[str] = None
+        final_error: Optional[str] = None
         eval_cycle = 0
         executor_total = InferenceMetrics(model="")
         evaluator_total = InferenceMetrics(model="")
 
         while True:
-            finish, pending_deltas, react_metrics = self._run_react_cycle(messages, trace_id)
+            finish, pending_deltas, react_metrics = self._run_react_cycle(messages, trace_id, origin_msg=message)
             total_metrics = _accumulate_metrics(total_metrics, react_metrics)
             executor_total = _accumulate_metrics(executor_total, react_metrics)
 
@@ -677,6 +752,8 @@ class LLMObject:
                     outgoing_messages=extended_outgoing,
                     updated_definition=finish.updated_definition,
                     knowledge_gap=finish.knowledge_gap,
+                    status=finish.status,
+                    error=finish.error,
                 )
 
             # Sink completion shim: safe to apply each cycle — it's idempotent
@@ -703,6 +780,8 @@ class LLMObject:
             if cycle_outgoing:
                 accumulated_outgoing.extend(cycle_outgoing)
             final_reply = finish.reply
+            final_status = finish.status
+            final_error = finish.error
 
             # Self-evaluation. run_evaluator returns (None, None) when the
             # evaluator should be skipped (disabled, no plan, all steps
@@ -803,72 +882,111 @@ class LLMObject:
             source_trace_id=message.trace_id,
             processing_started_at=processing_started_at,
             processing_completed_at=processing_completed_at,
+            status=final_status,
+            error=final_error,
         )
 
     def _run_react_cycle(
         self,
         messages: list[dict],
         trace_id: Optional[str] = None,
+        origin_msg: "Optional[Message]" = None,
     ) -> "tuple[ReactFinish, list[StateDelta], InferenceMetrics]":
-        """Run a single ReAct cycle (think → tool_call rounds → finish).
-        Mutates `messages` in place with assistant/tool-result turns.
-        Returns (finish, pending_deltas_from_this_cycle, accumulated_metrics)."""
+        """ReAct loop with PARALLEL tool execution.
+
+        Tools are conceptually Asks — the orchestrator always waits for results
+        before continuing. The per-object tool pool exists purely to run
+        multiple tools from the same LLM response IN PARALLEL. The loop blocks
+        on all dispatched tool futures, captures results, and re-runs the LLM
+        with results in context. Loop continues until the LLM emits
+        action="finish" (no more tool_calls).
+
+        State/plan updates are applied ONLY on action="finish" — they are the
+        LLM's commitment, not intermediate reasoning. Updates emitted on
+        action="tool_call" steps are discarded.
+
+        Returns (finish, pending_deltas_from_this_cycle, accumulated_metrics).
+        """
         metrics = InferenceMetrics(model="")
-        finish: ReactFinish | None = None
-        tool_rounds = 0
         pending_deltas: list[StateDelta] = []
+        tool_rounds = 0
+        finish: ReactFinish | None = None
 
         while True:
             step, m = self._brain.react_call(messages, object_id=self.object_id)
             metrics = _accumulate_metrics(metrics, m)
 
-            if step.state_update:
-                pending_deltas.append(step.state_update)
-
-            if step.plan_update is not None:
-                self._apply_plan_update(step.plan_update, trace_id)
-
             if step.action == "finish":
-                finish = step.finish
+                # Commitment — apply state/plan updates, return finish.
+                if step.state_update:
+                    pending_deltas.append(step.state_update)
+                if step.plan_update is not None:
+                    self._apply_plan_update(step.plan_update, trace_id)
+                finish = step.finish or ReactFinish(reply="", updated_state=self._state)
                 break
 
+            # action == "tool_call" — reasoning step, not a commitment.
+            # State/plan updates from this step are discarded by design.
             if tool_rounds >= self._max_tool_rounds:
+                # Safety cap: force-finish empty to prevent runaway loops.
                 finish = ReactFinish(reply="", updated_state=self._state)
                 break
 
-            tc = step.tool_call
-            if not self._tool_registry or tc is None:
+            tcs = step.tool_calls
+            if not self._tool_registry or not tcs:
+                # No registry, or tool_call action with empty list — tell the
+                # LLM and re-run so it can finish properly.
                 messages.append({"role": "assistant", "content": json.dumps({
-                    "thought": step.thought,
-                    "action": "tool_call",
-                    "tool_call": {"id": tc.id if tc else "", "tool": tc.tool if tc else "", "arguments": {}},
+                    "thought": step.thought, "action": "tool_call",
+                    "tool_calls": [{"id": t.id, "tool": t.tool, "arguments": t.arguments} for t in tcs],
                 })})
-                messages.append({"role": "user", "content": "[Tool execution unavailable — no tool registry is configured. Please provide your final answer.]"})
+                messages.append({"role": "user", "content": (
+                    "[Tool execution unavailable — no tool registry is configured. "
+                    "Please provide your final answer.]"
+                )})
+                tool_rounds += 1
                 continue
 
             tool_rounds += 1
-            ctx = self._tool_context_factory(self) if self._tool_context_factory else {}
-            try:
-                result = self._tool_registry.execute(tc, ctx)
-            except Exception as exc:
-                result = ToolResult(id=tc.id, output="", error=f"Tool execution raised an exception: {exc}")
+            # Dispatch all tools in this batch to the per-object pool — they
+            # run in parallel. Block on all of them before re-running the LLM.
+            pool = self._get_tool_pool()
+            futures: list[tuple] = []
+            for tc in tcs:
+                try:
+                    fut = pool.submit(self._execute_tool, tc, trace_id)
+                    futures.append((tc, fut))
+                except RuntimeError:
+                    # Pool shut down — synthesize an error result for this tc.
+                    futures.append((tc, None))
 
-            # If the LLM tagged this tool_call with a plan step index, capture
-            # the result on plan.steps[idx].result preserving structured shape.
-            if tc.plan_step_index is not None and trace_id is not None:
-                self._capture_tool_result_on_step(
-                    trace_id, tc.plan_step_index, result,
-                )
-
+            # Append the assistant's tool_calls message once (the batch).
             messages.append({"role": "assistant", "content": json.dumps({
-                "thought": step.thought,
-                "action": "tool_call",
-                "tool_call": {"id": tc.id, "tool": tc.tool, "arguments": tc.arguments},
+                "thought": step.thought, "action": "tool_call",
+                "tool_calls": [
+                    {"id": tc.id, "tool": tc.tool, "arguments": tc.arguments}
+                    for tc in tcs
+                ],
             })})
-            messages.append({"role": "user", "content": f"[Tool result for {tc.id}]: {result.output}" + (f"\nError: {result.error}" if result.error else "")})
 
-        if finish is None:
-            finish = ReactFinish(reply="")
+            # Wait for each tool, append per-tool result for LLM context.
+            for tc, fut in futures:
+                if fut is None:
+                    result = ToolResult(
+                        id=tc.id, output="", error="Tool pool unavailable.",
+                    )
+                else:
+                    try:
+                        result = fut.result()
+                    except Exception as exc:
+                        result = ToolResult(
+                            id=tc.id, output="", error=f"Tool execution raised: {exc}",
+                        )
+                messages.append({
+                    "role": "user",
+                    "content": f"[Tool result for {tc.id}]: {result.output}"
+                               + (f"\nError: {result.error}" if result.error else ""),
+                })
 
         return finish, pending_deltas, metrics
 
@@ -1135,21 +1253,30 @@ class LLMObject:
         step_index: int,
         trace_id: Optional[str] = None,
         reply_content: Optional[str] = None,
+        reply_status: Optional[str] = None,
+        reply_error: Optional[str] = None,
     ) -> None:
         """Runtime hook: when a correlated reply arrives tagged with a step
-        index, mark that step done on the plan for `trace_id` (unless already
-        terminal) AND capture the reply payload on step.result as NL."""
+        index, mark that step on the plan for `trace_id`:
+        - status='failed' on the reply → step.status='failed', result captures error
+        - otherwise → step.status='done', result captures reply content as NL.
+        Skips if step is already in a terminal status."""
         now = datetime.datetime.now(datetime.timezone.utc)
+        failed = reply_status == "failed"
         with self._plans_lock:
             plan = self._active_plans.get(trace_id) if trace_id is not None else None
             if plan is None or step_index < 0 or step_index >= len(plan.steps):
                 return
             step = plan.steps[step_index]
             if step.status not in STEP_TERMINAL_STATUSES:
-                step.status = "done"
-                if reply_content is not None and step.result is None:
-                    step.result = reply_content
-                    step.result_kind = "nl"
+                step.status = "failed" if failed else "done"
+                if step.result is None:
+                    if failed:
+                        step.result = {"reply": reply_content, "error": reply_error}
+                        step.result_kind = "failure"
+                    elif reply_content is not None:
+                        step.result = reply_content
+                        step.result_kind = "nl"
                 step.completed_at = now
                 plan.last_progress_at = now
         self._auto_close_plan_if_complete(trace_id)

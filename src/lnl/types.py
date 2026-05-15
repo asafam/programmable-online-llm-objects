@@ -12,7 +12,7 @@ class MessageType(Enum):
     DOMAIN = "domain"
     ADMIN = "admin"
     EVENT = "event"
-    REPLY = "reply"
+    REPLY = "reply"  # used for both peer-to-peer replies and async tool results (sender distinguishes)
     HEARTBEAT = "heartbeat"
     PLAN = "plan"   # synthetic — never delivered; surfaces planner output in bus log
 
@@ -56,6 +56,13 @@ class Message:
     reference: Optional[str] = None      # legacy correlation tag (unused by runtime now)
     expects_reply: bool = False          # True = Ask (sender wants a reply); False = Tell (propagated from OutgoingMessage)
     plan_step_index: Optional[int] = None  # runtime-stamped: index of plan step this message dispatches (for correlation)
+    # ── Outcome signalling on REPLY messages ──────────────────────────────────
+    # status=None on non-reply messages. On REPLY, status="ok" (default for
+    # successful replies) or "failed" (when the responding object reports
+    # failure, a tool errored, or the runtime synthesized a failure on the
+    # asker's behalf). error carries structured failure detail when status=failed.
+    status: Optional[str] = None         # None | "ok" | "failed"
+    error: Optional[str] = None          # structured failure detail when status="failed"
     # ── Transaction tracing (runtime-only; not exposed to the LLM) ──────────────
     trace_id: Optional[str] = None       # root msg.id of the cascade; propagated through every hop
     parent_id: Optional[str] = None      # msg.id whose processing caused this message to be sent
@@ -71,6 +78,11 @@ class OutgoingMessage:
     recipient: str
     content: str
     expects_reply: bool = False        # True = Ask (sender wants a reply); False = Tell (fire-and-forget)
+    # Outcome signalling (propagated onto the chained Message when set).
+    # Used when the LLM emits an outgoing reply that should be marked as a
+    # failure for the asker's plan step.
+    status: Optional[str] = None       # None | "ok" | "failed"
+    error: Optional[str] = None
     # Runtime-stamped fields (LLM never sets these):
     plan_step_index: Optional[int] = None  # index of the plan step this dispatches (if correlated)
     in_reply_to: Optional[str] = None      # original message id when this is a cross-turn reply to a pending Ask
@@ -143,6 +155,10 @@ class ProcessingResult:
     source_message_id: str = ""  # ID of the message that was processed
     source_plan_step_index: Optional[int] = None  # plan_step_index from the processed message (propagated onto replies)
     source_trace_id: Optional[str] = None  # trace_id from the processed message (propagated onto cascaded messages)
+    # Outcome of this turn. status="failed" causes the runtime to synthesize
+    # a failure REPLY back to the asker (if any) instead of an "ok" reply.
+    status: Optional[str] = None   # None | "ok" | "failed"
+    error: Optional[str] = None    # structured failure detail when status="failed"
     # ── Per-message processing wall-clock (for tracing) ───────────────────────
     processing_started_at: Optional[datetime.datetime] = None
     processing_completed_at: Optional[datetime.datetime] = None
@@ -222,17 +238,35 @@ class ReactFinish:
     outgoing_messages: list[OutgoingMessage] = field(default_factory=list)
     updated_definition: Optional[dict] = None  # set when an ADMIN message triggers a definition change
     knowledge_gap: Optional["KnowledgeGap"] = None
+    # The LLM signals overall turn outcome here. status="failed" propagates a
+    # failure REPLY to any asker awaiting this object — the asker's plan step
+    # flips to status="failed" instead of "done".
+    status: Optional[str] = None   # None | "ok" | "failed"
+    error: Optional[str] = None    # structured failure detail when status="failed"
 
 
 @dataclass
 class ReactStep:
-    """One step in a ReAct loop: an explicit thought and a single action."""
+    """One step in a ReAct loop: an explicit thought and a single action.
+
+    After the async-tools rewrite, a single response can carry both a
+    `finish` AND a list of `tool_calls` dispatched async. For backward
+    compatibility, `tool_call` (singular) is kept as a legacy alias —
+    if set and `tool_calls` is empty, it's normalized into the list.
+    """
     thought: str
     action: str  # "tool_call" | "finish"
-    state_update: Optional[StateDelta] = None  # optional at any step; accumulated by runtime
-    plan_update: Optional[PlanUpdate] = None   # optional at any step; accumulated by runtime
-    tool_call: Optional[ToolCall] = None
+    state_update: Optional[StateDelta] = None  # applied ONLY on action="finish" (commitment, not reasoning)
+    plan_update: Optional[PlanUpdate] = None   # applied ONLY on action="finish"
+    tool_call: Optional[ToolCall] = None       # legacy: singular tool call
+    tool_calls: list[ToolCall] = field(default_factory=list)  # preferred: batched tool calls dispatched async
     finish: Optional[ReactFinish] = None
+
+    def __post_init__(self) -> None:
+        # Normalize legacy singular form into the list. Caller may pass
+        # either shape; downstream code reads `self.tool_calls` only.
+        if self.tool_call is not None and not self.tool_calls:
+            self.tool_calls = [self.tool_call]
 
 
 @dataclass

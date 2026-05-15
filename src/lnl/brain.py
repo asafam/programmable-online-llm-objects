@@ -119,7 +119,7 @@ LLM_REACT_SCHEMA: dict[str, Any] = {
         },
         "tool_call": {
             "type": "object",
-            "description": "Present only when action=tool_call.",
+            "description": "Legacy singular form. Prefer tool_calls (list). Kept for backward compatibility.",
             "properties": {
                 "id": {"type": "string", "description": "Unique ID for this call."},
                 "tool": {"type": "string", "description": "Tool name."},
@@ -136,6 +136,35 @@ LLM_REACT_SCHEMA: dict[str, Any] = {
             },
             "required": ["id", "tool", "arguments"],
             "additionalProperties": False,
+        },
+        "tool_calls": {
+            "type": "array",
+            "description": (
+                "Preferred form. Batch of tool calls executed IN PARALLEL on the object's "
+                "tool pool. The runtime blocks the turn until ALL listed tools complete, then "
+                "calls you again with each tool's result in the message history. Results are "
+                "also captured on plan.steps[plan_step_index].result. Use a list when you "
+                "want concurrent execution of multiple tools; you'll always get the results "
+                "back in this same turn before producing your final finish."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Unique ID for this call."},
+                    "tool": {"type": "string", "description": "Tool name."},
+                    "arguments": {"type": "object", "additionalProperties": True},
+                    "plan_step_index": {
+                        "type": ["integer", "null"],
+                        "description": (
+                            "Optional: index of the active plan step this tool call satisfies. "
+                            "When set, the runtime captures the tool's structured return value "
+                            "onto plan.steps[plan_step_index].result."
+                        ),
+                    },
+                },
+                "required": ["id", "tool", "arguments"],
+                "additionalProperties": False,
+            },
         },
         "state_update": {
             "type": "object",
@@ -167,6 +196,15 @@ LLM_REACT_SCHEMA: dict[str, Any] = {
                             "expects_reply": {
                                 "type": "boolean",
                                 "description": "Set true for Ask messages — when you need information back before you can continue. Leave false (default) for Tell messages: notifications, writes, and one-way forwards.",
+                            },
+                            "status": {
+                                "type": ["string", "null"],
+                                "enum": [None, "ok", "failed"],
+                                "description": "Outcome signalling for replies. Set 'failed' when this outgoing reports an error to the asker; their plan step will flip to status='failed' on receipt.",
+                            },
+                            "error": {
+                                "type": ["string", "null"],
+                                "description": "Optional structured error detail when status='failed'.",
                             },
                         },
                         "required": ["recipient", "content"],
@@ -207,6 +245,15 @@ LLM_REACT_SCHEMA: dict[str, Any] = {
                     },
                     "required": ["question"],
                     "additionalProperties": False,
+                },
+                "status": {
+                    "type": ["string", "null"],
+                    "enum": [None, "ok", "failed"],
+                    "description": "Optional turn outcome. Set 'failed' to signal that your work could not complete — the runtime will propagate a failure REPLY to any asker awaiting you, and their plan step flips to 'failed' rather than 'done'.",
+                },
+                "error": {
+                    "type": ["string", "null"],
+                    "description": "Optional structured error detail when status='failed'.",
                 },
             },
             "required": ["reply"],
@@ -1537,8 +1584,25 @@ def _parse_plan_update(raw: dict) -> Optional[PlanUpdate]:
     )
 
 
+def _parse_tool_call_dict(tc_data: dict) -> ToolCall:
+    """Convert a raw tool_call dict into a ToolCall dataclass."""
+    psi = tc_data.get("plan_step_index")
+    return ToolCall(
+        id=tc_data.get("id", ""),
+        tool=tc_data.get("tool", ""),
+        arguments=tc_data.get("arguments", {}),
+        plan_step_index=psi if isinstance(psi, int) else None,
+    )
+
+
 def _parse_react_step(raw: dict) -> ReactStep:
-    """Parse a raw LLM dict into a ReactStep."""
+    """Parse a raw LLM dict into a ReactStep.
+
+    Accepts both legacy singular `tool_call` and the new `tool_calls` list.
+    A `finish` action may carry `tool_calls` to dispatch async alongside the
+    commitment — those are read here and the runtime dispatches them on the
+    per-object tool pool without blocking the turn.
+    """
     thought = raw.get("thought", "")
     action = raw.get("action", "finish")
 
@@ -1546,21 +1610,28 @@ def _parse_react_step(raw: dict) -> ReactStep:
     state_update = _parse_state_delta(raw.get("state_update") or {})
     plan_update = _parse_plan_update(raw.get("plan_update") or {})
 
+    # Collect tool_calls from either the legacy singular form or the new list.
+    # Both may be present in unusual cases — the list wins, singular is appended
+    # only if the list is empty.
+    tool_calls_raw = raw.get("tool_calls") or []
+    tool_calls: list[ToolCall] = [
+        _parse_tool_call_dict(tc) for tc in tool_calls_raw if isinstance(tc, dict)
+    ]
+    if not tool_calls:
+        legacy_tc = raw.get("tool_call")
+        if isinstance(legacy_tc, dict) and legacy_tc.get("tool"):
+            tool_calls = [_parse_tool_call_dict(legacy_tc)]
+
     if action == "tool_call":
-        tc_data = raw.get("tool_call") or {}
-        psi = tc_data.get("plan_step_index")
-        tc = ToolCall(
-            id=tc_data.get("id", ""),
-            tool=tc_data.get("tool", ""),
-            arguments=tc_data.get("arguments", {}),
-            plan_step_index=psi if isinstance(psi, int) else None,
-        )
+        # Legacy ReAct path: action is tool_call, no finish payload.
+        first = tool_calls[0] if tool_calls else None
         return ReactStep(
             thought=thought, action="tool_call",
-            state_update=state_update, plan_update=plan_update, tool_call=tc,
+            state_update=state_update, plan_update=plan_update,
+            tool_call=first, tool_calls=tool_calls,
         )
 
-    # action == "finish"
+    # action == "finish" — may also carry tool_calls dispatched async
     f_data = raw.get("finish") or {}
     updated_state = _parse_state(f_data.get("updated_state"))
 
@@ -1570,6 +1641,8 @@ def _parse_react_step(raw: dict) -> ReactStep:
             recipient=m["recipient"],
             content=m["content"],
             expects_reply=bool(m.get("expects_reply", False)),
+            status=m.get("status") if m.get("status") in ("ok", "failed") else None,
+            error=m.get("error") if isinstance(m.get("error"), str) else None,
         )
         for m in raw_msgs
         if isinstance(m, dict)
@@ -1584,16 +1657,21 @@ def _parse_react_step(raw: dict) -> ReactStep:
             question=raw_gap["question"],
             context=raw_gap.get("context", ""),
         )
+    finish_status = f_data.get("status") if f_data.get("status") in ("ok", "failed") else None
+    finish_error = f_data.get("error") if isinstance(f_data.get("error"), str) else None
     finish = ReactFinish(
         reply=f_data.get("reply", ""),
         updated_state=updated_state,
         outgoing_messages=outgoing,
         updated_definition=updated_def,
         knowledge_gap=knowledge_gap,
+        status=finish_status,
+        error=finish_error,
     )
     return ReactStep(
         thought=thought, action="finish",
-        state_update=state_update, plan_update=plan_update, finish=finish,
+        state_update=state_update, plan_update=plan_update,
+        finish=finish, tool_calls=tool_calls,
     )
 
 

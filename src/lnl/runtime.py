@@ -630,33 +630,44 @@ class Runtime:
             [o.recipient for o in result.outgoing_messages],
         )
 
-        # Route reply back to sender ONLY if the sender is awaiting a reply from
-        # this object (prevents ack storms from write-service objects).
+        # Route reply back to sender. Two paths:
+        # (a) success — non-empty reply text AND not explicit failure → 'ok' REPLY
+        # (b) explicit failure — result.status='failed' → 'failed' REPLY
+        # Empty reply with no explicit failure is legitimate (e.g. the object
+        # chained through a peer); we do NOT synthesize failure in that case.
         with self._awaiting_lock:
-            should_reply = (
-                bool(result.reply)
-                and result.in_reply_to is not None
+            awaited = (
+                result.in_reply_to is not None
                 and result.source_message_type != MessageType.REPLY
                 and result.in_reply_to not in ("__user__", "__system__", "__external__", "__code__")
                 and result.in_reply_to in self._bus.objects
                 and obj_id in self._awaiting_reply.get(result.in_reply_to, set())
             )
-            if should_reply:
+            should_reply_failed = awaited and result.status == "failed"
+            should_reply_ok = awaited and bool(result.reply) and not should_reply_failed
+            if should_reply_ok or should_reply_failed:
                 self._awaiting_reply[result.in_reply_to].discard(obj_id)
 
-        if should_reply:
+        if should_reply_ok or should_reply_failed:
             next_depth = result.depth_remaining - 1
             if next_depth > 0:
+                reply_status = "failed" if should_reply_failed else "ok"
+                reply_error = result.error if should_reply_failed else None
+                reply_content = result.reply or (
+                    f"[failure] {reply_error}" if should_reply_failed and reply_error else ""
+                )
                 reply_msg = Message(
                     sender=obj_id,
                     recipient=result.in_reply_to,
                     type=MessageType.REPLY,
-                    content=result.reply,
+                    content=reply_content,
+                    status=reply_status,
+                    error=reply_error,
                     depth_remaining=next_depth,
                     id=self._next_msg_id(obj_id),
                     in_reply_to=result.source_message_id,
                     # Propagate the original message's plan step index so the
-                    # asker's plan step auto-marks done when the reply arrives.
+                    # asker's plan step auto-marks done/failed when the reply arrives.
                     plan_step_index=result.source_plan_step_index,
                     trace_id=result.source_trace_id,
                     parent_id=result.source_message_id,
@@ -695,6 +706,9 @@ class Runtime:
                 in_reply_to=out.in_reply_to,
                 expects_reply=out.expects_reply,
                 plan_step_index=out.plan_step_index,
+                # Propagate outcome signalling on reply messages.
+                status=out.status if out.is_reply else None,
+                error=out.error if out.is_reply else None,
                 trace_id=result.source_trace_id,
                 parent_id=result.source_message_id,
             )
