@@ -1,0 +1,143 @@
+user_prompt: |
+  # Task: Generate State Probe Test Cases
+
+  You are designing a test that measures how well an LLM-based automation system
+  tracks accumulated state across {DEPTH} sequential state-mutating events.
+
+  The system maintains a compact JSON state that it updates after each event. The
+  test probes whether that state is accurate and complete after {DEPTH} events —
+  specifically whether the system has correctly applied additions, modifications
+  of existing entities, and retractions (cancellations/removals).
+
+  ---
+
+  ## Automation System
+
+  {SAMPLE}
+
+  ---
+
+  ## Design Principle
+
+  Events must include a MIX of mutation types — not just additions. The probe
+  questions specifically require retractions and entity-level modifications to
+  have been applied correctly. A system that only appends to state (never updates
+  or deletes) will fail the probes.
+
+  Target distribution across the {DEPTH} events:
+  - ~60% **Additions** — new entities, records, or facts are created
+  - ~25% **Modifications** — an EXISTING entity's attribute changes (status, tier, owner, priority)
+  - ~15% **Retractions** — an existing entity is cancelled, removed, or deactivated
+
+  Minimum requirements regardless of depth:
+  - At least 2 entities must be retracted (cancelled/removed/closed as false alarm)
+  - At least 2 entities must be modified after creation (not just added then removed)
+
+  ---
+
+  ## Step 1: Generate {DEPTH} State-Mutating Events
+
+  Write {DEPTH} realistic external triggers distributed across the mutation types above.
+
+  Requirements:
+  - Send each event to an entry-point object (one whose event_sources is non-empty)
+  - **Additions**: create a new named entity with a clear identifier
+    (e.g. "Ticket T-042 opened by Alice — billing issue", "Deal #217 added for Acme Corp")
+  - **Modifications**: change a named entity introduced in a PRIOR event
+    (e.g. "T-017 escalated to P1 — customer unresponsive", "Deal #189 moved to Negotiation stage")
+  - **Retractions**: cancel or remove a named entity introduced in a prior event
+    (e.g. "T-029 closed — false alarm, no action needed", "Deal #203 marked lost")
+  - Use realistic, individually trackable identifiers (IDs, names) throughout
+  - Events may reference each other via entity IDs to build a coherent narrative
+  - Spread timestamps across Mon–Fri: W02-1T09:00 through W02-5T17:00
+  - Set role="irrelevant", after_mod_ids=[] for ALL mutation events
+  - expect.action: one sentence describing what the system should have recorded after this event
+    - Addition: "T-042 is recorded as an open billing ticket assigned to Alice"
+    - Modification: "T-017 priority is updated to P1"
+    - Retraction: "T-029 is marked as closed / no longer active"
+  - expect.reason: the mutation type (addition / modification / retraction)
+  - Event IDs: E001 through E{DEPTH_PADDED}
+
+  ---
+
+  ## Step 2: Generate {K_PROBES} Probe Questions
+
+  Write {K_PROBES} **composition-heavy** questions about the CURRENT state — after ALL
+  mutations. Each answer must require combining or aggregating information across
+  TWO OR MORE state-mutating events. Single-entity factual lookups ("what is T-042's
+  status?") are NOT acceptable — the baseline can answer those by searching its
+  conversation history. We want probes that pressure conversation memory and reward
+  structured, indexed state.
+
+  Cover these probe types (distribute across the {K_PROBES} probes — do not generate
+  trivial single-entity lookups):
+
+  1. **Multi-attribute filter** — "Which currently-open [entities] are both
+     [attr1=X] AND [attr2=Y]?"
+     Forces a join across two attributes for every surviving entity.
+     Example: "Which currently-open tickets are both P1 AND assigned to Alice?"
+     depends_on must include the events that set each attribute on each matching
+     entity, plus retraction events that excluded other candidates.
+
+  2. **Cross-entity shared-attribute** — "Which other [entities] share the same
+     [attribute] as [entity Z]?"
+     Forces resolving Z's value, then scanning peers.
+     Example: "Which other deals are in the same stage as Deal #217?"
+     depends_on must include the event establishing Z's attribute and the events
+     setting that attribute on the matching peers.
+
+  3. **Negation / inverse aggregate** — "Which currently-open [entities] do NOT
+     have [attribute] equal to [X] (or do not have it set at all)?"
+     Forces enumeration with negation; missing attributes matter.
+     Example: "Which open incidents do NOT have a severity set?"
+     depends_on must include events for the surviving entities whose attribute
+     is missing or differs.
+
+  4. **Group-by aggregation** — "Per [attribute], how many currently-active
+     [entities] exist?"
+     Forces partitioning the surviving set; answer is a breakdown, not a single value.
+     Example: "How many open tickets are there per assignee?"
+     depends_on must include enough events to establish the breakdown
+     (creations + assignee modifications + retractions for the affected entities).
+
+  5. **Temporal × state combo** — "Among [entities] created on [day-range],
+     which are still active and what is each one's current [attr]?"
+     Combines time-of-creation filter with current-state attribute lookup.
+     Example: "Among tickets created Mon–Tue, which are still open and what is
+     each one's current priority?"
+     depends_on must include the creation events in the time window and any
+     subsequent modifications/retractions for those specific entities.
+
+  Requirements:
+  - Send as call_type="send", source="__user__" to the business logic object
+    (the one whose state_description tracks the accumulated state)
+  - input: a natural language composition-heavy question (not a single-entity
+    lookup, not a command to do something)
+  - expect.action: the exact correct CURRENT answer — list/breakdown form when
+    appropriate (e.g. "T-003 (P1, Alice) and T-017 (P1, Alice)")
+  - expect.reason: one sentence citing which specific events establish each piece
+    of the answer
+  - role="post_mod", after_mod_ids=[] for ALL probe events
+  - **depends_on**: list of state-event IDs (≥2) whose correct processing is
+    required to answer this probe. Pick the MINIMUM SUFFICIENT set — only the
+    events whose values appear in the answer or that exclude an entity from the
+    answer. Do NOT list every state event. All IDs must reference events in
+    state_events.
+  - Timestamps: W02-6T09:00 through W02-6T{PROBE_END_HOUR}:00
+  - Event IDs: E{PROBE_START_PADDED} through E{PROBE_END_PADDED}
+
+  ---
+
+  ## Timestamp Format
+
+  W{week}-{day}T{HH:MM}  (e.g. W02-3T14:30 = Week 2, Wednesday 14:30)
+  Days: 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday
+
+  ---
+
+  ## Output
+
+  Produce exactly:
+  - state_events: {DEPTH} events (role="irrelevant", after_mod_ids=[], expect filled, depends_on=[])
+  - probe_events: {K_PROBES} events (role="post_mod", after_mod_ids=[], expect filled,
+    depends_on with ≥2 state-event IDs each)

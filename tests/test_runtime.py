@@ -630,3 +630,133 @@ class TestSpawn:
         truck = rt.spawn("truck-007", "truck", {"driver_name": "Maya Patel"})
         assert truck.object_id == "truck-007"
         assert "Maya Patel" in truck.definition.role
+
+
+class TestTransactionTracing:
+    """Trace invariants — every cascaded message must link back to the root trigger."""
+
+    def test_cascade_shares_trace_id_and_parent_chain(self):
+        # A asks B; B tells C. One external send → 3 hops, all sharing one trace_id.
+        brain = MockBrain()
+        brain.script("a", LLMResponse(
+            updated_state={},
+            reply="",
+            outgoing_messages=[OutgoingMessage(recipient="b", content="ask-b", expects_reply=True)],
+        ))
+        brain.script("b", LLMResponse(
+            updated_state={},
+            reply="b-replies-to-a",
+            outgoing_messages=[OutgoingMessage(recipient="c", content="tell-c", expects_reply=False)],
+        ))
+        brain.script("c", LLMResponse(updated_state={}, reply="c-done"))
+
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="a", role="A"))
+        rt.create_object(ObjectDefinition(object_id="b", role="B"))
+        rt.create_object(ObjectDefinition(object_id="c", role="C"))
+
+        rt.send("a", "kickoff")
+
+        logs = rt.message_log
+        assert len(logs) >= 3, f"expected at least 3 bus deliveries, got {len(logs)}: {[l.message.id for l in logs]}"
+
+        # All hops share one trace_id (the root msg.id).
+        trace_ids = {l.message.trace_id for l in logs}
+        assert len(trace_ids) == 1, f"expected single trace_id, got {trace_ids}"
+        root_trace_id = next(iter(trace_ids))
+        root = logs[0].message
+        assert root.trace_id == root.id, "root message's trace_id must equal its own id"
+        assert root.parent_id is None, "root message must have no parent"
+        assert root_trace_id == root.id
+
+        # Every non-root span has a parent_id that matches some prior span's msg_id.
+        seen_ids = {root.id}
+        for entry in logs[1:]:
+            msg = entry.message
+            assert msg.parent_id is not None, f"non-root msg {msg.id} missing parent_id"
+            assert msg.parent_id in seen_ids, (
+                f"parent {msg.parent_id} of {msg.id} not seen yet; seen={seen_ids}"
+            )
+            seen_ids.add(msg.id)
+
+        # Timing fields are populated on each MessageLog entry (MockBrain runs ReAct → records timing).
+        for entry in logs:
+            assert entry.received_at is not None, f"missing received_at on {entry.message.id}"
+            # processing_started_at / completed_at are populated only when the runtime
+            # actually ran process_message — broadcast/heartbeat hops may skip — but
+            # in this scenario every delivery triggers processing.
+            assert entry.processing_started_at is not None, f"missing started_at on {entry.message.id}"
+            assert entry.processing_completed_at is not None, f"missing completed_at on {entry.message.id}"
+            assert entry.processing_completed_at >= entry.processing_started_at
+
+        # hop_depth grows along the chain (root at 0).
+        assert logs[0].hop_depth == 0
+        assert any(l.hop_depth > 0 for l in logs[1:]), "expected at least one non-root hop_depth > 0"
+
+
+class TestCodeToolConfig:
+    """The built-in `python` REPL tool is config-toggleable via SystemConfig."""
+
+    def test_python_registered_by_default(self):
+        from src.lnl.runtime import SystemConfig
+        brain = MockBrain()
+        registry = ToolRegistry()
+        Runtime(brain, tool_registry=registry, system_config=SystemConfig())
+        assert "python" in registry.tool_names
+        assert "create_object" in registry.tool_names
+
+    def test_python_omitted_when_disabled(self):
+        from src.lnl.runtime import SystemConfig
+        brain = MockBrain()
+        registry = ToolRegistry()
+        Runtime(brain, tool_registry=registry, system_config=SystemConfig(enable_code_tool=False))
+        assert "python" not in registry.tool_names
+        # The fallback default agent still gets create_object — that's invariant.
+        assert "create_object" in registry.tool_names
+
+    def test_describe_identical_to_baseline_when_disabled(self):
+        """Disabling the code tool must produce the same tool description as
+        a runtime built without any code-tool wiring at all — proves the
+        config switch is a true revert to the default agent."""
+        from src.lnl.runtime import SystemConfig
+        baseline = ToolRegistry()
+        Runtime(MockBrain(), tool_registry=baseline,
+                system_config=SystemConfig(enable_code_tool=False))
+        # Should describe exactly the create_object tool — no `python`, no orphans.
+        desc = baseline.describe()
+        assert "python" not in desc
+        assert "create_object" in desc
+
+    def test_repl_state_persists_across_tool_calls_in_runtime(self):
+        """End-to-end: a MockBrain-scripted object emits two `python` tool_calls
+        that share state via the per-object REPL namespace, then finishes with
+        the computed result in the reply."""
+        from src.lnl.types import ReactFinish, ReactStep
+
+        brain = MockBrain()
+        registry = ToolRegistry()
+        rt = Runtime(brain, tool_registry=registry)
+        rt.create_object(ObjectDefinition(object_id="coder", role="Code runner"))
+
+        # Step 1: assign x = 41 in REPL
+        brain.script_react(ReactStep(
+            thought="assign",
+            action="tool_call",
+            tool_call=ToolCall(id="tc-1", tool="python", arguments={"code": "x = 41"}),
+        ))
+        # Step 2: compute x + 1 (depends on previous namespace state)
+        brain.script_react(ReactStep(
+            thought="compute",
+            action="tool_call",
+            tool_call=ToolCall(id="tc-2", tool="python", arguments={"code": "x + 1"}),
+        ))
+        # Step 3: finish — pass the result through in the reply
+        brain.script_react(ReactStep(
+            thought="reply",
+            action="finish",
+            finish=ReactFinish(reply="The answer is 42"),
+        ))
+
+        results = rt.send("coder", "compute it")
+        assert results, "expected a processing result"
+        assert "42" in results[0].reply

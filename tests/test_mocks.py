@@ -1,4 +1,6 @@
 """Tests for MockService, MockRegistry, and MockInProcessExecutor."""
+import pytest
+
 from src.lnl.mocks import MockRegistry, MockService
 
 
@@ -394,3 +396,177 @@ class TestMockInProcessExecutorTriggers:
         )
 
         assert "triggered" not in executor.call_log[0]
+
+
+# ── MockInProcessExecutor HTTP (remote) mode ─────────────────────────────────
+
+class _FakeResponse:
+    """Minimal stand-in for an httpx.Response in unit tests."""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+class TestMockInProcessExecutorRemoteMode:
+    """When remote_url is set, MockInProcessExecutor fetches the response from
+    the HTTP mock server (POST /tool/{method}) — the same path the OpenClaw
+    baseline uses — while still firing triggers in-process."""
+
+    def _make_def(self, triggers=None, match=None, **kwargs):
+        from src.data.schema import MockToolDef
+        return MockToolDef(
+            tool_name="email.send",
+            description="Send an email.",
+            arguments_schema={"type": "object", "properties": {"to": {"type": "string"}}},
+            response_template="LOCAL fallback {to}",
+            triggers=triggers or [],
+            match=match or {},
+            **kwargs,
+        )
+
+    def _make_call(self, args=None):
+        from src.lnl.types import ToolCall
+        return ToolCall(id="c1", tool="email.send", arguments=args or {"to": "alice@x.com"})
+
+    def test_remote_mode_returns_server_result(self, monkeypatch):
+        import httpx
+        from src.lnl.tools import MockInProcessExecutor
+
+        captured = {}
+
+        def fake_post(url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _FakeResponse({"status": "ok", "result": "SERVER says hi"})
+
+        monkeypatch.setattr(httpx, "post", fake_post)
+
+        executor = MockInProcessExecutor(
+            self._make_def(), remote_url="http://127.0.0.1:18888", slot_id="tc3-r1",
+        )
+        result = executor.execute(self._make_call(), {})
+        # Response comes from the server, not the local response_template.
+        assert result.output == "SERVER says hi"
+        # Hits POST /tool/{method} with the slot id + args in the body.
+        assert captured["url"] == "http://127.0.0.1:18888/tool/email.send"
+        assert captured["json"]["__slot_id__"] == "tc3-r1"
+        assert captured["json"]["to"] == "alice@x.com"
+
+    def test_remote_mode_strips_trailing_slash_from_url(self, monkeypatch):
+        import httpx
+        from src.lnl.tools import MockInProcessExecutor
+
+        captured = {}
+
+        def fake_post(url, json=None, timeout=None):
+            captured["url"] = url
+            return _FakeResponse({"result": "ok"})
+
+        monkeypatch.setattr(httpx, "post", fake_post)
+
+        executor = MockInProcessExecutor(
+            self._make_def(), remote_url="http://127.0.0.1:18888/",
+        )
+        executor.execute(self._make_call(), {})
+        assert captured["url"] == "http://127.0.0.1:18888/tool/email.send"
+
+    def test_remote_mode_still_fires_triggers_in_process(self, monkeypatch):
+        import httpx
+        from src.data.schema import MockToolTrigger
+        from src.lnl.tools import MockInProcessExecutor
+
+        monkeypatch.setattr(httpx, "post", lambda *a, **k: _FakeResponse({"result": "server result"}))
+
+        injected = []
+        executor = MockInProcessExecutor(
+            self._make_def(triggers=[
+                MockToolTrigger(
+                    target_object_id="slack-mon",
+                    message_template="sent to {to}",
+                    source="slack",
+                ),
+            ]),
+            remote_url="http://127.0.0.1:18888",
+        )
+        executor.execute(
+            self._make_call(args={"to": "bob@x.com"}),
+            {"inject_event": lambda t, m, s: injected.append((t, m, s))},
+        )
+        # Triggers fire in-process even though the response arrived over HTTP.
+        assert injected == [("slack-mon", "sent to bob@x.com", "slack")]
+
+    def test_remote_mode_populates_call_log(self, monkeypatch):
+        import httpx
+        from src.lnl.tools import MockInProcessExecutor
+
+        monkeypatch.setattr(httpx, "post", lambda *a, **k: _FakeResponse({"result": "server result"}))
+
+        executor = MockInProcessExecutor(
+            self._make_def(), remote_url="http://127.0.0.1:18888",
+        )
+        executor.execute(self._make_call(), {})
+        assert len(executor.call_log) == 1
+        assert executor.call_log[0]["response"] == "server result"
+
+    def test_in_process_mode_unchanged_when_remote_url_none(self):
+        from src.lnl.tools import MockInProcessExecutor
+
+        # remote_url=None (default) → response computed locally, no HTTP call.
+        executor = MockInProcessExecutor(self._make_def())
+        result = executor.execute(self._make_call(args={"to": "carol@x.com"}), {})
+        assert result.output == "LOCAL fallback carol@x.com"
+
+
+@pytest.fixture(scope="module")
+def _live_mock_server():
+    """A real MockServer for the duration of this module's integration tests."""
+    from src.data.mock_server import MockServer
+    server = MockServer(openclaw_url="http://localhost:19999", port=18899)
+    server.start()
+    server.wait_ready(timeout=10.0)
+    yield server
+    server.stop()
+
+
+class TestMockInProcessExecutorRemoteIntegration:
+    """End-to-end: a real MockServer round-trip catches contract mismatches
+    between the executor's HTTP calls and the server's actual endpoints."""
+
+    def test_round_trip_through_real_mock_server(self, _live_mock_server):
+        import httpx
+        from src.data.mock_server import merge_tc_mock_tools
+        from src.data.schema import MockToolDef
+        from src.lnl.tools import MockInProcessExecutor
+        from src.lnl.types import ToolCall
+
+        tool_def = MockToolDef(
+            tool_name="crm.lookup",
+            description="Look up a CRM record.",
+            arguments_schema={"type": "object", "properties": {"name": {"type": "string"}}},
+            response_template="Record for {name}: status=active",
+        )
+        # Configure a slot on the real server (mirrors evaluate.py's --mock-server path).
+        script = merge_tc_mock_tools(None, [tool_def])
+        httpx.post(
+            "http://127.0.0.1:18899/configure",
+            json={
+                "slot_id": "itest-1",
+                "session_key": "itest-1",
+                "mock_script": script.model_dump(),
+            },
+            timeout=10.0,
+        )
+        executor = MockInProcessExecutor(
+            tool_def, remote_url="http://127.0.0.1:18899", slot_id="itest-1",
+        )
+        result = executor.execute(
+            ToolCall(id="x1", tool="crm.lookup", arguments={"name": "Dana"}), {},
+        )
+        # The server interpolated the template and returned it over HTTP.
+        assert result.output == "Record for Dana: status=active"

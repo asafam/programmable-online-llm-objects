@@ -33,7 +33,18 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--provider", default="openai", choices=["openai", "azure", "anthropic", "mock"])
     parser.add_argument("--model", default=None)
-parser.add_argument("--max-chain-depth", type=int, default=10)
+    parser.add_argument("--max-chain-depth", type=int, default=10)
+    parser.add_argument(
+        "--code-tool",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        dest="code_tool",
+        help=(
+            "Register the built-in `python` REPL tool on every LLM-object. "
+            "Use --no-code-tool to revert to the default agent configuration. "
+            "(default: follows system.yaml; system default is enabled)"
+        ),
+    )
 
     sub = parser.add_subparsers(dest="command")
 
@@ -96,6 +107,8 @@ parser.add_argument("--max-chain-depth", type=int, default=10)
         return
 
     cfg = SystemConfig.load()
+    if getattr(args, "code_tool", None) is not None:
+        cfg.enable_code_tool = args.code_tool
     brain = _make_brain(args)
     rt = Runtime(
         brain,

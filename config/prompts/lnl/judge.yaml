@@ -21,6 +21,17 @@ system_prompt: |
     PLUS additional correct information, it passes. Only fail if required information is missing or wrong.
     Example: condition says "Alice: 2 tickets, Bob: 1 ticket" — a response adding "Carlos: 0 tickets"
     still passes, as long as Alice and Bob counts are correct.
+  - **Field-value matching is semantic, not lexical.** When the condition expects a value
+    for a field, evaluate whether the model's value conveys the SAME MEANING — not whether
+    the strings match literally. The model's vocabulary need not match the eval's wording.
+    - PASS when the values describe the SAME FACT in different words: different labels
+      for the same workflow stage, different category names for the same classification,
+      different formattings of the same identifier or quantity.
+    - FAIL when the values describe DIFFERENT FACTS: opposite decisions, distinct
+      entities, or workflow stages that imply different downstream actions (for example,
+      a stage that triggers a notification vs one that doesn't).
+    Test: would a reasonable human reading both values conclude they refer to the same
+    outcome? If yes — pass. If they'd reasonably ask "which one is correct?" — fail.
 
   ## Retraction / deletion
   - **Absence IS retraction.** If the condition says entity X was retracted/cancelled/closed, and

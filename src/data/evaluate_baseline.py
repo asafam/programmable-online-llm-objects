@@ -291,7 +291,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()
+_VERSION: str = _build_version()  # bumped 2026-05-15: sync with evaluate.py per-run-cycle summary
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
@@ -1098,19 +1098,29 @@ def _tool_call_matches(match: dict[str, str], args: dict) -> bool:
 
 async def _snapshot_session_tokens(
     gateway: Any,
-    session_keys: list[str],
+    session_keys: Optional[list[str]] = None,
 ) -> dict[str, tuple[int, int]]:
-    """Call sessions.list and return {key: (inputTokens, outputTokens)} for given keys."""
+    """Call sessions.list and return {key: (inputTokens, outputTokens)}.
+
+    If session_keys is None, returns all live sessions (needed to capture downstream
+    agentToAgent sessions whose names aren't known before execution).
+    """
     try:
         result = await gateway.call("sessions.list", {})
-        sess_map = {s.get("key", ""): s for s in result.get("sessions", [])}
+        sessions = result.get("sessions", [])
+        if session_keys is None:
+            return {
+                s.get("key", ""): (s.get("inputTokens", 0), s.get("outputTokens", 0))
+                for s in sessions
+            }
+        sess_map = {s.get("key", ""): s for s in sessions}
         return {
             k: (sess_map.get(k, {}).get("inputTokens", 0),
                 sess_map.get(k, {}).get("outputTokens", 0))
             for k in session_keys
         }
     except Exception:
-        return {k: (0, 0) for k in session_keys}
+        return {}
 
 
 def _delta_tokens(
@@ -1395,11 +1405,16 @@ async def _execute_tc_async(
                 passed, reasoning, _votes, _in_tok, _out_tok = _active_harness.evaluate_assertion(
                     evt.expect.action, evidence, ctx)
                 tqdm.write(f"    {evt.id} {'✓' if passed else '✗'} {display_lat/1000:.1f}s [conc]  {reasoning[:100]}")
+                # Entry-point token usage only — concurrent events run simultaneously so
+                # session-delta tokens can't be attributed to individual events.
+                _conc_in_tok = getattr(res.token_usage, "input", 0) or 0
+                _conc_out_tok = getattr(res.token_usage, "output", 0) or 0
                 event_results.append(EventResult(
                     event_id=evt.id, passed=passed, reasoning=reasoning,
                     expected=evt.expect.action, evidence=evidence,
                     prior_context=ctx, latency_ms=display_lat,
                     role=evt.role,
+                    input_tokens=_conc_in_tok, output_tokens=_conc_out_tok,
                     judge_input_tokens=_in_tok, judge_output_tokens=_out_tok,
                     judge_votes=_votes,
                 ))
@@ -1436,6 +1451,10 @@ async def _execute_tc_async(
                 mock_key = f"agent:{agent_id_for_key}:{sname}"
                 mock_server.configure(mock_key, slot_id=slot_suffix or "default")
 
+            # Snapshot all live sessions before execution so the delta after
+            # quiescence captures downstream agentToAgent tokens too.
+            tok_snap_before = await _snapshot_session_tokens(client.gateway)
+
             t0 = time.time()
             result = await handle.execute(msg["content"], options=_exec_opts)
             latency_ms = (time.time() - t0) * 1000
@@ -1467,10 +1486,11 @@ async def _execute_tc_async(
             else:
                 await asyncio.sleep(0.5)
 
-            # Token usage from SDK result (available immediately, avoids sessions.list
-            # timing issues where sessions stay "running" and report no token data).
-            _agent_in_tok = getattr(result.token_usage, "input", 0) or 0
-            _agent_out_tok = getattr(result.token_usage, "output", 0) or 0
+            # Token usage: delta across all sessions captures both the entry-point agent
+            # and any downstream agents invoked via agentToAgent. More accurate than
+            # result.token_usage which only covers the entry-point session.
+            tok_snap_after = await _snapshot_session_tokens(client.gateway)
+            _agent_in_tok, _agent_out_tok = _delta_tokens(tok_snap_before, tok_snap_after)
 
             if mock_server:
                 # In-process triggers: dispatch tool-triggered messages directly
@@ -1757,6 +1777,19 @@ def default_output_path(input_path: Path) -> Path:
     return base / "runs" / f"{input_path.stem}_baseline_{ts}.jsonl"
 
 
+def _role_elapsed_fields(events: list) -> dict:
+    """Sum latency_ms per role from a list of EventResult objects."""
+    def _sum(role):
+        evts = [e for e in events if e.role == role]
+        return sum(e.latency_ms for e in evts) if evts else None
+    return dict(
+        base_elapsed_ms=_sum(None),
+        pre_mod_elapsed_ms=_sum("pre_mod"),
+        post_mod_elapsed_ms=_sum("post_mod"),
+        irrelevant_elapsed_ms=_sum("irrelevant"),
+    )
+
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 _STEP_EVENT_ID = re.compile(r"^S\d+$")
@@ -1964,6 +1997,10 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
         mean_mod_input_tokens=mean([m.input_tokens for m in all_mods]),
         mean_mod_output_tokens=mean([m.output_tokens for m in all_mods]),
         mean_mod_latency_ms=mean([m.latency_ms for m in all_mods]),
+        mean_base_event_latency_ms=mean([e.latency_ms for e in all_events if e.role is None]) or None,
+        mean_pre_mod_event_latency_ms=mean([e.latency_ms for e in all_events if e.role == "pre_mod"]) or None,
+        mean_post_mod_event_latency_ms=mean([e.latency_ms for e in all_events if e.role == "post_mod"]) or None,
+        mean_irrelevant_event_latency_ms=mean([e.latency_ms for e in all_events if e.role == "irrelevant"]) or None,
         total_agent_input_tokens=sum(e.input_tokens for e in all_events) + sum(m.input_tokens for m in all_mods),
         total_agent_output_tokens=sum(e.output_tokens for e in all_events) + sum(m.output_tokens for m in all_mods),
         total_judge_input_tokens=sum(e.judge_input_tokens for e in all_events),
@@ -2202,6 +2239,7 @@ async def _run_all_tcs_concurrent(
                                     pass_rate=sum(1 for e in event_results if e.passed) / len(event_results) if event_results else None,
                                     elapsed_ms=tc_elapsed_ms,
                                     error_type="timeout",
+                                    **_role_elapsed_fields(event_results),
                                 )
                                 async with results_lock:
                                     all_tc_results.append(tc_result)
@@ -2230,6 +2268,7 @@ async def _run_all_tcs_concurrent(
                                 pass_rate=pass_rate,
                                 elapsed_ms=tc_elapsed_ms,
                                 error_type=_classify_error_type([e.reasoning or "" for e in event_results]),
+                                **_role_elapsed_fields(event_results),
                             )
                             async with results_lock:
                                 all_tc_results.append(tc_result)
@@ -2291,6 +2330,7 @@ async def _run_all_tcs_concurrent(
                     pass_rate=0.0 if err_results else None,
                     elapsed_ms=_err_elapsed_ms,
                     error_type=_classify_error_type([_err_label]),
+                    **_role_elapsed_fields(err_results),
                 )
                 async with results_lock:
                     all_tc_results.append(tc_result)
@@ -2319,7 +2359,7 @@ async def _run_all_tcs_concurrent(
 def _print_summary(summary, output_path: Optional[Path] = None, elapsed_s: Optional[float] = None) -> None:
     """Print a human-readable summary of evaluation results."""
     def _fmt(v):
-        return f"{v:.3f}" if v is not None else "N/A"
+        return f"{v:.4f}" if v is not None else "N/A"
 
     def _fmts(v, s) -> str:
         return f"{_fmt(v)}  std: {_fmt(s)}"
@@ -2348,6 +2388,13 @@ def _print_summary(summary, output_path: Optional[Path] = None, elapsed_s: Optio
     print(f"  Post-mod:          {_fmt_mod(summary.post_mod_pass_rate, summary.post_mod_pass_rate_std, summary.post_mod_pass_rate_all, summary.post_mod_pass_rate_all_std)}")
     print(f"  Irrelevant:        {_fmt_mod(summary.irrelevant_pass_rate, summary.irrelevant_pass_rate_std, summary.irrelevant_pass_rate_all, summary.irrelevant_pass_rate_all_std)}")
     print(f"Inconclusive TCs:    {summary.inconclusive_tcs}")
+    def _fmt_ms(v) -> str:
+        return f"{v:.0f}ms" if v is not None else "N/A"
+    print(f"Mean event latency:  {_fmt_ms(summary.mean_event_latency_ms)}"
+          f"  (base: {_fmt_ms(summary.mean_base_event_latency_ms)}"
+          f"  pre: {_fmt_ms(summary.mean_pre_mod_event_latency_ms)}"
+          f"  post: {_fmt_ms(summary.mean_post_mod_event_latency_ms)}"
+          f"  irrel: {_fmt_ms(summary.mean_irrelevant_event_latency_ms)})")
     n_events = summary.total_events or 1
     print(f"Agent tokens:        {summary.total_agent_input_tokens:,} in / {summary.total_agent_output_tokens:,} out"
           f"  (mean/event: {summary.mean_event_input_tokens:.0f} in / {summary.mean_event_output_tokens:.0f} out)")

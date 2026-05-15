@@ -49,6 +49,9 @@ COPY plugins/openclaw-mock-external/dist/index.js \
 COPY plugins/openclaw-mock-external/openclaw.plugin.json \
      /home/node/openclaw-extensions/lnl-mock-external/openclaw.plugin.json
 
+# ── Copy Azure usage proxy ────────────────────────────────────────────────────
+COPY docker/azure_usage_proxy.py /app/docker/azure_usage_proxy.py
+
 # ── Bake in the OpenClaw config template ──────────────────────────────────────
 # Stored outside .openclaw so a bind-mount over /home/node/.openclaw (pool mode)
 # doesn't hide the template before the entrypoint can expand it.

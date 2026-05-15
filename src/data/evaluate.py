@@ -16,6 +16,7 @@ import argparse
 import copy
 import json
 import logging
+import os
 import re
 import statistics
 import sys
@@ -60,7 +61,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()
+_VERSION: str = _build_version()  # bumped 2026-05-15: per-run-cycle summary printout
 
 from src.data.schema import (
     EvalSummary,
@@ -255,9 +256,9 @@ def gather_evidence(
                 idx = entry.get("call_index", "?")
                 line = f"  [{entry['tool']}] call#{idx} {json.dumps(entry['arguments'])}"
                 if "response" in entry:
-                    line += f"\n    ← {entry['response'][:100]}"
+                    line += f"\n    ← {entry['response']}"
                 for t in entry.get("triggered", []):
-                    line += f"\n    → dispatched to [{t['target']}]: {t['message'][:120]}"
+                    line += f"\n    → dispatched to [{t['target']}]: {t['message']}"
                 lines.append(line)
             this_event_parts.append("Tool calls:\n" + "\n".join(lines))
 
@@ -268,7 +269,7 @@ def gather_evidence(
             msg = ml.message
             arrow = "↩" if msg.type.value == "reply" else "→"
             sender = f"[{msg.sender}]" if msg.type.value == "event" else msg.sender
-            lines.append(f"  {sender} {arrow} {msg.recipient} ({msg.type.value}): {str(msg.content)[:200]}")
+            lines.append(f"  {sender} {arrow} {msg.recipient} ({msg.type.value}): {str(msg.content)}")
         this_event_parts.append("Message bus activity:\n" + "\n".join(lines))
 
     # Replies from the chain triggered by this event
@@ -304,6 +305,58 @@ def gather_evidence(
     return "\n\n".join(sections) if sections else "(no observable state)"
 
 
+# ── Trace reconstruction ───────────────────────────────────────────────────────
+
+def build_event_trace(bus_msgs) -> tuple[list[dict], "str | None"]:
+    """Build a structured per-hop trace from the bus log slice for one event.
+
+    Each span captures: msg_id, parent_id, trace_id, sender, recipient, type,
+    t_offset_ms (vs. root timestamp), mailbox_wait_ms, processing_ms,
+    llm_latency_ms, input_tokens, output_tokens, hop_depth.
+
+    Returns (spans, root_trace_id). The root_trace_id is the trace_id of the
+    earliest span (the original trigger); spans are sorted by creation time.
+    """
+    if not bus_msgs:
+        return [], None
+
+    # Sort by message creation timestamp for deterministic ordering.
+    sorted_logs = sorted(bus_msgs, key=lambda ml: ml.message.timestamp)
+    root = sorted_logs[0]
+    root_ts = root.message.timestamp
+    root_trace_id = root.message.trace_id or root.message.id
+
+    spans: list[dict] = []
+    for ml in sorted_logs:
+        msg = ml.message
+        t_offset_ms = (msg.timestamp - root_ts).total_seconds() * 1000.0
+        mailbox_wait_ms = None
+        if ml.received_at is not None and ml.processing_started_at is not None:
+            mailbox_wait_ms = (ml.processing_started_at - ml.received_at).total_seconds() * 1000.0
+        processing_ms = None
+        if ml.processing_started_at is not None and ml.processing_completed_at is not None:
+            processing_ms = (ml.processing_completed_at - ml.processing_started_at).total_seconds() * 1000.0
+        llm_latency_ms = ml.metrics.latency_ms if ml.metrics else None
+        in_tok = ml.metrics.input_tokens if ml.metrics else 0
+        out_tok = ml.metrics.output_tokens if ml.metrics else 0
+        spans.append({
+            "msg_id": msg.id,
+            "parent_id": msg.parent_id,
+            "trace_id": msg.trace_id,
+            "sender": msg.sender,
+            "recipient": msg.recipient,
+            "type": msg.type.value if hasattr(msg.type, "value") else str(msg.type),
+            "t_offset_ms": round(t_offset_ms, 2),
+            "mailbox_wait_ms": round(mailbox_wait_ms, 2) if mailbox_wait_ms is not None else None,
+            "processing_ms": round(processing_ms, 2) if processing_ms is not None else None,
+            "llm_latency_ms": round(llm_latency_ms, 2) if llm_latency_ms is not None else None,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "hop_depth": ml.hop_depth,
+        })
+    return spans, root_trace_id
+
+
 # ── Core execution ─────────────────────────────────────────────────────────────
 
 def _print_message(msg) -> None:
@@ -335,8 +388,17 @@ def _execute_test_case_inner(
     concurrency_seed: int = 42,
     max_modifications: Optional[int] = None,
     object_prompt: str = "object.yaml",
+    planner_prompt: str = "planner.yaml",
     max_history: Optional[int] = None,
     tracked_harness=None,
+    enable_code_tool: bool = True,
+    enable_sink_completion_shim: bool = False,
+    enable_planner: bool = False,
+    enable_evaluator: bool = False,
+    planner_brain=None,
+    evaluator_brain=None,
+    mock_server_url: "str | None" = None,
+    mock_slot_id: str = "default",
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase and return event + modification results."""
     from src.lnl.gateway import EventGateway
@@ -356,6 +418,24 @@ def _execute_test_case_inner(
     # Triggered events are dispatched directly by the harness (no mock tool needed).
     final_mock_tools = merge_mock_tools(global_mock_tools or [], tc.mock_tools)
 
+    # When --mock-server is active, register this TC's mock tools with the HTTP
+    # mock server under a per-(tc, run) slot, then route tool-call responses
+    # through it (POST /tool/{method}) — the same path the OpenClaw baseline
+    # uses. Triggers still fire in-process below (mirrors the baseline).
+    if mock_server_url and final_mock_tools:
+        import httpx
+        from src.data.mock_server import merge_tc_mock_tools
+        mock_script = merge_tc_mock_tools(None, list(final_mock_tools))
+        httpx.post(
+            f"{mock_server_url}/configure",
+            json={
+                "slot_id": mock_slot_id,
+                "session_key": mock_slot_id,
+                "mock_script": mock_script.model_dump(),
+            },
+            timeout=10.0,
+        )
+
     # Always create a ToolRegistry so create_object is registered as a core tool
     # on every Runtime (Runtime.__init__ registers CreateObjectExecutor when registry present).
     # Mock tools for domain skills are layered on top.
@@ -365,7 +445,13 @@ def _execute_test_case_inner(
     tool_registry.register("execute_code", CodeExecutor())
     tool_registry.register_fallback(passthrough)
     for mock_tool in final_mock_tools:
-        executor = MockInProcessExecutor(mock_tool)
+        # remote_url=None → unchanged in-process behavior; set → responses come
+        # from the HTTP mock server under this run's slot.
+        executor = MockInProcessExecutor(
+            mock_tool,
+            remote_url=mock_server_url,
+            slot_id=mock_slot_id,
+        )
         tool_registry.register(mock_tool.tool_name, executor, spec=executor.spec)
         mock_executors.append(executor)
 
@@ -374,10 +460,25 @@ def _execute_test_case_inner(
     # run-loop is not needed and would break _run_with_timeout (ThreadPoolExecutor
     # shutdown(wait=True) hangs when the foreground thread is blocked on item.done).
     from src.lnl.runtime import SystemConfig
-    sys_cfg = SystemConfig(max_tool_rounds=max_tool_rounds)
-    rt = Runtime(brain, tool_registry=tool_registry, max_chain_depth=max_chain_depth, system_config=sys_cfg)
+    sys_cfg = SystemConfig(
+        max_tool_rounds=max_tool_rounds,
+        enable_code_tool=enable_code_tool,
+        enable_sink_completion_shim=enable_sink_completion_shim,
+        enable_planner=enable_planner,
+        enable_evaluator=enable_evaluator,
+    )
+    rt = Runtime(
+        brain,
+        tool_registry=tool_registry,
+        max_chain_depth=max_chain_depth,
+        system_config=sys_cfg,
+        planner_brain=planner_brain,
+        evaluator_brain=evaluator_brain,
+    )
     if object_prompt != "object.yaml":
         rt.set_prompt_file(object_prompt)
+    if planner_prompt != "planner.yaml":
+        rt.set_planner_prompt_file(planner_prompt)
     if max_history is not None:
         rt.set_max_history(max_history)
     if debug_messages and progress_callback:
@@ -394,21 +495,24 @@ def _execute_test_case_inner(
         rt.create_object(to_lnl_definition(obj_def))
 
     trigger_map = _build_trigger_map(tc)
-    return _run_test_case_timeline(
-        tc, rt, gw, harness,
-        timeout_s=timeout_s,
-        steps_only=steps_only,
-        mock_executors=mock_executors + [passthrough] if final_mock_tools else [],
-        steps_snapshot=steps_snapshot,
-        snapshot_out=snapshot_out,
-        trigger_map=trigger_map,
-        on_event_result=on_event_result,
-        on_mod_applied=on_mod_applied,
-        concurrency=concurrency,
-        concurrency_seed=concurrency_seed,
-        max_modifications=max_modifications,
-        tracked_harness=tracked_harness,
-    )
+    try:
+        return _run_test_case_timeline(
+            tc, rt, gw, harness,
+            timeout_s=timeout_s,
+            steps_only=steps_only,
+            mock_executors=mock_executors + [passthrough] if final_mock_tools else [],
+            steps_snapshot=steps_snapshot,
+            snapshot_out=snapshot_out,
+            trigger_map=trigger_map,
+            on_event_result=on_event_result,
+            on_mod_applied=on_mod_applied,
+            concurrency=concurrency,
+            concurrency_seed=concurrency_seed,
+            max_modifications=max_modifications,
+            tracked_harness=tracked_harness,
+        )
+    finally:
+        rt._pool.shutdown(wait=False)
 
 
 def _run_with_timeout(fn, timeout_s: Optional[float]):
@@ -552,8 +656,15 @@ def _run_test_case_timeline(
             else:
                 in_tok = sum(r.metrics.input_tokens for r in results if r.metrics)
                 out_tok = sum(r.metrics.output_tokens for r in results if r.metrics)
+                planner_in_tok   = sum(r.planner_metrics.input_tokens   for r in results if r.planner_metrics)
+                planner_out_tok  = sum(r.planner_metrics.output_tokens  for r in results if r.planner_metrics)
+                executor_in_tok  = sum(r.executor_metrics.input_tokens  for r in results if r.executor_metrics)
+                executor_out_tok = sum(r.executor_metrics.output_tokens for r in results if r.executor_metrics)
+                evaluator_in_tok  = sum(r.evaluator_metrics.input_tokens  for r in results if r.evaluator_metrics)
+                evaluator_out_tok = sum(r.evaluator_metrics.output_tokens for r in results if r.evaluator_metrics)
                 bus_msgs = rt.message_log[log_snapshot:]
                 new_calls = _new_tool_calls(execs, exec_snap)
+                cf_errors = rt.drain_infra_errors()
                 evidence = gather_evidence(rt, results, step.target, bus_messages=bus_msgs, tool_calls=new_calls)
                 condition = step.expect.action
                 passed, reasoning, votes, j_in_tok, j_out_tok = harness.evaluate_assertion(condition, evidence, prior_context)
@@ -566,10 +677,18 @@ def _run_test_case_timeline(
                     prior_context=prior_context,
                     input_tokens=in_tok,
                     output_tokens=out_tok,
+                    planner_input_tokens=planner_in_tok,
+                    planner_output_tokens=planner_out_tok,
+                    executor_input_tokens=executor_in_tok,
+                    executor_output_tokens=executor_out_tok,
+                    evaluator_input_tokens=evaluator_in_tok,
+                    evaluator_output_tokens=evaluator_out_tok,
                     latency_ms=latency_ms,
                     judge_input_tokens=j_in_tok,
                     judge_output_tokens=j_out_tok,
                     judge_votes=votes,
+                    infra_error=bool(cf_errors),
+                    mock_tool_calls=sum(len(per_ex) for per_ex in new_calls),
                 ))
                 if on_event_result:
                     on_event_result(event_results[-1], True)
@@ -634,7 +753,10 @@ def _run_test_case_timeline(
         return res, tout, lat, log_snap, exec_s
 
     def _record_event_result(evt, res, timed_out, lat_ms, log_snap, exec_s, ctx: str = "",
-                             _in_tok: int = None, _out_tok: int = None):
+                             _in_tok: int = None, _out_tok: int = None,
+                             _planner_in_tok: int = None, _planner_out_tok: int = None,
+                             _executor_in_tok: int = None, _executor_out_tok: int = None,
+                             _evaluator_in_tok: int = None, _evaluator_out_tok: int = None):
         if evt.expect is None:
             return  # background event — no judgment
         active_harness = (
@@ -643,6 +765,8 @@ def _run_test_case_timeline(
             else harness
         )
         if timed_out:
+            bus_msgs_to = rt.message_log[log_snap:]
+            trace_spans_to, trace_root_to = build_event_trace(bus_msgs_to)
             event_results.append(EventResult(
                 event_id=evt.id,
                 passed=False,
@@ -651,10 +775,19 @@ def _run_test_case_timeline(
                 prior_context=ctx,
                 role=getattr(evt, "role", None),
                 latency_ms=lat_ms,
+                trace=trace_spans_to,
+                trace_root_id=trace_root_to,
             ))
         else:
+            cf_errors = rt.drain_infra_errors()
             in_tok  = _in_tok  if _in_tok  is not None else sum(r.metrics.input_tokens  for r in res if r.metrics)
             out_tok = _out_tok if _out_tok is not None else sum(r.metrics.output_tokens for r in res if r.metrics)
+            planner_in_tok   = _planner_in_tok   if _planner_in_tok   is not None else sum(r.planner_metrics.input_tokens   for r in res if r.planner_metrics)
+            planner_out_tok  = _planner_out_tok  if _planner_out_tok  is not None else sum(r.planner_metrics.output_tokens  for r in res if r.planner_metrics)
+            executor_in_tok  = _executor_in_tok  if _executor_in_tok  is not None else sum(r.executor_metrics.input_tokens  for r in res if r.executor_metrics)
+            executor_out_tok = _executor_out_tok if _executor_out_tok is not None else sum(r.executor_metrics.output_tokens for r in res if r.executor_metrics)
+            evaluator_in_tok  = _evaluator_in_tok  if _evaluator_in_tok  is not None else sum(r.evaluator_metrics.input_tokens  for r in res if r.evaluator_metrics)
+            evaluator_out_tok = _evaluator_out_tok if _evaluator_out_tok is not None else sum(r.evaluator_metrics.output_tokens for r in res if r.evaluator_metrics)
             bus_msgs = rt.message_log[log_snap:]
             new_calls = _new_tool_calls(execs, exec_s)
             if active_harness is tracked_harness:
@@ -663,6 +796,7 @@ def _run_test_case_timeline(
             else:
                 evidence = gather_evidence(rt, res, evt.recipient, bus_messages=bus_msgs, tool_calls=new_calls)
             passed, reasoning, votes, j_in_tok, j_out_tok = active_harness.evaluate_assertion(evt.expect.action, evidence, ctx)
+            trace_spans, trace_root = build_event_trace(bus_msgs)
             event_results.append(EventResult(
                 event_id=evt.id,
                 passed=passed,
@@ -673,10 +807,20 @@ def _run_test_case_timeline(
                 role=getattr(evt, "role", None),
                 input_tokens=in_tok,
                 output_tokens=out_tok,
+                planner_input_tokens=planner_in_tok,
+                planner_output_tokens=planner_out_tok,
+                executor_input_tokens=executor_in_tok,
+                executor_output_tokens=executor_out_tok,
+                evaluator_input_tokens=evaluator_in_tok,
+                evaluator_output_tokens=evaluator_out_tok,
                 latency_ms=lat_ms,
                 judge_input_tokens=j_in_tok,
                 judge_output_tokens=j_out_tok,
                 judge_votes=votes,
+                infra_error=bool(cf_errors),
+                mock_tool_calls=sum(len(per_ex) for per_ex in new_calls),
+                trace=trace_spans,
+                trace_root_id=trace_root,
             ))
 
     def _dispatch_concurrent_group(group: list, ctx: str, group_key: str = "") -> None:
@@ -728,12 +872,21 @@ def _run_test_case_timeline(
         n = len(batch)
         batch_in_tok  = sum(r.metrics.input_tokens  for r in (res or []) if r.metrics)
         batch_out_tok = sum(r.metrics.output_tokens for r in (res or []) if r.metrics)
+        batch_planner_in_tok   = sum(r.planner_metrics.input_tokens   for r in (res or []) if r.planner_metrics)
+        batch_planner_out_tok  = sum(r.planner_metrics.output_tokens  for r in (res or []) if r.planner_metrics)
+        batch_executor_in_tok  = sum(r.executor_metrics.input_tokens  for r in (res or []) if r.executor_metrics)
+        batch_executor_out_tok = sum(r.executor_metrics.output_tokens for r in (res or []) if r.executor_metrics)
+        batch_evaluator_in_tok  = sum(r.evaluator_metrics.input_tokens  for r in (res or []) if r.evaluator_metrics)
+        batch_evaluator_out_tok = sum(r.evaluator_metrics.output_tokens for r in (res or []) if r.evaluator_metrics)
 
         for i, evt in enumerate(batch):
             evt_lat = evt_latencies[i] if i < len(evt_latencies) else lat_ms
             evt_ctx = _build_event_ctx(evt, active_mods, ctx)
             _record_event_result(evt, res or [], tout, evt_lat, log_snap, exec_s, evt_ctx,
-                                 _in_tok=batch_in_tok // n, _out_tok=batch_out_tok // n)
+                                 _in_tok=batch_in_tok // n, _out_tok=batch_out_tok // n,
+                                 _planner_in_tok=batch_planner_in_tok // n, _planner_out_tok=batch_planner_out_tok // n,
+                                 _executor_in_tok=batch_executor_in_tok // n, _executor_out_tok=batch_executor_out_tok // n,
+                                 _evaluator_in_tok=batch_evaluator_in_tok // n, _evaluator_out_tok=batch_evaluator_out_tok // n)
             if on_event_result:
                 on_event_result(event_results[-1], False)
 
@@ -760,10 +913,22 @@ def _run_test_case_timeline(
             else:
                 in_tok = sum(r.metrics.input_tokens for r in results if r.metrics)
                 out_tok = sum(r.metrics.output_tokens for r in results if r.metrics)
+                planner_in_tok   = sum(r.planner_metrics.input_tokens   for r in results if r.planner_metrics)
+                planner_out_tok  = sum(r.planner_metrics.output_tokens  for r in results if r.planner_metrics)
+                executor_in_tok  = sum(r.executor_metrics.input_tokens  for r in results if r.executor_metrics)
+                executor_out_tok = sum(r.executor_metrics.output_tokens for r in results if r.executor_metrics)
+                evaluator_in_tok  = sum(r.evaluator_metrics.input_tokens  for r in results if r.evaluator_metrics)
+                evaluator_out_tok = sum(r.evaluator_metrics.output_tokens for r in results if r.evaluator_metrics)
                 mod_results.append(ModificationResult(
                     mod_id=item.id,
                     input_tokens=in_tok,
                     output_tokens=out_tok,
+                    planner_input_tokens=planner_in_tok,
+                    planner_output_tokens=planner_out_tok,
+                    executor_input_tokens=executor_in_tok,
+                    executor_output_tokens=executor_out_tok,
+                    evaluator_input_tokens=evaluator_in_tok,
+                    evaluator_output_tokens=evaluator_out_tok,
                     latency_ms=latency_ms,
                 ))
             prior_context = _format_prior_state(rt)
@@ -816,8 +981,17 @@ def execute_test_case(
     concurrency_seed: int = 42,
     max_modifications: Optional[int] = None,
     object_prompt: str = "object.yaml",
+    planner_prompt: str = "planner.yaml",
     max_history: Optional[int] = None,
     tracked_harness=None,
+    enable_code_tool: bool = True,
+    enable_sink_completion_shim: bool = False,
+    enable_planner: bool = False,
+    enable_evaluator: bool = False,
+    planner_brain=None,
+    evaluator_brain=None,
+    mock_server_url: "str | None" = None,
+    mock_slot_id: str = "default",
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase with a per-event timeout (seconds).
 
@@ -853,8 +1027,17 @@ def execute_test_case(
         concurrency_seed=concurrency_seed,
         max_modifications=max_modifications,
         object_prompt=object_prompt,
+        planner_prompt=planner_prompt,
         max_history=max_history,
         tracked_harness=tracked_harness,
+        enable_code_tool=enable_code_tool,
+        enable_sink_completion_shim=enable_sink_completion_shim,
+        enable_planner=enable_planner,
+        enable_evaluator=enable_evaluator,
+        planner_brain=planner_brain,
+        evaluator_brain=evaluator_brain,
+        mock_server_url=mock_server_url,
+        mock_slot_id=mock_slot_id,
     )
 
 
@@ -876,6 +1059,19 @@ def default_output_path(input_path: Path) -> Path:
             base = input_path.parent
     return base / "runs" / f"{input_path.stem}_eval_{ts}.jsonl"
 
+
+
+def _role_elapsed_fields(events: list) -> dict:
+    """Sum latency_ms per role from a list of EventResult objects."""
+    def _sum(role):
+        evts = [e for e in events if e.role == role]
+        return sum(e.latency_ms for e in evts) if evts else None
+    return dict(
+        base_elapsed_ms=_sum(None),
+        pre_mod_elapsed_ms=_sum("pre_mod"),
+        post_mod_elapsed_ms=_sum("post_mod"),
+        irrelevant_elapsed_ms=_sum("irrelevant"),
+    )
 
 
 # ── Verbose output ────────────────────────────────────────────────────────────
@@ -903,7 +1099,7 @@ def _print_verbose(tc_result: TestCaseResult, show_evidence: bool = False) -> No
 def _print_summary(summary, output_path=None, elapsed_s=None) -> None:
     """Print a human-readable summary of evaluation results."""
     def _fmt(v) -> str:
-        return f"{v:.3f}" if v is not None else "N/A"
+        return f"{v:.4f}" if v is not None else "N/A"
 
     def _fmts(v, s) -> str:
         return f"{_fmt(v)}  std: {_fmt(s)}"
@@ -932,9 +1128,23 @@ def _print_summary(summary, output_path=None, elapsed_s=None) -> None:
     print(f"  Post-mod:          {_fmt_mod(summary.post_mod_pass_rate, summary.post_mod_pass_rate_std, summary.post_mod_pass_rate_all, summary.post_mod_pass_rate_all_std)}")
     print(f"  Irrelevant:        {_fmt_mod(summary.irrelevant_pass_rate, summary.irrelevant_pass_rate_std, summary.irrelevant_pass_rate_all, summary.irrelevant_pass_rate_all_std)}")
     print(f"Inconclusive TCs:    {summary.inconclusive_tcs}")
+    if summary.infra_error_tcs:
+        print(f"Infra-error TCs:     {summary.infra_error_tcs}  (excluded from scores — content filter or similar)")
+    def _fmt_ms(v) -> str:
+        return f"{v:.0f}ms" if v is not None else "N/A"
+    print(f"Mean event latency:  {_fmt_ms(summary.mean_event_latency_ms)}"
+          f"  (base: {_fmt_ms(summary.mean_base_event_latency_ms)}"
+          f"  pre: {_fmt_ms(summary.mean_pre_mod_event_latency_ms)}"
+          f"  post: {_fmt_ms(summary.mean_post_mod_event_latency_ms)}"
+          f"  irrel: {_fmt_ms(summary.mean_irrelevant_event_latency_ms)})")
     n_events = summary.total_events or 1
     print(f"Agent tokens:        {summary.total_agent_input_tokens:,} in / {summary.total_agent_output_tokens:,} out"
           f"  (mean/event: {summary.mean_event_input_tokens:.0f} in / {summary.mean_event_output_tokens:.0f} out)")
+    print(f"  executor:          {summary.total_executor_input_tokens:,} in / {summary.total_executor_output_tokens:,} out")
+    if summary.total_planner_input_tokens or summary.total_planner_output_tokens:
+        print(f"  planner:           {summary.total_planner_input_tokens:,} in / {summary.total_planner_output_tokens:,} out")
+    if summary.total_evaluator_input_tokens or summary.total_evaluator_output_tokens:
+        print(f"  evaluator:         {summary.total_evaluator_input_tokens:,} in / {summary.total_evaluator_output_tokens:,} out")
     print(f"Judge tokens:        {summary.total_judge_input_tokens:,} in / {summary.total_judge_output_tokens:,} out"
           f"  (mean/event: {summary.total_judge_input_tokens/n_events:.0f} in / {summary.total_judge_output_tokens/n_events:.0f} out)")
 
@@ -1087,10 +1297,29 @@ def run(args: argparse.Namespace) -> Path:
             f"{p}/{m}" for p, m in parsed_judges
         )
 
+    object_prompt = getattr(args, "object_prompt", "object.yaml")
+    # Planner line — only shown when --enable-planner is set; otherwise "(disabled)".
+    if getattr(args, "enable_planner", False):
+        planner_provider = getattr(args, "planner_provider", None) or args.provider
+        planner_model = getattr(args, "planner_model", None) or args.model
+        planner_label = f"{planner_provider}/{planner_model}"
+    else:
+        planner_label = "(disabled)"
+    # Evaluator line — only shown when --enable-evaluator is set.
+    if getattr(args, "enable_evaluator", False):
+        evaluator_provider = getattr(args, "evaluator_provider", None) or args.provider
+        evaluator_model = getattr(args, "evaluator_model", None) or args.model
+        evaluator_label = f"{evaluator_provider}/{evaluator_model}"
+    else:
+        evaluator_label = "(disabled)"
     extra_info = {
+        "Planner": planner_label,
+        "Evaluator": evaluator_label,
+        "Judge": judge_label,
+        "Object prompt": object_prompt,
+        "Planner prompt": getattr(args, "planner_prompt", "planner.yaml"),
         "Runs per test case": str(args.runs),
         "Timeout per event": f"{timeout_s}s" if timeout_s else "none",
-        "Judge": judge_label,
     }
     print_run_info(
         args.provider,
@@ -1131,6 +1360,24 @@ def run(args: argparse.Namespace) -> Path:
             return AnthropicJudge(model=model)
 
     brain = _make_brain(args.provider, args.model)
+    # Planner brain — defaults to agent brain when --planner-model is not set.
+    planner_model = getattr(args, "planner_model", None) or args.model
+    planner_provider = getattr(args, "planner_provider", None) or args.provider
+    if planner_model == args.model and planner_provider == args.provider:
+        planner_brain = brain  # share instance — same model+provider
+    else:
+        planner_brain = _make_brain(planner_provider, planner_model)
+    args.planner_model_resolved = f"{planner_provider}/{planner_model}"
+    # Evaluator brain — defaults to agent brain when --evaluator-model is not set.
+    evaluator_model = getattr(args, "evaluator_model", None) or args.model
+    evaluator_provider = getattr(args, "evaluator_provider", None) or args.provider
+    if evaluator_model == args.model and evaluator_provider == args.provider:
+        evaluator_brain = brain
+    elif evaluator_model == planner_model and evaluator_provider == planner_provider:
+        evaluator_brain = planner_brain  # reuse planner instance if same model
+    else:
+        evaluator_brain = _make_brain(evaluator_provider, evaluator_model)
+    args.evaluator_model_resolved = f"{evaluator_provider}/{evaluator_model}"
     single_judges = [_make_judge(p, m) for p, m in parsed_judges]
     if len(single_judges) == 1:
         judge = single_judges[0]
@@ -1159,6 +1406,21 @@ def run(args: argparse.Namespace) -> Path:
         mc = load_mock_config(mc_path)
         global_mock_tools.extend(mc.tools)
         print(f"  Loaded mock config: {mc_path} ({len(mc.tools)} tools)")
+
+    # Optional: start the HTTP mock server. When enabled, mock tool calls are
+    # routed through POST /tool/{method} — the same path the OpenClaw baseline
+    # uses — instead of the in-process executor. Per-(tc, run) slots isolate
+    # concurrent workers.
+    mock_server = None
+    mock_server_url: Optional[str] = None
+    if getattr(args, "mock_server", False):
+        from src.data.mock_server import MockServer
+        mock_port = getattr(args, "mock_server_port", 18888)
+        mock_server = MockServer(port=mock_port)
+        mock_server.start()
+        mock_server.wait_ready()
+        mock_server_url = f"http://127.0.0.1:{mock_port}"
+        print(f"Mock server: enabled (port {mock_port}, script mode) — tool calls routed via HTTP")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1302,8 +1564,17 @@ def run(args: argparse.Namespace) -> Path:
                 concurrency_seed=getattr(args, "seed", None) or 42,
                 max_modifications=getattr(args, "modifications", None),
                 object_prompt=getattr(args, "object_prompt", "object.yaml"),
+                planner_prompt=getattr(args, "planner_prompt", "planner.yaml"),
                 max_history=getattr(args, "max_history", None),
                 tracked_harness=tracked_harness,
+                enable_code_tool=getattr(args, "code_tool", True),
+                enable_sink_completion_shim=getattr(args, "sink_shim", False),
+                enable_planner=getattr(args, "enable_planner", False),
+                enable_evaluator=getattr(args, "enable_evaluator", False),
+                planner_brain=planner_brain,
+                evaluator_brain=evaluator_brain,
+                mock_server_url=mock_server_url,
+                mock_slot_id=f"tc{tc_idx}-r{run_idx}",
             )
         finally:
             # Always store snapshot and signal waiting workers — even on failure —
@@ -1332,6 +1603,7 @@ def run(args: argparse.Namespace) -> Path:
             modifications=mod_results,
             pass_rate=pass_rate,
             elapsed_ms=elapsed_s * 1000.0,
+            **_role_elapsed_fields(event_results),
         )
         passed_n = sum(1 for e in event_results if e.passed)
         total_n = len(event_results)
@@ -1402,6 +1674,25 @@ def run(args: argparse.Namespace) -> Path:
     else:
         run_phases = [("", pending_runs)]
 
+    # tqdm creates a multiprocessing.RLock (a POSIX semaphore) for its write lock.
+    # os._exit() below skips the resource tracker's cleanup, which would log a
+    # "leaked semaphore" UserWarning. Pre-seeding the class attribute with a plain
+    # threading.RLock prevents the POSIX semaphore from being created at all —
+    # a threading lock is sufficient since evaluate.py runs in a single process.
+    try:
+        from tqdm.std import TqdmDefaultWriteLock as _TqdmLock
+        if not hasattr(_TqdmLock, 'mp_lock'):
+            _TqdmLock.mp_lock = threading.RLock()
+    except Exception:
+        pass
+
+    # Track how many TC results we expect per run_idx so we can print a
+    # mid-run summary the moment each run cycle completes.
+    _expected_per_run: dict[int, int] = {}
+    for _, _, _ri in pending_runs:
+        _expected_per_run[_ri] = _expected_per_run.get(_ri, 0) + 1
+    _done_per_run: dict[int, int] = {ri: 0 for ri in _expected_per_run}
+
     with open(args.output, file_mode) as f:
         f.write(run_config.model_dump_json() + "\n")
         f.flush()
@@ -1429,6 +1720,16 @@ def run(args: argparse.Namespace) -> Path:
                                 f.flush()
                                 all_tc_results.append(tc_result)
                                 _pbar_postfix(pbar, all_tc_results, _event_counter[0], _in_tok_counter[0], _out_tok_counter[0])
+                                if run_idx in _done_per_run:
+                                    _done_per_run[run_idx] += 1
+                                    if _done_per_run[run_idx] == _expected_per_run[run_idx]:
+                                        run_results = [r for r in all_tc_results if r.run_index == run_idx]
+                                        run_summary = _compute_summary(run_results)
+                                        import contextlib, io as _io
+                                        buf = _io.StringIO()
+                                        with contextlib.redirect_stdout(buf):
+                                            _print_summary(run_summary)
+                                        tqdm.write(f"\n── Run {run_idx + 1}/{args.runs} ──\n" + buf.getvalue())
                         except Exception as e:
                             tqdm.write(f"FAILED {label} run={run_idx}: {e}", file=sys.stderr)
                         pbar.update(1)
@@ -1440,7 +1741,11 @@ def run(args: argparse.Namespace) -> Path:
 
     print()
     _print_summary(summary, output_path=args.output, elapsed_s=time.monotonic() - eval_start)
-    return args.output
+    if mock_server is not None:
+        mock_server.stop()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 _STEP_EVENT_ID = re.compile(r"^S\d+$")
@@ -1512,10 +1817,15 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
             first_tc_per_sample[sid] = r.tc_id
     base_tc_ids = set(first_tc_per_sample.values())
 
+    # TCs where any event had an infra error (e.g. content filter) — excluded from all scoring.
+    infra_error_tc_ids: set[str] = {r.tc_id for r in results if any(e.infra_error for e in r.events)}
+
     # Compute per-result effective events (step events only for the base TC per sample).
     all_events: list[EventResult] = []
     pass_rates: list[float] = []
     for r in results:
+        if r.tc_id in infra_error_tc_ids:
+            continue
         is_base = r.tc_id in base_tc_ids
         effective = [
             e for e in r.events
@@ -1550,7 +1860,7 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
     # Samples completion + std (fraction of TCs where ALL step events passed)
     by_tc_completion: dict[str, list[float]] = defaultdict(list)
     for r in results:
-        if r.tc_id not in base_tc_ids:
+        if r.tc_id not in base_tc_ids or r.tc_id in infra_error_tc_ids:
             continue
         step_evts = [e for e in r.events if _STEP_EVENT_ID.match(e.event_id)]
         if step_evts:
@@ -1564,19 +1874,22 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
     # Inconclusive TCs: TCs where any run had at least one step failure.
     # Probe TCs (no pre_mod events) are exempt: step failures there are unrelated
     # to modification evaluation and should not suppress probe/tracked metrics.
+    # Infra-error TCs are excluded separately and not also marked inconclusive.
     tcs_with_pre_mod = {r.tc_id for r in results if any(e.role == "pre_mod" for e in r.events)}
     inconclusive_tc_ids: set[str] = set()
     for r in results:
-        if r.tc_id not in tcs_with_pre_mod:
+        if r.tc_id not in tcs_with_pre_mod or r.tc_id in infra_error_tc_ids:
             continue
         step_evts = [e for e in r.events if _STEP_EVENT_ID.match(e.event_id)]
         if step_evts and any(not e.passed for e in step_evts):
             inconclusive_tc_ids.add(r.tc_id)
 
-    # Role-based pass rates + std: exclude inconclusive TCs, grouped by TC across runs
+    # Role-based pass rates + std: exclude inconclusive + infra-error TCs, grouped by TC across runs
     def _role_pass_rate_and_std(role_val, exclude_inconclusive=True) -> tuple[Optional[float], Optional[float]]:
         by_tc: dict[str, list[float]] = defaultdict(list)
         for r in results:
+            if r.tc_id in infra_error_tc_ids:
+                continue
             if exclude_inconclusive and r.tc_id in inconclusive_tc_ids:
                 continue
             evts = [e for e in r.events if e.role == role_val]
@@ -1586,7 +1899,7 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
         return rate, _per_tc_std(by_tc)
 
     conclusive_events = [
-        e for r in results if r.tc_id not in inconclusive_tc_ids
+        e for r in results if r.tc_id not in inconclusive_tc_ids and r.tc_id not in infra_error_tc_ids
         for e in r.events
     ]
     mod_events = [e for e in conclusive_events if e.role in ("pre_mod", "post_mod", "irrelevant")]
@@ -1594,7 +1907,7 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
 
     by_tc_mod: dict[str, list[float]] = defaultdict(list)
     for r in results:
-        if r.tc_id in inconclusive_tc_ids:
+        if r.tc_id in inconclusive_tc_ids or r.tc_id in infra_error_tc_ids:
             continue
         evts = [e for e in r.events if e.role in ("pre_mod", "post_mod", "irrelevant")]
         if evts:
@@ -1605,15 +1918,18 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
     post_mod_pass_rate, post_mod_pass_rate_std = _role_pass_rate_and_std("post_mod")
     irrelevant_pass_rate, irrelevant_pass_rate_std = _role_pass_rate_and_std("irrelevant")
 
-    # Role-based pass rates including inconclusive TCs (indicative)
+    # Role-based pass rates including inconclusive TCs but still excluding infra-error TCs (indicative)
     all_mod_events = [
-        e for r in results for e in r.events
+        e for r in results if r.tc_id not in infra_error_tc_ids
+        for e in r.events
         if e.role in ("pre_mod", "post_mod", "irrelevant")
     ]
     mod_pass_rate_all = (sum(1 for e in all_mod_events if e.passed) / len(all_mod_events)) if all_mod_events else None
 
     by_tc_mod_all: dict[str, list[float]] = defaultdict(list)
     for r in results:
+        if r.tc_id in infra_error_tc_ids:
+            continue
         evts = [e for e in r.events if e.role in ("pre_mod", "post_mod", "irrelevant")]
         if evts:
             by_tc_mod_all[r.tc_id].append(sum(1 for e in evts if e.passed) / len(evts))
@@ -1650,16 +1966,27 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
         irrelevant_pass_rate_all=irrelevant_pass_rate_all,
         irrelevant_pass_rate_all_std=irrelevant_pass_rate_all_std,
         inconclusive_tcs=len(inconclusive_tc_ids),
+        infra_error_tcs=len(infra_error_tc_ids),
         mean_event_input_tokens=mean([e.input_tokens for e in all_events]),
         mean_event_output_tokens=mean([e.output_tokens for e in all_events]),
         mean_event_latency_ms=mean([e.latency_ms for e in all_events]),
         mean_mod_input_tokens=mean([m.input_tokens for m in all_mods]),
         mean_mod_output_tokens=mean([m.output_tokens for m in all_mods]),
         mean_mod_latency_ms=mean([m.latency_ms for m in all_mods]),
+        mean_base_event_latency_ms=mean([e.latency_ms for e in all_events if e.role is None]) or None,
+        mean_pre_mod_event_latency_ms=mean([e.latency_ms for e in all_events if e.role == "pre_mod"]) or None,
+        mean_post_mod_event_latency_ms=mean([e.latency_ms for e in all_events if e.role == "post_mod"]) or None,
+        mean_irrelevant_event_latency_ms=mean([e.latency_ms for e in all_events if e.role == "irrelevant"]) or None,
         total_agent_input_tokens=sum(e.input_tokens for e in all_events) + sum(m.input_tokens for m in all_mods),
         total_agent_output_tokens=sum(e.output_tokens for e in all_events) + sum(m.output_tokens for m in all_mods),
         total_judge_input_tokens=sum(e.judge_input_tokens for e in all_events),
         total_judge_output_tokens=sum(e.judge_output_tokens for e in all_events),
+        total_planner_input_tokens=sum(e.planner_input_tokens for e in all_events) + sum(m.planner_input_tokens for m in all_mods),
+        total_planner_output_tokens=sum(e.planner_output_tokens for e in all_events) + sum(m.planner_output_tokens for m in all_mods),
+        total_executor_input_tokens=sum(e.executor_input_tokens for e in all_events) + sum(m.executor_input_tokens for m in all_mods),
+        total_executor_output_tokens=sum(e.executor_output_tokens for e in all_events) + sum(m.executor_output_tokens for m in all_mods),
+        total_evaluator_input_tokens=sum(e.evaluator_input_tokens for e in all_events) + sum(m.evaluator_input_tokens for m in all_mods),
+        total_evaluator_output_tokens=sum(e.evaluator_output_tokens for e in all_events) + sum(m.evaluator_output_tokens for m in all_mods),
     )
 
 
@@ -1767,6 +2094,74 @@ Examples:
         ),
     )
     parser.add_argument(
+        "--code-tool",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        dest="code_tool",
+        help=(
+            "Register the built-in `python` REPL tool on every LLM-object so the "
+            "LLM can run code (with per-object persistent namespace) instead of "
+            "reasoning numerically in natural language. "
+            "Use --no-code-tool to revert to the default agent configuration. (default: enabled)"
+        ),
+    )
+    parser.add_argument(
+        "--enable-planner",
+        action="store_true",
+        dest="enable_planner",
+        default=False,
+        help=(
+            "Pre-execution planner: separate LLM call that produces a structured "
+            "plan BEFORE the executor's ReAct loop. The plan is stored in the "
+            "object's active_plan and surfaces in the executor prompt as a "
+            "checklist. (default: off)"
+        ),
+    )
+    parser.add_argument(
+        "--enable-evaluator",
+        action="store_true",
+        dest="enable_evaluator",
+        default=False,
+        help=(
+            "Post-execution evaluator: separate LLM call that grades the "
+            "executor's last turn against the active plan, returning structured "
+            "criterion-level PASS/FAIL. On FAIL, the runtime delivers a feedback "
+            "heartbeat so the executor can fix the gaps. Capped at N cycles per "
+            "trace to bound cost. Requires --enable-planner for there to be a "
+            "plan to evaluate against. (default: off)"
+        ),
+    )
+    parser.add_argument(
+        "--evaluator-model",
+        default=None,
+        help=(
+            "Model used by the post-execution evaluator. Only consulted when "
+            "--enable-evaluator is set. Defaults to --model (the agent model)."
+        ),
+    )
+    parser.add_argument(
+        "--evaluator-provider",
+        choices=["openai", "azure", "anthropic", "google"],
+        default=None,
+        help="Provider for the evaluator model. Defaults to --provider.",
+    )
+    parser.add_argument(
+        "--sink-shim",
+        action="store_true",
+        dest="sink_shim",
+        default=False,
+        help=(
+            "Sink Completion Shim: for objects whose role identifies them as "
+            "write/notify sinks (Write Service, Storage, Notifier, Publisher), "
+            "if the LLM finishes without producing an artifact (URL/ID) in its "
+            "reply AND without a completion marker (status: sent/stored/...) "
+            "in state, the runtime synthesizes a plausible artifact and "
+            "injects it into state + augments the reply. Targets the "
+            "async-deferral failure mode where sinks say 'dispatched, will "
+            "return later' without completing. (default: off)"
+        ),
+    )
+    parser.add_argument(
         "--llm-judge",
         action="append",
         default=None,
@@ -1788,6 +2183,21 @@ Examples:
         choices=["openai", "azure", "anthropic", "google"],
         default=None,
         help="Provider for judge model (inferred from judge-model if not specified). Ignored when --llm-judge is set.",
+    )
+    parser.add_argument(
+        "--planner-model",
+        default=None,
+        help=(
+            "Model used by the planner LLM call (separate from the agent). "
+            "Only consulted when --fan-out-decompose is set. "
+            "Defaults to --model (the agent model)."
+        ),
+    )
+    parser.add_argument(
+        "--planner-provider",
+        choices=["openai", "azure", "anthropic", "google"],
+        default=None,
+        help="Provider for the planner model. Defaults to --provider.",
     )
     parser.add_argument(
         "--tracked-judge",
@@ -1812,6 +2222,11 @@ Examples:
         help="Object system-prompt template filename relative to config/prompts/lnl/ (default: object.yaml).",
     )
     parser.add_argument(
+        "--planner-prompt",
+        default="planner.yaml",
+        help="Planner system-prompt template filename relative to config/prompts/lnl/ (default: planner.yaml).",
+    )
+    parser.add_argument(
         "--max-tool-rounds",
         type=int,
         default=10,
@@ -1829,6 +2244,23 @@ Examples:
         default=None,
         metavar="N",
         help="Override conversation history window per object (default: 6). Use 0 to disable history entirely.",
+    )
+    parser.add_argument(
+        "--mock-server",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Route mock tool calls through the HTTP mock server (POST /tool/{method}) "
+            "instead of the in-process executor — the same tool-call path the OpenClaw "
+            "baseline uses. Triggers still fire in-process (mirrors the baseline). "
+            "Enabled by default; use --no-mock-server to disable."
+        ),
+    )
+    parser.add_argument(
+        "--mock-server-port",
+        type=int,
+        default=18888,
+        help="Port for the local mock server started by --mock-server (default: 18888).",
     )
     parser.add_argument(
         "--mock-config",

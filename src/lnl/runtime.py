@@ -17,7 +17,7 @@ from .bus import BusMetrics, MessageBus
 from .events import EventSourceRegistry
 from .object import LLMObject
 from .parser import parse_object_file, parse_object_text, serialize_object
-from .tools import CreateObjectExecutor, ToolRegistry
+from .tools import CodeExecutor, CreateObjectExecutor, ToolRegistry, ToolSpec
 from .types import (
     Message,
     MessageLog,
@@ -90,6 +90,27 @@ class SystemConfig:
     # Knowledge gaps: auto-track in state and ask peers
     auto_track_knowledge_gaps: bool = True
     auto_ask_peers_on_gap: bool = True
+    # Built-in coding tool: per-object stateful Python REPL. When False, the
+    # `python` tool is not registered and objects behave as the default agent.
+    enable_code_tool: bool = True
+    # Sink completion shim: after a sink object's finish, if reply lacks an
+    # artifact AND state lacks completion markers, runtime synthesizes a
+    # plausible artifact and appends a completion state_update + augments the
+    # reply. Deterministic: the runtime forces simulation completion at the
+    # sink boundary. Targets the async-deferral failure ("dispatched, will
+    # return URL later") that affects BOTH mini AND gpt-5.4.
+    enable_sink_completion_shim: bool = False
+    # Pre-execution planner: separate LLM call that produces a structured plan
+    # BEFORE the executor's ReAct loop. The plan is stored in active_plan and
+    # surfaces in the executor's prompt as an explicit checklist.
+    enable_planner: bool = False
+    # Post-execution evaluator: separate LLM call that grades the executor's
+    # most recent turn against the active plan, returning structured criterion-
+    # level pass/fail. On FAIL, the runtime delivers a feedback heartbeat to
+    # the orchestrator so it can fix the gaps. Capped at N cycles per trace
+    # to bound cost.
+    enable_evaluator: bool = False
+    evaluator_max_cycles_per_trace: int = 3
 
     @staticmethod
     def load(path: Path | None = None) -> "SystemConfig":
@@ -113,6 +134,11 @@ class SystemConfig:
             react_cross_objects=bool(data.get("react_cross_objects", True)),
             auto_track_knowledge_gaps=bool(kg.get("enabled", True)),
             auto_ask_peers_on_gap=bool(kg.get("ask_peers", True)),
+            enable_code_tool=bool(data.get("enable_code_tool", True)),
+            enable_sink_completion_shim=bool(data.get("enable_sink_completion_shim", False)),
+            enable_planner=bool(data.get("enable_planner", False)),
+            enable_evaluator=bool(data.get("enable_evaluator", False)),
+            evaluator_max_cycles_per_trace=int(data.get("evaluator_max_cycles_per_trace", 3)),
         )
 
 
@@ -131,9 +157,13 @@ class Runtime:
         pool_size: int = 4,
         heartbeat: "SystemConfig | None" = None,  # legacy param name; accepts SystemConfig
         system_config: "SystemConfig | None" = None,
+        planner_brain: "LLMBrain | None" = None,
+        evaluator_brain: "LLMBrain | None" = None,
     ) -> None:
         cfg = system_config or heartbeat or SystemConfig()
         self._brain = brain
+        self._planner_brain = planner_brain or brain
+        self._evaluator_brain = evaluator_brain or brain
         self._bus = MessageBus()
         self._max_chain_depth = max_chain_depth if max_chain_depth is not None else cfg.max_chain_depth
         self._max_tool_rounds = cfg.max_tool_rounds
@@ -144,6 +174,7 @@ class Runtime:
         self._pending_timeout_seconds = cfg.pending_timeout_seconds
         self._heartbeat_interval_seconds = cfg.heartbeat_interval_seconds
         self._prompt_file: str = "object.yaml"
+        self._planner_prompt_file: str = "planner.yaml"
         self._sources: dict[str, Path] = {}  # object_id -> file path
         self._modified: set[str] = set()  # object_ids with unsaved changes
         self._classes: dict[str, ObjectDefinition] = {}  # class_id -> template definition
@@ -183,12 +214,45 @@ class Runtime:
         self._thread: threading.Thread | None = None
         self._heartbeat_thread: threading.Thread | None = None
 
+        # Infra errors accumulated during the current wave (e.g. content filter)
+        self._infra_errors: list[tuple[str, str]] = []
+        self._infra_errors_lock = threading.Lock()
+
         # Wire bus schedule callback — objects schedule themselves when mail arrives
         self._bus.set_schedule_callback(self._schedule_object)
+
+        # Tell the bus the chain depth so it can compute hop_depth on each delivery
+        self._bus.set_max_chain_depth(self._max_chain_depth)
 
         # Register create_object as a core tool available to all objects
         if self._tool_registry is not None:
             self._tool_registry.register("create_object", CreateObjectExecutor(self), CreateObjectExecutor.SPEC)
+            if cfg.enable_code_tool:
+                self._tool_registry.register(
+                    "python",
+                    CodeExecutor(),
+                    ToolSpec(
+                        description=(
+                            "Execute Python in your private persistent REPL. "
+                            "Variables, imports, and function definitions persist across calls "
+                            "for the lifetime of this object. Use for deterministic arithmetic, "
+                            "parsing, data transforms, aggregations, or any sub-task better "
+                            "solved by code than by natural-language reasoning. "
+                            "Output: captured stdout, plus repr of the final expression if any."
+                        ),
+                        arguments_schema={
+                            "type": "object",
+                            "properties": {
+                                "code": {
+                                    "type": "string",
+                                    "description": "Python source to execute in the REPL namespace.",
+                                },
+                            },
+                            "required": ["code"],
+                            "additionalProperties": False,
+                        },
+                    ),
+                )
 
     def _next_msg_id(self, sender: str) -> str:
         """Return a deterministic message ID: '<sender>-<n>' with a monotonic counter."""
@@ -197,10 +261,21 @@ class Runtime:
             self._msg_counter += 1
         return f"{sender}-{n}"
 
+    def drain_infra_errors(self) -> list[tuple[str, str]]:
+        """Return and clear infra errors accumulated since the last call (thread-safe)."""
+        with self._infra_errors_lock:
+            errors, self._infra_errors = self._infra_errors, []
+            return errors
+
     def set_prompt_file(self, prompt_file: str) -> None:
         """Set the object system-prompt template filename (relative to config/prompts/lnl/).
         Must be called before loading objects."""
         self._prompt_file = prompt_file
+
+    def set_planner_prompt_file(self, planner_prompt_file: str) -> None:
+        """Set the planner system-prompt template filename (relative to config/prompts/lnl/).
+        Must be called before loading objects."""
+        self._planner_prompt_file = planner_prompt_file
 
     def set_max_history(self, max_history: int) -> None:
         """Override the conversation history window per object. Must be called before loading objects."""
@@ -271,25 +346,36 @@ class Runtime:
             def _make_context(obj: LLMObject) -> dict:
                 def push_event(content: str, source: str = "__code__") -> None:
                     """Inject an event into the calling object's own mailbox."""
+                    _mid = self._next_msg_id(source)
                     msg = Message(
                         sender=source,
                         recipient=obj.object_id,
                         type=MessageType.EVENT,
                         content=content,
+                        depth_remaining=self._max_chain_depth,
+                        id=_mid,
+                        trace_id=_mid,
                     )
                     self._bus.deliver(msg)
 
                 def inject_event(recipient: str, content: str, source: str = "__external__") -> None:
                     """Inject an event to any object."""
+                    _mid = self._next_msg_id(source)
                     msg = Message(
                         sender=source,
                         recipient=recipient,
                         type=MessageType.EVENT,
                         content=content,
+                        depth_remaining=self._max_chain_depth,
+                        id=_mid,
+                        trace_id=_mid,
                     )
                     self._bus.deliver(msg)
 
-                return {"push_event": push_event, "inject_event": inject_event}
+                ctx: dict = {"push_event": push_event, "inject_event": inject_event}
+                if self._heartbeat.enable_code_tool:
+                    ctx["repl_namespace"] = obj._get_repl_namespace()
+                return ctx
             tool_context_factory = _make_context
 
         obj = LLMObject(
@@ -304,6 +390,14 @@ class Runtime:
             prompt_file=self._prompt_file,
             auto_track_knowledge_gaps=self._auto_track_knowledge_gaps,
             auto_ask_peers_on_gap=self._auto_ask_peers_on_gap,
+            enable_sink_completion_shim=self._heartbeat.enable_sink_completion_shim,
+            enable_planner=self._heartbeat.enable_planner,
+            enable_evaluator=self._heartbeat.enable_evaluator,
+            evaluator_max_cycles_per_trace=self._heartbeat.evaluator_max_cycles_per_trace,
+            planner_brain=self._planner_brain,
+            evaluator_brain=self._evaluator_brain,
+            planner_prompt_file=self._planner_prompt_file,
+            log_synthetic_message=self._bus.log_synthetic,
         )
         self._bus.register(obj)
         if definition.event_sources:
@@ -320,13 +414,15 @@ class Runtime:
         sender: str = "__user__",
     ) -> list[ProcessingResult]:
         """Send a message to a specific object."""
+        _mid = self._next_msg_id(sender)
         msg = Message(
             sender=sender,
             recipient=recipient,
             type=MessageType.DOMAIN,
             content=content,
             depth_remaining=self._max_chain_depth,
-            id=self._next_msg_id(sender),
+            id=_mid,
+            trace_id=_mid,  # root of a new cascade
         )
         if self._running.is_set():
             item = _WorkItem(message=msg)
@@ -350,17 +446,18 @@ class Runtime:
             on_result: optional callback fired for each direct result of an input
                 message (filtered by source_message_id; cascades are excluded).
         """
-        messages = [
-            Message(
+        messages = []
+        for recipient, content, sender in items:
+            _mid = self._next_msg_id(sender)
+            messages.append(Message(
                 sender=sender,
                 recipient=recipient,
                 type=MessageType.DOMAIN,
                 content=content,
                 depth_remaining=self._max_chain_depth,
-                id=self._next_msg_id(sender),
-            )
-            for recipient, content, sender in items
-        ]
+                id=_mid,
+                trace_id=_mid,  # each input message roots its own cascade
+            ))
         if on_result is not None:
             input_ids = {m.id for m in messages}
             def _filtered(result: ProcessingResult, _ids: set = input_ids, _cb = on_result) -> None:
@@ -399,13 +496,15 @@ class Runtime:
         sender: str = "__system__",
     ) -> list[ProcessingResult]:
         """Broadcast a message to all objects."""
+        _mid = self._next_msg_id(sender)
         msg = Message(
             sender=sender,
             recipient="__broadcast__",
             type=MessageType.DOMAIN,
             content=content,
             depth_remaining=self._max_chain_depth,
-            id=self._next_msg_id(sender),
+            id=_mid,
+            trace_id=_mid,
         )
         if self._running.is_set():
             item = _WorkItem(message=msg)
@@ -421,6 +520,7 @@ class Runtime:
         sender: str = "__system__",
     ) -> list[ProcessingResult]:
         """Publish a message to all subscribers of a topic."""
+        _mid = self._next_msg_id(sender)
         msg = Message(
             sender=sender,
             recipient="",
@@ -428,7 +528,8 @@ class Runtime:
             content=content,
             topic=topic,
             depth_remaining=self._max_chain_depth,
-            id=self._next_msg_id(sender),
+            id=_mid,
+            trace_id=_mid,
         )
         if self._running.is_set():
             item = _WorkItem(message=msg)
@@ -469,6 +570,8 @@ class Runtime:
                 exc = f.exception()
                 if "content filter" in str(exc).lower():
                     logger.warning("Error reading object %s: %s", _oid, exc)
+                    with self._infra_errors_lock:
+                        self._infra_errors.append((_oid, str(exc)))
                 else:
                     logger.exception("Error reading object %s", _oid, exc_info=exc)
             if _transaction:
@@ -489,6 +592,16 @@ class Runtime:
             self._pending_results.append(result)
 
         self._bus.record_processing(result)
+
+        # Push per-hop processing timing back onto the bus's MessageLog entry,
+        # so offline trace reconstruction can break down mailbox-wait vs. LLM time.
+        if result.source_message_id:
+            self._bus.update_log_timing(
+                result.source_message_id,
+                started_at=result.processing_started_at,
+                completed_at=result.processing_completed_at,
+                metrics=result.metrics,
+            )
 
         if self._on_result_callback:
             self._on_result_callback(result)
@@ -535,6 +648,8 @@ class Runtime:
                     # Propagate the original message's plan step index so the
                     # asker's plan step auto-marks done when the reply arrives.
                     plan_step_index=result.source_plan_step_index,
+                    trace_id=result.source_trace_id,
+                    parent_id=result.source_message_id,
                 )
                 self._bus.deliver(reply_msg)
                 # Clear any pending-inbound entry for this recipient so later
@@ -570,6 +685,8 @@ class Runtime:
                 in_reply_to=out.in_reply_to,
                 expects_reply=out.expects_reply,
                 plan_step_index=out.plan_step_index,
+                trace_id=result.source_trace_id,
+                parent_id=result.source_message_id,
             )
             self._bus.deliver(chained)
             # If this outgoing dispatched one of our own plan steps, flip the
@@ -594,6 +711,11 @@ class Runtime:
             if out.expects_reply:
                 with self._awaiting_lock:
                     self._awaiting_reply.setdefault(obj_id, set()).add(out.recipient)
+
+        # Note: evaluator-driven self-correction is now handled inside
+        # LLMObject.process_message (post-execution evaluator + ReAct retry
+        # are internal to the object). The runtime sees a single corrected
+        # result and dispatches the final outgoings once.
 
     def _dispatch(
         self,
@@ -629,13 +751,15 @@ class Runtime:
     def _poll_events_once(self) -> None:
         """Poll all event sources and deliver events to object mailboxes."""
         for object_id, envelope in self._event_sources.poll_all():
+            _mid = self._next_msg_id(envelope.source_id)
             msg = Message(
                 sender=envelope.source_id,
                 recipient=object_id,
                 type=MessageType.EVENT,
                 content=envelope.content,
                 depth_remaining=self._max_chain_depth,
-                id=self._next_msg_id(envelope.source_id),
+                id=_mid,
+                trace_id=_mid,  # external events root a new cascade
             )
             self._bus.deliver(msg)
 
@@ -779,6 +903,10 @@ class Runtime:
             self._heartbeat_thread = None
         self._pool.shutdown(wait=False)
 
+    def __del__(self):
+        if hasattr(self, "_pool"):
+            self._pool.shutdown(wait=False)
+
     def submit(
         self,
         recipient: str,
@@ -790,12 +918,15 @@ class Runtime:
         Returns a _WorkItem whose `done` event is set when processing completes.
         Results are available in `item.results`.
         """
+        _mid = self._next_msg_id(sender)
         msg = Message(
             sender=sender,
             recipient=recipient,
             type=MessageType.DOMAIN,
             content=content,
             depth_remaining=self._max_chain_depth,
+            id=_mid,
+            trace_id=_mid,
         )
         item = _WorkItem(message=msg)
         self._work_queue.put(item)
@@ -813,12 +944,15 @@ class Runtime:
         while not self._shutdown.wait(timeout=interval):
             if not self._running.is_set():
                 continue
+            _mid = self._next_msg_id("__system__")
             msg = Message(
                 sender="__system__",
                 recipient="__broadcast__",
                 type=MessageType.HEARTBEAT,
                 content="Heartbeat",
                 depth_remaining=1,  # heartbeats do not cascade to peer chains
+                id=_mid,
+                trace_id=_mid,
             )
             self._work_queue.put(_WorkItem(message=msg))
 

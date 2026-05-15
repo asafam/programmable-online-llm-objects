@@ -553,7 +553,7 @@ class MockServer:
         if self._server:
             self._server.should_exit = True
         if self._thread:
-            self._thread.join(timeout=3.0)
+            self._thread.join(timeout=10.0)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ from .types import (
     ObjectDefinition,
     OutgoingMessage,
     Plan,
+    PlanStep,
     PlanUpdate,
     ReactFinish,
     ReactStep,
@@ -279,6 +280,142 @@ def _render_active_plan(plan: Optional[Plan]) -> str:
     return "\n".join(lines)
 
 
+def build_planner_prompt(
+    definition: ObjectDefinition,
+    current_state,  # str (from LLM) or dict (from mock scripts)
+    message,  # Message
+    prompt_file: str = "planner.yaml",
+) -> str:
+    """Build the planner system prompt from `planner.yaml`.
+
+    The planner is a separate LLM call (Pre-Act Appendix D-inspired) that
+    produces a multi-step plan BEFORE the executor starts dispatching. The
+    plan persists in the object's active_plan and drives continuations.
+    """
+    config = _load_prompt_config(prompt_file)
+    template = config["system_prompt"]
+
+    peers = "\n".join(f"- {p.object_id}: {p.relationship}" for p in definition.peers) or "(none)"
+    if isinstance(current_state, dict):
+        state_str = json.dumps(current_state, indent=2)
+    elif current_state:
+        state_str = str(current_state).strip()
+    else:
+        state_str = "(empty)"
+
+    return template.format(
+        object_id=definition.object_id,
+        role=definition.role,
+        behavior=definition.behavior or "(none)",
+        peers=peers,
+        current_state=state_str,
+        sender=getattr(message, "sender", "(unknown)"),
+        message_type=getattr(message, "type", "(unknown)").value if hasattr(getattr(message, "type", None), "value") else str(getattr(message, "type", "")),
+        message_content=str(getattr(message, "content", "")),
+    )
+
+
+def build_evaluator_prompt(
+    definition: ObjectDefinition,
+    current_state,
+    plan: "Optional[Plan]",  # type: ignore[name-defined]
+    outgoing_messages: list,
+    reply: str,
+    message=None,  # the incoming Message this turn processed (context for evaluator)
+    prompt_file: str = "evaluator.yaml",
+) -> str:
+    """Build the evaluator system prompt from `evaluator.yaml`.
+
+    Grades the executor's dispatches and state changes against each plan step.
+    The incoming `message` is rendered for context so the evaluator knows what
+    the executor was responding to.
+    """
+    config = _load_prompt_config(prompt_file)
+    template = config["system_prompt"]
+
+    peers = "\n".join(f"- {p.object_id}: {p.relationship}" for p in definition.peers) or "(none)"
+    if isinstance(current_state, dict):
+        state_str = json.dumps(current_state, indent=2)
+    elif current_state:
+        state_str = str(current_state).strip()
+    else:
+        state_str = "(empty)"
+
+    # Incoming message block — rendered as context.
+    if message is not None:
+        mtype = getattr(message, "type", None)
+        mtype_str = getattr(mtype, "value", str(mtype)) if mtype is not None else "?"
+        incoming_message = (
+            f"- from: {getattr(message, 'sender', '?')}\n"
+            f"- type: {mtype_str}\n"
+            f"- content: {str(getattr(message, 'content', ''))[:600]}"
+        )
+    else:
+        incoming_message = "(incoming message not available)"
+
+    # Plan section — renders the active plan with step kinds and statuses.
+    if plan is not None and getattr(plan, "steps", None):
+        plan_steps_lines = []
+        for i, s in enumerate(plan.steps):
+            tgt = f" → {s.target}" if s.target else ""
+            plan_steps_lines.append(f"  [{i}] {s.kind}{tgt}: {s.description}  status={s.status}")
+        plan_section = (
+            f"Goal: {plan.goal}\n\nPlanned steps (in order):\n"
+            + "\n".join(plan_steps_lines)
+        )
+    else:
+        plan_section = "(no plan)"
+
+    if outgoing_messages:
+        out_lines = []
+        for m in outgoing_messages:
+            recip = getattr(m, "recipient", "?")
+            content = str(getattr(m, "content", ""))[:300]
+            out_lines.append(f"  → {recip}: {content}")
+        out_str = "\n".join(out_lines)
+    else:
+        out_str = "  (none — executor emitted no outgoings this turn)"
+
+    return template.format(
+        object_id=definition.object_id,
+        role=definition.role,
+        behavior=definition.behavior or "(none)",
+        peers=peers,
+        incoming_message=incoming_message,
+        plan_section=plan_section,
+        current_state=state_str,
+        outgoing_messages=out_str,
+        reply=str(reply).strip() or "(empty)",
+    )
+
+
+def plan_dict_to_plan(plan_dict: dict) -> "Plan":  # type: ignore[name-defined]
+    """Convert a raw plan dict (matching PLANNER_RESPONSE_SCHEMA) into a Plan
+    object the runtime can use. Filters out the terminal `final` step — it's
+    a planning marker, not an executable step.
+    """
+    goal = plan_dict.get("goal", "")
+    steps_in = plan_dict.get("steps", []) or []
+    steps_out: list[PlanStep] = []
+    for s in steps_in:
+        if not isinstance(s, dict):
+            continue
+        kind = (s.get("kind") or "").strip().lower()
+        if kind not in ("tell", "ask", "effect"):
+            # `final` marker step — drop. Auto-close handles plan completion.
+            continue
+        # effect steps have no peer target ("self" or "" → None)
+        target = s.get("target") if kind in ("tell", "ask") else None
+        steps_out.append(PlanStep(
+            kind=kind,
+            description=s.get("description", "") or "",
+            target=target,
+            status="planned",
+            result_summary=None,
+        ))
+    return Plan(goal=goal, steps=steps_out, status="active")
+
+
 def build_system_prompt(
     definition: ObjectDefinition,
     current_state,  # str (from LLM) or dict (from mock scripts)
@@ -345,6 +482,59 @@ def _build_chat_messages(
     return msgs
 
 
+EVALUATOR_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
+        "criteria": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "step_index": {"type": "integer", "minimum": 0},
+                    "status": {"type": "string", "enum": ["PASS", "FAIL", "SKIP"]},
+                    "diagnostic": {"type": "string"},
+                },
+                "required": ["step_index", "status", "diagnostic"],
+                "additionalProperties": False,
+            },
+        },
+        "feedback": {"type": "string"},
+    },
+    "required": ["verdict", "criteria", "feedback"],
+    "additionalProperties": False,
+}
+
+
+PLANNER_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "goal": {
+            "type": "string",
+            "description": "One short sentence summarizing what the plan accomplishes.",
+        },
+        "steps": {
+            "type": "array",
+            "description": "Numbered steps in execution order. Last step must be kind=final.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "step_number": {"type": "integer", "minimum": 1},
+                    "kind": {"type": "string", "enum": ["tell", "ask", "effect", "final"]},
+                    "target": {"type": "string", "description": "Declared peer id, 'self' for effect steps, or 'final'."},
+                    "description": {"type": "string"},
+                    "reasoning": {"type": "string"},
+                },
+                "required": ["step_number", "kind", "target", "description", "reasoning"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["goal", "steps"],
+    "additionalProperties": False,
+}
+
+
 class LLMBrain(ABC):
     """Abstract interface for LLM processing backends."""
 
@@ -375,6 +565,34 @@ class LLMBrain(ABC):
         again until action == "finish".
         """
         ...
+
+    def plan_call(
+        self,
+        system_prompt: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        """One planning call: returns a raw plan dict (matching PLANNER_RESPONSE_SCHEMA)
+        and its metrics. Subclasses override for efficiency."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement plan_call. "
+            "Use OpenAIBrain or AzureBrain, or override plan_call."
+        )
+
+    def evaluate_call(
+        self,
+        system_prompt: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        """One evaluation call: returns a raw evaluator-result dict (matching
+        EVALUATOR_RESPONSE_SCHEMA) and its metrics. Subclasses override for
+        efficiency. Caller interprets the criterion list / verdict / feedback.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement evaluate_call. "
+            "Use OpenAIBrain or AzureBrain, or override evaluate_call."
+        )
 
 
 
@@ -478,6 +696,76 @@ class OpenAIBrain(LLMBrain):
             )
         raw = _safe_json_loads(choice.message.content or "{}")
         return _parse_react_step(raw), metrics
+
+    def plan_call(
+        self,
+        system_prompt: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system_prompt}],
+            "temperature": self._temperature,
+            "max_completion_tokens": 4000,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "plan", "schema": PLANNER_RESPONSE_SCHEMA},
+            },
+        }
+        if self._seed is not None:
+            kwargs["seed"] = self._seed
+        t0 = time.time()
+        resp = self._client.chat.completions.create(**kwargs)
+        latency_ms = (time.time() - t0) * 1000
+        metrics = InferenceMetrics(
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                f"OpenAI plan response truncated for object {object_id}."
+            )
+        raw = _safe_json_loads(choice.message.content or "{}")
+        return raw, metrics
+
+    def evaluate_call(
+        self,
+        system_prompt: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system_prompt}],
+            "temperature": self._temperature,
+            "max_completion_tokens": 4000,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "evaluator_result", "schema": EVALUATOR_RESPONSE_SCHEMA},
+            },
+        }
+        if self._seed is not None:
+            kwargs["seed"] = self._seed
+        t0 = time.time()
+        resp = self._client.chat.completions.create(**kwargs)
+        latency_ms = (time.time() - t0) * 1000
+        metrics = InferenceMetrics(
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                f"OpenAI evaluator response truncated for object {object_id}."
+            )
+        raw = _safe_json_loads(choice.message.content or "{}")
+        return raw, metrics
 
 
 class AzureBrain(LLMBrain):
@@ -601,6 +889,84 @@ class AzureBrain(LLMBrain):
             )
         raw = _safe_json_loads(choice.message.content or "{}")
         return _parse_react_step(raw), metrics
+
+    def plan_call(
+        self,
+        system_prompt: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system_prompt}],
+            "temperature": self._temperature,
+            "max_completion_tokens": 4000,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "plan", "schema": PLANNER_RESPONSE_SCHEMA},
+            },
+        }
+        if self._seed is not None:
+            kwargs["seed"] = self._seed
+        try:
+            t0 = time.time()
+            resp = self._client.chat.completions.create(**kwargs)
+            latency_ms = (time.time() - t0) * 1000
+        except Exception as exc:
+            self._raise_if_content_filter(exc, object_id)
+            raise
+        metrics = InferenceMetrics(
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                f"Azure plan response truncated for object {object_id}."
+            )
+        raw = _safe_json_loads(choice.message.content or "{}")
+        return raw, metrics
+
+    def evaluate_call(
+        self,
+        system_prompt: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system_prompt}],
+            "temperature": self._temperature,
+            "max_completion_tokens": 4000,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "evaluator_result", "schema": EVALUATOR_RESPONSE_SCHEMA},
+            },
+        }
+        if self._seed is not None:
+            kwargs["seed"] = self._seed
+        try:
+            t0 = time.time()
+            resp = self._client.chat.completions.create(**kwargs)
+            latency_ms = (time.time() - t0) * 1000
+        except Exception as exc:
+            self._raise_if_content_filter(exc, object_id)
+            raise
+        metrics = InferenceMetrics(
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                f"Azure evaluator response truncated for object {object_id}."
+            )
+        raw = _safe_json_loads(choice.message.content or "{}")
+        return raw, metrics
 
     @staticmethod
     def _raise_if_content_filter(exc: Exception, object_id: str | None) -> None:

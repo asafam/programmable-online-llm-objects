@@ -411,6 +411,12 @@ class EventResult(BaseModel):
     role: Optional[Literal["pre_mod", "post_mod", "irrelevant"]] = None  # propagated from Event.role
     input_tokens: int = 0   # entry-agent LLM input tokens (baseline) or LNL agent tokens (lnl eval)
     output_tokens: int = 0  # entry-agent LLM output tokens
+    planner_input_tokens: int = 0
+    planner_output_tokens: int = 0
+    executor_input_tokens: int = 0
+    executor_output_tokens: int = 0
+    evaluator_input_tokens: int = 0
+    evaluator_output_tokens: int = 0
     latency_ms: float = 0.0
     judge_input_tokens: int = 0
     judge_output_tokens: int = 0
@@ -422,12 +428,22 @@ class EventResult(BaseModel):
     agent_tool_calls: int = 0   # total tool calls made by the entry agent (file reads, sessions_send, external)
     a2a_calls: int = 0          # sessions_send (agentToAgent) calls made by the entry agent
     mock_tool_calls: int = 0    # external tool calls across all agents (from mock server log)
+    infra_error: bool = False   # True when an infra error (e.g. content filter) affected this event — excluded from scores
+    # Transaction trace (LNL eval only) — structured per-hop cascade of the triggering event
+    trace: list[dict] = Field(default_factory=list)
+    trace_root_id: Optional[str] = None  # msg.id of the root trigger; shared as trace_id by every hop
 
 class ModificationResult(BaseModel):
     """Cost of applying a single modification."""
     mod_id: str
     input_tokens: int = 0
     output_tokens: int = 0
+    planner_input_tokens: int = 0
+    planner_output_tokens: int = 0
+    executor_input_tokens: int = 0
+    executor_output_tokens: int = 0
+    evaluator_input_tokens: int = 0
+    evaluator_output_tokens: int = 0
     latency_ms: float = 0.0
 
 
@@ -445,6 +461,10 @@ class TestCaseResult(BaseModel):
     modifications: list[ModificationResult]
     pass_rate: Optional[float]  # passed_events / total_events; None if no evaluable events
     elapsed_ms: Optional[float] = None  # wall-clock time for the entire TC run in milliseconds
+    base_elapsed_ms: Optional[float] = None        # sum of event latency_ms where role=None
+    pre_mod_elapsed_ms: Optional[float] = None     # sum of event latency_ms where role=pre_mod
+    post_mod_elapsed_ms: Optional[float] = None    # sum of event latency_ms where role=post_mod
+    irrelevant_elapsed_ms: Optional[float] = None  # sum of event latency_ms where role=irrelevant
     error_type: Optional[str] = None    # "infra" = infrastructure failure (pairing, network, terminated); None = behavioral
 
 class EvalSummary(BaseModel):
@@ -476,6 +496,7 @@ class EvalSummary(BaseModel):
     irrelevant_pass_rate_all: Optional[float] = None  # same but including inconclusive TCs
     irrelevant_pass_rate_all_std: Optional[float] = None
     inconclusive_tcs: int = 0                      # TCs where steps failed → mod result uninterpretable
+    infra_error_tcs: int = 0                       # TCs excluded from scoring due to infra errors (e.g. content filter)
     # ── Token / latency means ──────────────────────────────────────────────────
     mean_event_input_tokens: float
     mean_event_output_tokens: float
@@ -483,11 +504,22 @@ class EvalSummary(BaseModel):
     mean_mod_input_tokens: float
     mean_mod_output_tokens: float
     mean_mod_latency_ms: float
+    # ── Per-role mean event latency ────────────────────────────────────────────
+    mean_base_event_latency_ms: Optional[float] = None
+    mean_pre_mod_event_latency_ms: Optional[float] = None
+    mean_post_mod_event_latency_ms: Optional[float] = None
+    mean_irrelevant_event_latency_ms: Optional[float] = None
     # ── Token totals ───────────────────────────────────────────────────────────
     total_agent_input_tokens: int = 0
     total_agent_output_tokens: int = 0
     total_judge_input_tokens: int = 0
     total_judge_output_tokens: int = 0
+    total_planner_input_tokens: int = 0
+    total_planner_output_tokens: int = 0
+    total_executor_input_tokens: int = 0
+    total_executor_output_tokens: int = 0
+    total_evaluator_input_tokens: int = 0
+    total_evaluator_output_tokens: int = 0
 
 
 # ── Mock external system schemas (OpenClaw baseline) ─────────────────────────

@@ -285,8 +285,9 @@ def print_run_info(
     seed: Optional[int],
     extra_info: dict[str, str],
 ) -> None:
-    """Print run configuration info."""
-    print(f"Provider: {provider}, Model: {model}")
+    """Print run configuration info. Uses `provider/model` form so the agent,
+    planner, and judge lines all share a consistent format."""
+    print(f"Agent: {provider}/{model}")
     for key, value in extra_info.items():
         print(f"{key}: {value}")
     if seed is not None:

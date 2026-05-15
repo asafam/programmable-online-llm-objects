@@ -1,0 +1,130 @@
+user_prompt: |
+  # Task: Generate Relevant Events for One Tracked Entity
+
+  You are generating the events that establish and mutate a SINGLE tracked entity.
+  These events will later be interleaved into a larger event stream alongside
+  background interference events. At the end of the stream, probe questions
+  will ask about the state of this entity — so your events must make the
+  correct answer deterministically derivable.
+
+  ---
+
+  ## Automation System
+
+  {SAMPLE}
+
+  ---
+
+  ## Entity to Generate Events For
+
+  - Entity ID: {ENTITY_ID}
+  - Entity type: {ENTITY_TYPE}
+  - Corrections required: {N_CORRECTIONS} (each revises `{SHARED_CORRECTION_FIELD}`)
+  - **Shared correction field: `{SHARED_CORRECTION_FIELD}`** — ALL tracked entities in this
+    scenario correct this SAME field. You MUST use `{SHARED_CORRECTION_FIELD}` as the
+    correction field for {ENTITY_ID}. Do NOT choose a different field.
+
+  ---
+
+  ## Other Tracked Entities in This Scenario (DO NOT overlap)
+
+  {OTHER_TRACKED_ENTITIES}
+
+  All entities share `{SHARED_CORRECTION_FIELD}` as their correction field — this is
+  required so aggregate probes can sum/compare across entities.
+
+  ---
+
+  ## Event Sequence to Generate
+
+  Produce exactly {N_EVENTS} events in this order:
+
+  1. **1 creation event** — establishes {ENTITY_ID} in the workflow system.
+     Sets at least 2 scalar fields explicitly in the input text (ALL field values
+     must appear in the input — the LLM object only sees what's in the text).
+     `expect.reason`: "creation"
+     `expect.action`: "Entity {ENTITY_ID} created with {field}={value}, {field}={value}, …"
+
+  2. **1 transition event** — advances {ENTITY_ID} through its natural workflow lifecycle
+     (pending → approved, submitted → reviewed, etc.). Explicitly names
+     the entity and the new state/value. Fit the domain naturally.
+     `expect.reason`: "transition"
+     `expect.action`: "{ENTITY_ID} transitioned to {new_state}; {field} updated to {value}"
+
+  3. **{N_CORRECTIONS} correction event(s)** — each revises `{SHARED_CORRECTION_FIELD}`.
+     Each correction:
+     - Is sent to the SAME object that received the creation event
+     - States the new value explicitly
+     - Reflects last-write-wins: the final correction's value is the ground truth
+     `expect.reason`: "correction"
+     `expect.action`: "{ENTITY_ID} {field} updated to {new_value}"
+
+  4. **(retraction — only if directed below)** — see Retraction Directive. When required,
+     append exactly ONE retraction event as the FINAL event in the sequence.
+     `expect.reason`: "retraction"
+
+  Total events: {N_EVENTS}
+
+  ---
+
+  {RETRACTION_DIRECTIVE}
+
+  ---
+
+  ## Memory-Fidelity Assertion Format (critical)
+
+  `expect.action` for each event describes what the system's memory SHOULD contain
+  AFTER processing that event — it is a state assertion, not a description of what
+  happened. The judge will check the system's actual state snapshot against this.
+
+  Good: "QUOTE-1042 is recorded with status=approved, discount=18%, amount=$220K"
+  Bad: "The system processed the approval for QUOTE-1042"  ← describes action, not state
+
+  After the LAST correction, the expected state must reflect the final corrected value:
+  "QUOTE-1042 discount updated to 22% — current state: status=approved, discount=22%, amount=$220K"
+
+  ---
+
+  ## Field Consistency Rule
+
+  The correction field is already decided: **`{SHARED_CORRECTION_FIELD}`**.
+  Use it for ALL {N_CORRECTIONS} corrections. Do NOT substitute a different field.
+  Avoid status/stage enums for corrections (those belong in transitions).
+
+  ---
+
+  ## Event IDs
+
+  Use IDs from the provided range: {EVENT_ID_START} through {EVENT_ID_END}
+  (format: E{N:03d}). These will be renumbered after interleaving — use the
+  provided range as temporary IDs.
+
+  ---
+
+  ## Output Fields
+
+  - `entity_id`: "{ENTITY_ID}" (echo back)
+  - `state_events`: exactly {N_EVENTS} `GeneratedEventWithExpect` objects:
+    - `id`: E{N:03d} in range {EVENT_ID_START}–{EVENT_ID_END}
+    - `call_type`: "send"
+    - `source`: "__user__" or a realistic external system/sender
+    - `recipient`: the appropriate entry-point object for this event type
+    - `input`: natural-language text; ALL scalar field values MUST appear in the text
+    - `when`: W02-{day}T{HH:MM} — assign sequentially; leave gaps for background
+    - `role`: "irrelevant"
+    - `after_mod_ids`: []
+    - `depends_on`: []
+    - `expect.action`: memory-fidelity state assertion (see above)
+    - `expect.reason`: "creation" | "transition" | "correction"
+
+  ---
+
+  ## Pre-Submission Check
+
+  1. Exactly 1 creation event (`expect.reason == "creation"`)
+  2. Exactly {N_CORRECTIONS} correction events (`expect.reason == "correction"`) — all revising the SAME field
+  3. At least 1 transition event (`expect.reason == "transition"`)
+  4. Total events: {N_EVENTS}
+  5. ALL field values referenced in expect.action appear in the event input text
+  6. If a retraction is required (per Retraction Directive): exactly 1 retraction event,
+     positioned as the FINAL event in the sequence; otherwise: 0 retraction events.

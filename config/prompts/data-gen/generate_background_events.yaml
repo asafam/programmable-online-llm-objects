@@ -1,0 +1,94 @@
+user_prompt: |
+  # Task: Generate {N_BACKGROUND} Background Interference Events
+
+  You are generating background events that will be interleaved into a recall-
+  under-pressure test scenario. These events are NOISE — they reference entities
+  OTHER than the tracked entities and are designed to make correct recall harder
+  by looking superficially similar to the relevant events.
+
+  Background events are NOT judged individually. Do NOT include `expect` fields.
+
+  ---
+
+  ## Automation System
+
+  {SAMPLE}
+
+  ---
+
+  ## Tracked Entities to Avoid (do not reference these)
+
+  {TRACKED_ENTITY_IDS_FORMATTED}
+
+  Do NOT use any of these entity IDs in your background events. The purpose of
+  background events is interference, not additional relevant signal.
+
+  ---
+
+  ## Field Types Used by Tracked Entities
+
+  {TRACKED_FIELD_TYPES}
+
+  Background events SHOULD use the same field types (amount, discount, status, …)
+  so they look similar to relevant events at a glance. This is intentional — it
+  makes the interference harder to dismiss.
+
+  ---
+
+  ## Confusable Entity Rule (STRICT)
+
+  At least HALF of your {N_BACKGROUND} events must use **confusable identifiers** —
+  entity IDs that differ from a tracked entity ID by exactly one digit or character.
+
+  Examples: if a tracked entity is "QUOTE-1042", confusable backgrounds use
+  "QUOTE-1043", "QUOTE-1024", "QUOTE-1142", "QUOTE-1040".
+
+  Confusable entities should also have updates to the same field types as their
+  "parent" tracked entity, with DIFFERENT values. This forces the system to match
+  on entity ID, not on "most recent update to field X".
+
+  The remaining background events may use clearly different entity IDs for variety.
+
+  ---
+
+  ## Background Event Rules
+
+  Each background event:
+  - Targets a different entity than any tracked entity (different identifier)
+  - Is a natural workflow input for this domain (creation, update, status change, …)
+  - Goes to an appropriate entry-point object for that event type
+  - Uses the same general format as tracked-entity events (realistic NL text)
+  - Has NO `expect` field — leave it null/omitted entirely
+
+  ---
+
+  ## Event IDs
+
+  Use IDs from the provided range: {EVENT_ID_START} through {EVENT_ID_END}
+  (format: E{N:03d}). These will be renumbered after interleaving.
+
+  ---
+
+  ## Output Fields
+
+  - `state_events`: exactly {N_BACKGROUND} `GeneratedEventWithExpect` objects:
+    - `id`: E{N:03d} in range {EVENT_ID_START}–{EVENT_ID_END}
+    - `call_type`: "send"
+    - `source`: "__user__" or a realistic external system
+    - `recipient`: appropriate entry-point object id
+    - `input`: natural-language text (look similar to relevant events)
+    - `when`: W02-{day}T{HH:MM}
+    - `role`: "irrelevant"
+    - `after_mod_ids`: []
+    - `depends_on`: []
+    - **`expect`: null / omitted** — background events are NOT judged
+
+  ---
+
+  ## Pre-Submission Check
+
+  1. Total events in `state_events`: must equal **{N_BACKGROUND}**
+  2. At least {MIN_CONFUSABLE} events use confusable identifiers (IDs differing
+     by 1 char/digit from a tracked entity)
+  3. NO event has `expect` set — all must have `expect: null` or no `expect` field
+  4. No event references a tracked entity ID

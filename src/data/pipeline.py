@@ -956,6 +956,8 @@ Examples:
         events_before=args.events_before,
         events_after=args.events_after,
         events_unrelated=args.events_unrelated,
+        events_inter_mod=1,
+        concurrent_events=0,
         mod_type=args.mod_type,
         mods_per_scenario=args.mods_per_scenario,
         ambiguity=args.ambiguity,

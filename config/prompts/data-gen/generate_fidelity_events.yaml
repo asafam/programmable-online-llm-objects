@@ -1,0 +1,180 @@
+user_prompt: |
+  # Task: Generate {DEPTH} Workflow Input Events for a State-Fidelity Test
+
+  You are generating a batch of input events that will be fed into a running
+  workflow system. One entity in this batch is the **probe target** — the entity
+  whose state will be queried after all events have been processed. The rest of
+  the events are background activity from other entities flowing through the same
+  workflow.
+
+  Transitions happen **inside the system** as it processes these input events —
+  you do NOT generate transition events. You generate the external triggers
+  (quote requests, approval responses, fulfillment confirmations, payment receipts,
+  etc.) that cause the workflow to transition entities internally.
+
+  ---
+
+  ## Automation System
+
+  {SAMPLE}
+
+  ---
+
+  ## Event Composition (STRICT)
+
+  Produce exactly {DEPTH} events with this breakdown:
+
+  | Category    | Count       | Description |
+  |-------------|-------------|-------------|
+  | probe-target events | at least 1, up to {DEPTH} − {N_CORRECTIONS} − {N_BACKGROUND} | Input events that drive the probe-target entity through the workflow naturally (creation trigger, approval response, fulfillment confirmation, etc.) |
+  | corrections | {N_CORRECTIONS} | Retroactive field revisions for the probe-target entity, sent to the SAME object that received the original creation event |
+  | background  | {N_BACKGROUND} | Input events for OTHER entities flowing through the same workflow |
+
+  Total: must equal exactly {DEPTH} events.
+
+  ---
+
+  ## Probe-Target Entity Design
+
+  Choose ONE entity as the probe target. This entity:
+  - Has a numeric identifier with at least 4 digits (e.g. "Quote #Q-1042", "Order #5501",
+    "Invoice INV-0088") — numeric IDs are required so confusable variants can be generated
+  - Has AT LEAST 2 scalar fields with concrete values that appear in the input text
+    (e.g. discount_rate=15%, amount=$200K; or quantity=50, unit_price=$4.20)
+  - At least one of those fields will be revised by a correction event
+  - Is a natural entity in this workflow domain
+
+  The probe-target's journey through the batch:
+  1. **Creation trigger** — an input event that causes the object to create this entity
+     in its state (e.g. "Quote #Q-1042 requested by Acme Corp for $200K at 15% discount").
+     This goes to whichever object in the system handles intake for this entity type.
+  2. **Optional progression events** — additional input events that advance the entity
+     through its workflow lifecycle (e.g. an approval response arriving from the manager,
+     a fulfillment confirmation from the warehouse). These go to the appropriate objects
+     as dictated by the workflow. Include these only if they are natural in this domain
+     and fit within the budget of {DEPTH} − {N_CORRECTIONS} − {N_BACKGROUND} events.
+  3. **Corrections** — {N_CORRECTIONS} input events that revise a previously-asserted
+     field on the probe-target entity. Each correction goes to the SAME object that
+     received the original creation trigger. Example: if the quote request went to
+     HubSpot Manager, the correction also goes to HubSpot Manager.
+
+  ---
+
+  ## Correction Event Rules
+
+  Each correction:
+  - Is addressed to the SAME object (`recipient`) that received the original creation event
+  - References the probe-target entity by its identifier
+  - States the NEW value of the corrected field explicitly (the system applies last-wins)
+  - Is phrased naturally: "Quote #Q-1042 — please update discount to 18% on revised amount of $220K"
+  - `expect.reason`: "correction"
+  - `expect.action`: "Quote #Q-1042 discount updated to 18%, amount updated to $220K"
+
+  ## Correction Field Rule (STRICT)
+
+  ALL {N_CORRECTIONS} correction events MUST revise the SAME field of the probe-target entity.
+  Choose the field with the most natural "running value" in this domain (a price, a quantity,
+  a discount rate, a count — NOT a status enum, because status is not a numeric field).
+
+  This means the event log will contain {N_CORRECTIONS} conflicting values for that one field.
+  The correct answer is always the value stated in the LAST correction event (last-write-wins).
+  The `probe_target_field` output must be this field.
+
+  **Why many corrections to one field is realistic:** In quote/order workflows, a negotiated
+  price or quantity goes through many rounds of revision before it is finalised. Each round
+  is a separate correction event. Simply vary the value slightly each time
+  (e.g., $210K → $205K → $218K → $212K → …). {N_CORRECTIONS} revisions is expected —
+  do not stop early just because it feels repetitive.
+
+  ---
+
+  ## Background Event Rules
+
+  Each background event:
+  - Targets a DIFFERENT entity than the probe target (different identifier)
+  - Is a natural workflow input (creation of another entity, an update to it, etc.)
+  - Goes to the appropriate entry-point object for that event type
+  - `expect.reason`: "background"
+  - `expect.action`: brief — what the system should have recorded for that entity
+
+  ## Confusable Entity Rule (STRICT)
+
+  At least half of the background events MUST use **confusable identifiers** — entity IDs
+  that differ from the probe-target's identifier by exactly one digit or one character.
+
+  Examples: if the probe target is "Order #1042", confusable backgrounds use "Order #1043",
+  "Order #1024", "Order #1142". If the probe target is "Invoice INV-0088", use "INV-0089",
+  "INV-0088A", "INV-0078".
+
+  These confusable entities MUST also have updates to the SAME field as the probe target
+  (e.g., if the probe target has price corrections, confusable entities also receive price
+  updates — to different values). This forces precise entity-level tracking: a system that
+  retrieves "the last price update" from the log without checking the entity ID will pick
+  up the wrong value.
+
+  The remaining background events may use clearly different entities for variety.
+
+  ---
+
+  ## Probe-Target Event Rules
+
+  Each probe-target input event (creation or progression):
+  - `expect.reason`: "event"
+  - `expect.action`: what the object should have recorded/transitioned to after processing
+    this input (e.g. "Quote #Q-1042 created with amount=$200K, discount=15%, status=pending")
+  - For progression events: "Quote #Q-1042 approved — status updated to approved"
+
+  The system processes these inputs and may perform internal transitions on the entity
+  (pending → approved, etc.) — describe those transitions in `expect.action` because
+  they are what the judge will verify.
+
+  ---
+
+  ## Ordering (STRICT)
+
+  Output events in this exact order:
+  1. **Probe-target block** (`reason="event"`) — creation trigger first, then any progression events
+  2. **Corrections block** (`reason="correction"`) — all {N_CORRECTIONS} corrections, one after another
+  3. **Background block** (`reason="background"`) — all {N_BACKGROUND} background events
+
+  Assign timestamps W02-1T09:00 → W02-5T17:00 sequentially as you write.
+  Assign IDs E001 → E{DEPTH_PADDED} in the order written.
+  (The pipeline will interleave the blocks automatically — your only job is to produce
+  the correct counts in each block.)
+
+  ---
+
+  ## Output Fields
+
+  - `probe_target_entity`: identifier of the probe target (e.g. "Quote #Q-1042")
+  - `probe_target_field`: the field with the most correction history — the one the probe
+    will ask about (e.g. "discount_rate" or "amount"). If multiple fields were corrected,
+    pick the one whose final value is hardest to track without structured state.
+  - `state_events`: exactly {DEPTH} events, each with:
+    - `id`: E001 through E{DEPTH_PADDED}
+    - `call_type`: "send"
+    - `source`: "__user__" or a realistic external system/sender
+    - `recipient`: the object that handles this type of input
+    - `input`: natural-language text; ALL field values must appear in the text
+    - `when`: W02-{day}T{HH:MM}
+    - `role`: "irrelevant" (set for all — the probe gets role="post_mod" separately)
+    - `after_mod_ids`: []
+    - `depends_on`: []
+    - `expect.action`: what the system should have recorded after processing this input
+    - `expect.reason`: "event" | "correction" | "background"
+
+  Do NOT generate the probe event — that is produced separately.
+
+  ---
+
+  ## Pre-Submission Checklist (MANDATORY)
+
+  Before writing your final JSON, count your events:
+
+  1. Events with `expect.reason == "correction"`: must equal **{N_CORRECTIONS}**
+  2. Events with `expect.reason == "background"`: must equal **{N_BACKGROUND}**
+  3. Total events in `state_events`: must equal **{DEPTH}**
+
+  If your correction count is below {N_CORRECTIONS}, add the missing corrections now —
+  each one revises the same field to a new value. Do not submit until all three counts
+  are correct.

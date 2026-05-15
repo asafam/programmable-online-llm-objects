@@ -1,0 +1,86 @@
+user_prompt: |
+  # Task: Generate ONE State-Fidelity Probe Question
+
+  You are creating a single probe question that tests whether a system has correctly
+  tracked the CURRENT VALUE of a specific field on a specific entity, after that entity
+  has been updated multiple times through transitions and corrections.
+
+  ---
+
+  ## Automation System
+
+  {SAMPLE}
+
+  ---
+
+  ## State Events Already Generated (in order)
+
+  These events have already been sent to the system before the probe fires:
+
+  {STATE_EVENTS_FORMATTED}
+
+  ---
+
+  ## Probe Target
+
+  - **Entity**: {PROBE_TARGET_ENTITY}
+  - **Field to probe**: {PROBE_TARGET_FIELD}
+
+  ---
+
+  ## Your Task
+
+  Generate ONE probe question that asks: "What is the current value of `{PROBE_TARGET_FIELD}`
+  for `{PROBE_TARGET_ENTITY}`?"
+
+  The question should be phrased naturally as an NL query the user would send to the
+  entry-point object (the one whose `event_sources` is non-empty). Do NOT query an
+  internal store object directly — always use the natural entry-point.
+
+  ---
+
+  ## Computing the Correct Answer
+
+  BEFORE writing `expect.action`, trace `{PROBE_TARGET_ENTITY}` through ALL events
+  in order from E001 to E{DEPTH_PADDED}:
+
+  1. Find its creation event — record the initial value of `{PROBE_TARGET_FIELD}`.
+  2. For each transition event: if it changes `{PROBE_TARGET_FIELD}`, apply the new value.
+     The LAST such change wins; earlier values are superseded.
+  3. For each correction event: if it corrects `{PROBE_TARGET_FIELD}`, apply the correction.
+     The LAST correction wins.
+  4. The FINAL value after step 3 is the correct answer.
+
+  Write this value precisely and unambiguously in `expect.action`.
+
+  ---
+
+  ## depends_on
+
+  Set `depends_on` to the list of ALL event IDs that touch `{PROBE_TARGET_ENTITY}` —
+  that is, the creation event plus all transition events and all correction events for
+  that entity. This should be exactly {N_DEPENDS_ON} event IDs.
+
+  Do NOT include irrelevant events (events for other entities) in `depends_on`.
+
+  ---
+
+  ## Output Schema
+
+  Produce exactly one probe event with:
+  - `id`: "{PROBE_ID}"
+  - `call_type`: "send"
+  - `source`: "__user__"
+  - `recipient`: the entry-point object (non-empty `event_sources`)
+  - `input`: natural-language question asking for the current value of `{PROBE_TARGET_FIELD}`
+    on `{PROBE_TARGET_ENTITY}`, after all events above have been processed
+  - `when`: "{PROBE_TIMESTAMP}"
+  - `role`: "post_mod"
+  - `after_mod_ids`: []
+  - `depends_on`: list of exactly {N_DEPENDS_ON} event IDs (the creation + transitions + corrections
+    for `{PROBE_TARGET_ENTITY}`)
+  - `expect.action`: the exact correct current value of `{PROBE_TARGET_FIELD}` for
+    `{PROBE_TARGET_ENTITY}` after tracing all events (e.g. "The current status of Invoice #1042 is 'sent'")
+  - `expect.reason`: one sentence per event in `depends_on` explaining how it contributed
+    to the final value (e.g. "E001 creates Invoice #1042 with status=pending; E003 advances
+    it to approved; E007 corrects the amount from $4,000 to $4,500")

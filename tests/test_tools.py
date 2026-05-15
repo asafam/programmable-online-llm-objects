@@ -46,6 +46,97 @@ class TestCodeExecutor:
         assert "before" in result.output
         assert "after" in result.error
 
+    def test_namespace_persists_across_calls(self):
+        executor = CodeExecutor()
+        ns: dict = {}
+        ctx = {"repl_namespace": ns}
+        r1 = executor.execute(ToolCall(id="t1", tool="python", arguments={"code": "x = 7"}), ctx)
+        assert r1.error == ""
+        r2 = executor.execute(ToolCall(id="t2", tool="python", arguments={"code": "print(x)"}), ctx)
+        assert r2.error == ""
+        assert r2.output.strip() == "7"
+
+    def test_imports_persist_across_calls(self):
+        executor = CodeExecutor()
+        ns: dict = {}
+        ctx = {"repl_namespace": ns}
+        r1 = executor.execute(ToolCall(id="t1", tool="python", arguments={"code": "import json"}), ctx)
+        assert r1.error == ""
+        r2 = executor.execute(
+            ToolCall(id="t2", tool="python", arguments={"code": "print(json.dumps({'a': 1}))"}),
+            ctx,
+        )
+        assert r2.error == ""
+        assert r2.output.strip() == '{"a": 1}'
+
+    def test_function_defs_persist(self):
+        executor = CodeExecutor()
+        ns: dict = {}
+        ctx = {"repl_namespace": ns}
+        executor.execute(
+            ToolCall(id="t1", tool="python", arguments={"code": "def double(n):\n    return n * 2"}),
+            ctx,
+        )
+        r2 = executor.execute(
+            ToolCall(id="t2", tool="python", arguments={"code": "double(21)"}),
+            ctx,
+        )
+        assert r2.error == ""
+        assert r2.output.strip() == "42"
+
+    def test_last_expression_value_captured(self):
+        executor = CodeExecutor()
+        ctx = {"repl_namespace": {}}
+        r = executor.execute(ToolCall(id="t1", tool="python", arguments={"code": "2 + 3"}), ctx)
+        assert r.error == ""
+        assert r.output.strip() == "5"
+
+    def test_assignment_does_not_print(self):
+        executor = CodeExecutor()
+        ctx = {"repl_namespace": {}}
+        r = executor.execute(ToolCall(id="t1", tool="python", arguments={"code": "x = 5"}), ctx)
+        assert r.error == ""
+        assert r.output == ""
+
+    def test_stdout_combined_with_expression(self):
+        executor = CodeExecutor()
+        ctx = {"repl_namespace": {}}
+        r = executor.execute(
+            ToolCall(id="t1", tool="python", arguments={"code": "print('hi')\n1 + 1"}),
+            ctx,
+        )
+        assert r.error == ""
+        assert "hi" in r.output
+        assert "2" in r.output
+
+    def test_namespace_survives_exception(self):
+        executor = CodeExecutor()
+        ns: dict = {}
+        ctx = {"repl_namespace": ns}
+        executor.execute(ToolCall(id="t1", tool="python", arguments={"code": "y = 99"}), ctx)
+        # An exception in a later call must not wipe the namespace
+        executor.execute(
+            ToolCall(id="t2", tool="python", arguments={"code": "raise ValueError('boom')"}),
+            ctx,
+        )
+        r3 = executor.execute(ToolCall(id="t3", tool="python", arguments={"code": "y"}), ctx)
+        assert r3.error == ""
+        assert r3.output.strip() == "99"
+
+    def test_push_event_seeded_in_repl_namespace(self):
+        events = []
+        executor = CodeExecutor()
+        ctx = {
+            "repl_namespace": {},
+            "push_event": lambda content, source: events.append((content, source)),
+        }
+        r = executor.execute(
+            ToolCall(id="t1", tool="python", arguments={"code": "push_event('hi', 's')"}),
+            ctx,
+        )
+        assert r.error == ""
+        assert events == [("hi", "s")]
+
 
 class TestMockToolExecutor:
     def test_scripted_response(self):

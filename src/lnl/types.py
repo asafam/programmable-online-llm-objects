@@ -14,6 +14,7 @@ class MessageType(Enum):
     EVENT = "event"
     REPLY = "reply"
     HEARTBEAT = "heartbeat"
+    PLAN = "plan"   # synthetic — never delivered; surfaces planner output in bus log
 
 
 @dataclass
@@ -55,6 +56,9 @@ class Message:
     reference: Optional[str] = None      # legacy correlation tag (unused by runtime now)
     expects_reply: bool = False          # True = Ask (sender wants a reply); False = Tell (propagated from OutgoingMessage)
     plan_step_index: Optional[int] = None  # runtime-stamped: index of plan step this message dispatches (for correlation)
+    # ── Transaction tracing (runtime-only; not exposed to the LLM) ──────────────
+    trace_id: Optional[str] = None       # root msg.id of the cascade; propagated through every hop
+    parent_id: Optional[str] = None      # msg.id whose processing caused this message to be sent
 
 
 @dataclass
@@ -126,12 +130,19 @@ class ProcessingResult:
     state_before: Any = None  # dict if JSON-parseable state, else str; None = {}
     state_after: Any = None   # dict if JSON-parseable state, else str; None = {}
     metrics: Optional[InferenceMetrics] = None
+    planner_metrics: Optional[InferenceMetrics] = None
+    executor_metrics: Optional[InferenceMetrics] = None
+    evaluator_metrics: Optional[InferenceMetrics] = None
     in_reply_to: Optional[str] = None  # sender of the message that was processed
     source_message_type: Optional[MessageType] = None  # type of the message that was processed
     depth_remaining: int = 10  # propagated from the processed message
     sequence: int = 0          # assigned by Runtime for ordering concurrent results
     source_message_id: str = ""  # ID of the message that was processed
     source_plan_step_index: Optional[int] = None  # plan_step_index from the processed message (propagated onto replies)
+    source_trace_id: Optional[str] = None  # trace_id from the processed message (propagated onto cascaded messages)
+    # ── Per-message processing wall-clock (for tracing) ───────────────────────
+    processing_started_at: Optional[datetime.datetime] = None
+    processing_completed_at: Optional[datetime.datetime] = None
 
 
 @dataclass
@@ -217,3 +228,8 @@ class MessageLog:
     delivered: bool = True
     error: Optional[str] = None
     metrics: Optional[InferenceMetrics] = None
+    # ── Tracing fields (runtime-only) ──────────────────────────────────────────
+    received_at: Optional[datetime.datetime] = None              # bus delivery wall-clock
+    processing_started_at: Optional[datetime.datetime] = None    # first ReAct step begins
+    processing_completed_at: Optional[datetime.datetime] = None  # process_message returns
+    hop_depth: int = 0                                            # max_chain_depth - depth_remaining

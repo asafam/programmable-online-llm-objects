@@ -1,0 +1,99 @@
+user_prompt: |
+  # Task: Generate ONE Probe Question of a Specific Type
+
+  You are creating one probe question to be issued after a sequence of workflow
+  events. The probe tests whether a system has correctly tracked the current
+  state of specific entities despite interference from background events.
+
+  Your probe MUST be of the type specified below. Derive the correct answer
+  deterministically from the relevant events provided.
+
+  ---
+
+  ## Automation System
+
+  {SAMPLE}
+
+  ---
+
+  ## Tracked Entities Referenced by This Probe
+
+  {TARGET_ENTITIES_FORMATTED}
+
+  ---
+
+  ## Relevant Events (in chronological order)
+
+  These are the events that establish and mutate the tracked entities.
+  Background interference events will be interleaved around these,
+  but YOU only see the relevant events here.
+
+  {RELEVANT_EVENTS_FORMATTED}
+
+  ---
+
+  ## Required Probe Type: {PROBE_TYPE_NAME}
+
+  {PROBE_TYPE_DESCRIPTION}
+
+  ---
+
+  ## How to Derive the Ground Truth
+
+  Before writing `expect.action`, trace each relevant entity through ALL relevant
+  events in order:
+
+  1. Find the creation event — record its initial field values.
+  2. Apply each transition event in order — update state accordingly.
+  3. Apply each correction event in order — the LAST correction wins (last-write-wins).
+  4. If a retraction event is present, the entity's final state is REMOVED — it is
+     no longer active and should NOT appear in any "current value" or "still active" answer.
+  5. The entity's FINAL state is what remains after step 4.
+
+  Only after completing this trace should you write `expect.action`.
+
+  Common mistakes to avoid:
+  - Do NOT use an intermediate field value if a later correction superseded it.
+  - Do NOT include an entity in "current state" answers if it was retracted.
+  - For aggregate probes: sum/count must cover all NON-retracted tracked entities.
+  - For conditional-aggregate probes: apply the filter criterion AFTER applying
+    all corrections — use FINAL field values, not creation-time values; exclude
+    retracted entities entirely.
+  - For retraction_status probes: list each named entity and state whether it is
+    currently active or retracted, then derive the answer set/yes-no from that.
+
+  ---
+
+  ## Strict Requirements
+
+  - The probe MUST reference the current state (after all relevant events applied).
+  - `depends_on` must list the specific relevant event IDs whose output is needed
+    to answer this probe correctly. Range: 2–7 event IDs.
+  - Choose the MINIMAL sufficient set — only events whose values appear in the
+    answer or that affect which entities are included/excluded.
+  - Do NOT list every relevant event in `depends_on` — only the minimal set.
+  - The question must be phrased naturally for a user asking an automation system.
+  - Use the entry-point object as `recipient` (the one whose `event_sources` is
+    non-empty — it receives external events and routes internally).
+
+  ---
+
+  ## Output Schema
+
+  Produce exactly one probe event:
+  - `probe_event`:
+    - `id`: "{PROBE_ID}"
+    - `call_type`: "send"
+    - `source`: "__user__"
+    - `recipient`: entry-point object id
+    - `input`: natural-language probe question
+    - `when`: "{PROBE_TIMESTAMP}"
+    - `role`: "post_mod"
+    - `after_mod_ids`: []
+    - `depends_on`: list of 2–7 relevant event IDs
+    - `expect.action`: the exact correct answer after tracing all relevant events
+      — use breakdown form when multiple entities are involved
+      (e.g. "QUOTE-1042: $220K at 22% discount; QUOTE-2057: $85K at 10% discount; total=$305K")
+    - `expect.reason`: one sentence explaining how the events in `depends_on`
+      determine the answer (e.g. "E002 creates QUOTE-1042 at $200K; E005 and E007
+      correct discount to 22%; E004 creates QUOTE-2057; together total is $305K")

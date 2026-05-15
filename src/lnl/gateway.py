@@ -68,17 +68,18 @@ class EventGateway:
                 message (filtered by source_message_id; cascades are excluded).
         """
         rt = self._rt
-        messages = [
-            Message(
+        messages = []
+        for recipient, content, source in items:
+            _mid = rt._next_msg_id(source)
+            messages.append(Message(
                 sender=source,
                 recipient=recipient,
                 type=MessageType.EVENT,
                 content=content,
                 depth_remaining=rt._max_chain_depth,
-                id=rt._next_msg_id(source),
-            )
-            for recipient, content, source in items
-        ]
+                id=_mid,
+                trace_id=_mid,  # each external event roots its own cascade
+            ))
         if on_result is not None:
             input_ids = {m.id for m in messages}
             def _filtered(result: ProcessingResult, _ids: set = input_ids, _cb = on_result) -> None:

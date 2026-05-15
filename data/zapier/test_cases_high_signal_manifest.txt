@@ -1,0 +1,33 @@
+# High-signal subset — filtered to 3-run-stable TCs only
+# Source: 3-run baseline test_cases_high_signal_eval_20260512_140521.jsonl
+
+## Hard-fails (11) — primary lift targets
+  automate-github-issues-from-slack-temporal-TC001
+  automate-release-notes-jira-gitlab-exception-TC001
+  automate-sales-follow-up-emails-gong-hubspot-exception-TC001
+  email-assistant-turn-starred-emails-into-asana-tasks-with-ai-temporal-TC001
+  employment-verification-letter-automation-business-travel-temporal-TC001
+  engineering-work-intake-slack-jira-exception-TC001
+  linkedin-conversion-tracking-for-physical-stores-contextual-TC001
+  offline-conversion-tracking-automation-facebook-tiktok-linkedin-contextual-TC001
+  save-email-attachments-temporal-TC001
+  slack-thread-summarizer-exception-TC001
+  team-operations-portal-temporal-TC001
+
+## Stable partials (9) — secondary lift targets
+  automate-employment-verification-letters-temporal-TC001
+  canaries-employee-attrition-risk-prediction-mitigation-temporal-TC001
+  expenses-tracker-exception-TC001
+  lead-router-contextual-TC001
+  leave-tracker-temporal-TC001
+  out-of-office-plan-temporal-TC001
+  product-feedback-contextual-TC001
+  project-management-stakeholder-communications-contextual-TC001
+  user-research-customer-interview-signup-temporal-TC001
+
+## Stable-pass controls (5) — collateral check
+  automate-google-my-business-review-responses-gemini-temporal-TC001
+  employee-onboarding-custom-ai-chatbot-contextual-TC001
+  facebook-conversion-tracking-for-physical-stores-contextual-TC001
+  automate-brand-monitoring-news-mentions-tracker-temporal-TC001
+  automated-incident-postmortem-reviews-temporal-TC001

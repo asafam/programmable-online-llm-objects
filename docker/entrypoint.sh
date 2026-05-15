@@ -18,10 +18,36 @@ cp -f "${HOME}/openclaw-extensions/lnl-mock-external/index.js" \
 cp -f "${HOME}/openclaw-extensions/lnl-mock-external/openclaw.plugin.json" \
       "${HOME}/.openclaw/extensions/lnl-mock-external/openclaw.plugin.json"
 
+# ── Start the Azure usage proxy ──────────────────────────────────────────────
+# Injects stream_options:{include_usage:true} into Azure streaming chat completions
+# so the gateway receives token counts.
+#
+# ORDER MATTERS: we must start the proxy and redirect AZURE_OPENAI_ENDPOINT
+# *before* running envsubst, so that the gateway config's baseUrl expands to
+# the proxy URL rather than the real Azure endpoint. The gateway then routes all
+# model API calls through the proxy.
+#
+# Upstream = the real Azure base URL (no /openai/v1 suffix). The gateway calls
+# the proxy at /openai/v1/chat/completions; that path is forwarded verbatim to
+# the upstream, producing the correct full Azure URL.
+REAL_AZURE_ENDPOINT="${AZURE_OPENAI_ENDPOINT}"
+echo "[entrypoint] Starting Azure usage proxy on port 18800..."
+cd /app && python3 docker/azure_usage_proxy.py \
+    --upstream "${REAL_AZURE_ENDPOINT}" \
+    --port 18800 \
+    --host 127.0.0.1 &
+PROXY_PID=$!
+sleep 1
+echo "[entrypoint] Azure proxy started (PID ${PROXY_PID})."
+
+# Redirect AZURE_OPENAI_ENDPOINT to the proxy so the envsubst below bakes the
+# proxy URL into the gateway's baseUrl config field.
+export AZURE_OPENAI_ENDPOINT="http://127.0.0.1:18800/"
+
 # ── Write gateway config ──────────────────────────────────────────────────────
 CONFIG_DIR="${HOME}/.openclaw"
 mkdir -p "${CONFIG_DIR}"
-# Always write from the baked-in template so the gateway gets a clean config.
+# Write config AFTER the env override so baseUrl expands to the proxy URL.
 # Template lives outside .openclaw so a pool bind-mount doesn't hide it.
 envsubst '${OPENCLAW_GATEWAY_TOKEN} ${AZURE_OPENAI_ENDPOINT}' \
     < "${HOME}/openclaw.json.tpl" \
@@ -55,7 +81,7 @@ done
 
 # ── Start the OpenClaw gateway ────────────────────────────────────────────────
 echo "[entrypoint] Starting OpenClaw gateway..."
-openclaw gateway run --auth token --token "${OPENCLAW_GATEWAY_TOKEN}" &
+openclaw gateway run --auth token --token "${OPENCLAW_GATEWAY_TOKEN}" --allow-unconfigured &
 OC_PID=$!
 
 # ── Monitor loop ──────────────────────────────────────────────────────────────

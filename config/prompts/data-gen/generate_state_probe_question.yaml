@@ -1,0 +1,110 @@
+user_prompt: |
+  # Task: Generate ONE State-Probe Question of a Specific Type
+
+  You are creating ONE probe question that tests whether a system has correctly
+  tracked state across a sequence of mutation events that have already been
+  generated. The probe must be of the type specified below. Other probe types
+  are produced by separate calls — focus only on this one.
+
+  ---
+
+  ## Automation System
+
+  {SAMPLE}
+
+  ---
+
+  ## State Events Already Generated (in order)
+
+  These events have already been sent to the system before your probe fires:
+
+  {STATE_EVENTS_FORMATTED}
+
+  ---
+
+  ## Required Probe Type: {PROBE_TYPE_NAME}
+
+  {PROBE_TYPE_DESCRIPTION}
+
+  Examples of this type (DO NOT copy verbatim — use the events above):
+  {PROBE_TYPE_EXAMPLES}
+
+  ---
+
+  ## Why This Probe Type Matters
+
+  All five probe types in this taxonomy target a specific failure mode of
+  conversational memory: to answer correctly, a conversational system must
+  scan ALL N messages, apply retractions, track attribute history, and
+  reconstruct current state from prose. A structured-state system reads
+  the answer directly from its state dict. At high depth (D=20+), the
+  conversational scan becomes error-prone; structured state stays correct.
+
+  Your probe MUST force that O(N) scan — do not ask about a single entity
+  that was never retracted or modified.
+
+  ---
+
+  ## Strict Requirements
+
+  - The answer MUST require combining or aggregating information from
+    **2 to 4 SPECIFIC** state events from the list above. Pick the
+    **minimum sufficient subset** — only events whose values appear in the
+    answer or that exclude an entity from the answer.
+  - The question MUST NOT be answerable from a single event alone. If
+    reading any one event in isolation gives the correct answer, the probe
+    is INVALID for this type — pick a different angle.
+  - For retraction-type probes: the correct answer set MUST differ from the
+    full addition set (i.e., at least one retracted entity must be excluded).
+    If no entity was retracted, pick a different question angle.
+  - For churn-type probes: the entity MUST have had the queried attribute
+    changed at least TWICE (3+ mentions in the event log). Do not ask about
+    an entity whose attribute was set only once.
+  - List the 2–4 supporting event IDs in `depends_on`. They must reference
+    events from the list above (E001 through E{DEPTH_PADDED}).
+  - Do NOT list every state event in `depends_on` — that defeats the purpose.
+    Choose the smallest set that justifies the answer.
+
+  ## Computing the correct expected answer
+
+  Before writing `expect.action`, you MUST trace each relevant entity through
+  ALL events in order from E001 to E{DEPTH_PADDED}. For each entity:
+
+  1. Find its addition event — record its initial attribute values.
+  2. Find every modification event for it — apply each change in order.
+     The LAST modification wins; earlier values are superseded.
+  3. Find any retraction event — if retracted, exclude from the active set.
+  4. The entity's FINAL state is what remains after step 3.
+
+  Only after completing this trace for every relevant entity should you
+  write `expect.action`. Common mistakes to avoid:
+  - Do NOT use an intermediate value (e.g. "ready-to-send") if a later event
+    advanced it further (e.g. to "sent"). The expected answer must reflect the
+    state AFTER ALL events have been applied.
+  - Do NOT include an entity in the active set if it was retracted in any event,
+    even if its retraction event is not in `depends_on`.
+  - Do NOT omit an entity from the active set unless it was explicitly retracted.
+
+  ## Output Schema
+
+  Produce exactly one probe event with:
+  - id: "{PROBE_ID}"
+  - call_type: "send"
+  - source: "__user__"
+  - recipient: the entry-point object — the one whose `event_sources` is
+    non-empty (i.e. it receives external events). The entry-point will route
+    the query internally to the appropriate peer that holds the state.
+    Do NOT pick an internal curator/store object directly — always use the
+    natural entry-point so the full routing chain is exercised.
+  - input: a natural-language question of type {PROBE_TYPE_NAME}, framed about
+    the CURRENT state (after all mutations have been applied — retractions
+    should be reflected, modifications should reflect latest values)
+  - when: "{PROBE_TIMESTAMP}"
+  - role: "post_mod"
+  - after_mod_ids: []
+  - depends_on: list of 2-4 state-event IDs (the supporting events)
+  - expect.action: the exact correct CURRENT answer after tracing all events
+    — list/breakdown form when appropriate (e.g. "T-003 (P1, Alice), T-017 (P1, Alice)")
+  - expect.reason: one sentence explaining how each event in depends_on
+    contributes to the answer (e.g. "E003 establishes T-003 as P1/Alice;
+    E007 establishes T-017 as P1/Alice; E012 retracts T-029 from candidates")

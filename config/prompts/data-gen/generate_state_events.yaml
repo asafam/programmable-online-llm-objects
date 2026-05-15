@@ -1,0 +1,92 @@
+user_prompt: |
+  # Task: Generate {DEPTH} State-Mutating Events
+
+  You are designing the FIRST half of a state-probe test case. The probe
+  questions will be generated separately (one call per probe type) and will
+  reference the events you produce here. Your job is to produce exactly
+  {DEPTH} realistic, individually-trackable state-mutating events.
+
+  ---
+
+  ## Automation System
+
+  {SAMPLE}
+
+  ---
+
+  ## Design Principle
+
+  Events must include a MIX of mutation types — not just additions. Later probes
+  will require retractions and entity-level modifications to have been applied
+  correctly. A system that only appends to state (never updates or deletes)
+  will fail those probes.
+
+  Target distribution across the {DEPTH} events:
+  - ~55% **Additions** — new entities, records, or facts are created
+  - ~15% **Modifications** — an EXISTING entity's attribute changes (status, tier, owner, priority)
+  - ~30% **Retractions** — an existing entity is cancelled, removed, or deactivated
+
+  Minimum requirements regardless of depth:
+  - At least 30% of all created entities must be retracted before the probe fires.
+    At D=10: at least 3 retractions; at D=20: at least 6 retractions.
+  - At least 2 entities must have the SAME attribute changed TWICE after creation
+    (add → modify → modify again). This creates 3 conversation mentions of that
+    attribute for the same entity — easy to confuse without structured state.
+  - Additions must create at least 8 distinct entities at D=10, at least 15 at D=20
+    (so pruned-set queries require real tracking across many items)
+  - Use AT LEAST 2 attributes per entity (e.g. priority + assignee, stage + owner) —
+    later probes need joinable attributes to compose meaningful questions
+  - Cover a broad set of attribute values (not all P1 — mix P0/P1/P2; not all
+    Alice — mix assignees) so probes can filter and group
+
+  ---
+
+  ## Output: {DEPTH} state-mutating events
+
+  Write {DEPTH} realistic external triggers distributed across the mutation
+  types above.
+
+  Requirements:
+  - Send each event to an entry-point object (one whose event_sources is non-empty)
+  - **All queryable attributes must appear in the input text.** The input text
+    is the ONLY information the objects will see — attributes omitted from the
+    input cannot be stored in state and cannot be queried later. If a probe will
+    later ask "which tickets are P1 AND assigned to Alice", then BOTH `priority`
+    and `assignee` must appear in the addition event's input text.
+  - **Additions**: create a new named entity with a clear identifier, set
+    AT LEAST 2 attributes explicitly in the text, and **include the W0X-X day
+    label** so the receiving object can store it
+    (e.g. "Monday W02-1: Ticket T-042 opened by Alice — billing issue, P1 priority")
+  - **Modifications**: change a named entity introduced in a PRIOR event,
+    naming the specific attribute being changed; include the W0X-X day label
+    (e.g. "Wednesday W02-3: T-017 escalated to P0 — customer unresponsive",
+          "Thursday W02-4: Deal #189 moved to Negotiation stage")
+  - **Retractions**: cancel or remove a named entity; include the W0X-X day label
+    (e.g. "Friday W02-5: T-029 closed — false alarm, no action needed")
+  - Use realistic, individually trackable identifiers (IDs, names) throughout
+  - Events may reference each other via entity IDs to build a coherent narrative
+  - Spread timestamps across Mon–Fri: W02-1T09:00 through W02-5T17:00
+  - Set role="irrelevant", after_mod_ids=[], depends_on=[] for ALL mutation events
+  - expect.action: one sentence describing what the system should have recorded after this event
+    - Addition: "T-042 is recorded as an open billing ticket with priority P1, assigned to Alice"
+    - Modification: "T-017 priority is updated to P0"
+    - Retraction: "T-029 is marked as closed / no longer active"
+  - expect.reason: the mutation type (addition / modification / retraction)
+  - Event IDs: E001 through E{DEPTH_PADDED}
+
+  ---
+
+  ## Timestamp Format
+
+  W{week}-{day}T{HH:MM}  (e.g. W02-3T14:30 = Week 2, Wednesday 14:30)
+  Days: 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6=Saturday
+
+  ---
+
+  ## Output
+
+  Produce exactly:
+  - state_events: {DEPTH} events (role="irrelevant", after_mod_ids=[],
+    depends_on=[], expect filled)
+
+  Do NOT generate probe events here — those are produced by separate calls.

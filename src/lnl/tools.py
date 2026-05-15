@@ -1,13 +1,17 @@
 """Tool execution for agent LLM-objects."""
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .types import ToolCall, ToolResult
+
+logger = logging.getLogger(__name__)
 
 
 class ToolExecutor(Protocol):
@@ -25,24 +29,68 @@ class ToolSpec:
 
 
 class CodeExecutor:
-    """Executes Python code in a restricted namespace with a push_event callback."""
+    """Executes Python code in a per-object persistent REPL namespace.
+
+    When ``context["repl_namespace"]`` is supplied, that dict is used as the
+    namespace — variables, imports, and function defs persist across calls.
+    Without it, a fresh namespace is built per call (legacy single-shot mode).
+    Callback hooks (``push_event``, ``connect``, ``inject_event``) are seeded
+    on first use only; user code may rebind them.
+
+    Output capture is Jupyter-like: stdout is collected, and if the source
+    ends with an expression, ``repr(value)`` of that expression is appended
+    when the value is not ``None``.
+    """
+
+    _CALLBACK_KEYS = ("push_event", "connect", "inject_event")
 
     def execute(self, call: ToolCall, context: dict[str, Any]) -> ToolResult:
         code = call.arguments.get("code", "")
         stdout = io.StringIO()
 
-        namespace: dict[str, Any] = {
-            "push_event": context.get("push_event"),
-            "connect": context.get("connect"),
-            "print": lambda *a, **kw: print(*a, file=stdout, **kw),
-        }
+        namespace = context.get("repl_namespace")
+        if namespace is None:
+            namespace = {}
+        self._seed_namespace(namespace, context, stdout)
 
         try:
             with contextlib.redirect_stdout(stdout):
-                exec(code, namespace)
-            return ToolResult(id=call.id, output=stdout.getvalue())
+                tail_value = self._exec_with_expression_capture(code, namespace)
+            output = stdout.getvalue()
+            if tail_value is not None:
+                if output and not output.endswith("\n"):
+                    output += "\n"
+                output += repr(tail_value)
+            return ToolResult(id=call.id, output=output)
         except Exception as e:
             return ToolResult(id=call.id, output=stdout.getvalue(), error=str(e))
+
+    def _seed_namespace(self, ns: dict[str, Any], context: dict[str, Any], stdout: io.StringIO) -> None:
+        for key in self._CALLBACK_KEYS:
+            if key not in ns and context.get(key) is not None:
+                ns[key] = context.get(key)
+        # Always rebind ``print`` to the call-local stdout buffer so output
+        # capture works regardless of any prior rebinding by user code.
+        ns["print"] = lambda *a, **kw: print(*a, file=stdout, **kw)
+
+    @staticmethod
+    def _exec_with_expression_capture(code: str, ns: dict[str, Any]) -> Any:
+        """Exec ``code`` in ``ns``; if it ends with an expression, return its value."""
+        try:
+            tree = ast.parse(code, mode="exec")
+        except SyntaxError:
+            exec(code, ns)
+            return None
+        if not tree.body:
+            return None
+        if isinstance(tree.body[-1], ast.Expr):
+            body = ast.Module(body=tree.body[:-1], type_ignores=[])
+            tail = ast.Expression(body=tree.body[-1].value)
+            if body.body:
+                exec(compile(body, "<repl>", "exec"), ns)
+            return eval(compile(tail, "<repl>", "eval"), ns)
+        exec(compile(tree, "<repl>", "exec"), ns)
+        return None
 
 
 class MockToolExecutor:
@@ -66,21 +114,39 @@ class MockToolExecutor:
 
 
 class MockInProcessExecutor:
-    """In-process mock executor for evaluation.
+    """Mock executor for evaluation.
 
     Returns scripted responses to the calling LLM-object (FIFO, falls back to
     ``response_template`` when exhausted) and dispatches cross-object events via
     ``inject_event`` in the tool context.
+
+    Two response modes:
+      - In-process (default): the response is computed locally from
+        ``scripted_responses`` / ``scripted_match_responses`` / ``response_template``.
+      - Remote (``remote_url`` set): the response is served by the HTTP mock
+        server — the same ``POST /tool/{method}`` path the OpenClaw baseline
+        uses — so LNL and the baseline exercise an identical tool-call surface.
+        Triggers are still dispatched in-process in both modes, mirroring the
+        baseline (whose per-TC triggers never go through the server).
 
     Each call is assigned a 1-based ``call_index`` tracking position in the mock
     chain. Templates may use ``{call_index}`` alongside argument names:
         response: "Ticket #{call_index} created for {subject}"
     """
 
-    def __init__(self, tool_def: Any) -> None:  # tool_def: MockToolDef (schema.py)
+    def __init__(
+        self,
+        tool_def: Any,  # tool_def: MockToolDef (schema.py)
+        remote_url: "str | None" = None,
+        slot_id: str = "default",
+    ) -> None:
         self._tool_def = tool_def
         self._call_count: int = 0
         self.call_log: list[dict] = []
+        # When set, responses are fetched from the HTTP mock server instead of
+        # computed in-process. slot_id isolates concurrent (tc, run) pairs.
+        self._remote_url = remote_url.rstrip("/") if remote_url else None
+        self._slot_id = slot_id
 
     @property
     def spec(self) -> "ToolSpec":
@@ -102,27 +168,35 @@ class MockInProcessExecutor:
         }
         self.call_log.append(log_entry)
 
-        # Pick response (priority order):
-        #   1. scripted_responses FIFO (index-based)
-        #   2. scripted_match_responses (first arg-pattern match)
-        #   3. response_template fallback
         interp_vars = {**args, "call_index": call_index}
-        scripted = self._tool_def.scripted_responses
-        if call_index <= len(scripted):
-            template = scripted[call_index - 1]
+
+        if self._remote_url is not None:
+            # Remote mode: the HTTP mock server picks and interpolates the
+            # response (same path as the OpenClaw baseline).
+            response_text = self._fetch_remote(call.tool, args)
         else:
-            template = next(
-                (smr.response for smr in self._tool_def.scripted_match_responses
-                 if self._arg_matches(args, smr.match)),
-                self._tool_def.response_template,
-            )
-        try:
-            response_text = template.format(**interp_vars)
-        except KeyError:
-            response_text = template
+            # In-process mode: pick response (priority order):
+            #   1. scripted_responses FIFO (index-based)
+            #   2. scripted_match_responses (first arg-pattern match)
+            #   3. response_template fallback
+            scripted = self._tool_def.scripted_responses
+            if call_index <= len(scripted):
+                template = scripted[call_index - 1]
+            else:
+                template = next(
+                    (smr.response for smr in self._tool_def.scripted_match_responses
+                     if self._arg_matches(args, smr.match)),
+                    self._tool_def.response_template,
+                )
+            try:
+                response_text = template.format(**interp_vars)
+            except KeyError:
+                response_text = template
         log_entry["response"] = response_text
 
-        # Fire orchestration triggers when match conditions are satisfied
+        # Fire orchestration triggers when match conditions are satisfied.
+        # In-process in BOTH modes — mirrors the baseline, whose per-TC triggers
+        # never go through the mock server.
         if self._matches(args):
             inject = context.get("inject_event")
             if inject:
@@ -137,6 +211,19 @@ class MockInProcessExecutor:
                     )
 
         return ToolResult(id=call.id, output=response_text)
+
+    def _fetch_remote(self, method: str, args: dict) -> str:
+        """Fetch the tool response from the HTTP mock server's POST /tool/{method}
+        endpoint. Raises on failure — the ReAct loop's tool-execution handler
+        turns that into a visible error result rather than masking it."""
+        import httpx
+
+        url = f"{self._remote_url}/tool/{method}"
+        resp = httpx.post(
+            url, json={**args, "__slot_id__": self._slot_id}, timeout=30.0,
+        )
+        resp.raise_for_status()
+        return resp.json().get("result", "")
 
     def _matches(self, args: dict) -> bool:
         """Return True if all match conditions pass (empty match always passes)."""

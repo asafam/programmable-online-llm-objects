@@ -1,0 +1,136 @@
+user_prompt: |
+  # Task: Design Probe Targets for a Recall-Under-Pressure Test Case
+
+  You are designing the first stage of a recall-under-pressure test scenario.
+  Your output determines WHAT the scenario must contain: which entities are
+  tracked and what probe questions will be asked at the end.
+
+  Downstream stages will generate events to support your choices. Do not
+  generate any events here — only declare targets and probe types.
+
+  ---
+
+  ## Automation System
+
+  {SAMPLE}
+
+  ---
+
+  ## Scenario Parameters
+
+  - Total event depth (D): {DEPTH}  (includes both relevant and background events)
+  - Seed for this instance: {SEED}
+
+  ---
+
+  ## What to Decide
+
+  ### 0. Shared Correction Field (decide first)
+
+  Before choosing entities, pick ONE numeric/scalar field that is natural for ALL tracked
+  entities to share (e.g. `discount_rate`, `amount`, `estimate_hours`, `unit_price`,
+  `quantity`). Every entity will receive corrections on this SAME field. This ensures
+  the aggregate probe can sum/compare across all entities.
+
+  Set `shared_correction_field` to this field name (snake_case, no spaces).
+
+  ---
+
+  ### 1. Tracked Entities ({MIN_TRACKED_ENTITIES}–{MAX_TRACKED_ENTITIES} entities)
+
+  Choose {MIN_TRACKED_ENTITIES}–{MAX_TRACKED_ENTITIES} entities that will be tracked throughout the scenario. Each entity:
+  - Is a natural entity in this workflow domain (quote, order, ticket, invoice, deal, …)
+  - Has a numeric identifier (e.g. "QUOTE-1042", "ORDER-5501") — required for confusable
+    background generation
+  - Has the `shared_correction_field` as one of its scalar fields
+  - Will receive: 1 creation event + 1 transition event + `n_corrections` corrections
+    (all revising the `shared_correction_field`); a retraction event MAY also be appended
+    if the entity is marked `retracted=true` (see retraction directive below).
+
+  For each tracked entity, set `n_corrections` to a value between 1 and {MAX_CORRECTIONS_PER_ENTITY}.
+  (At D={DEPTH}, the per-entity correction budget is capped at {MAX_CORRECTIONS_PER_ENTITY}.)
+  The total core relevant event count (sum across all entities of: 1 creation + 1 transition
+  + n_corrections) must NOT exceed {MAX_RELEVANT_EVENTS} — leave at least 40% of events as
+  background interference. Retraction events are NOT counted toward this budget; they are
+  one-shot lifecycle events appended after corrections.
+
+  ---
+
+  {RETRACTION_DIRECTIVE}
+
+  ---
+
+  ### 2. Probe Targets (exactly {N_PROBE_TYPES}, one per requested type)
+
+  This run requires probes of these types ONLY: **{PROBE_TYPES_LIST}**
+
+  Declare exactly one probe question of EACH listed type. Do NOT include probes of
+  types that are not listed — only the requested types are valid output.
+
+  **Probe type reference (only the types listed above are in scope this run):**
+
+  - **direct_lookup**: Ask for the current value of ONE field on ONE tracked entity.
+    The correct answer requires knowing the latest value after all corrections.
+    Example: "What is the current discount on QUOTE-1042?"
+    `target_entities`: the single entity referenced.
+
+  - **aggregate**: Ask for a sum, count, or total across ALL tracked entities for a
+    shared field (e.g. total approved amount, number of active orders).
+    The correct answer requires summing/counting across all tracked entities.
+    Example: "What is the total amount across all tracked quotes?"
+    `target_entities`: all tracked entity IDs.
+
+  - **conditional_aggregate**: Ask for a filtered aggregate or set — which of the
+    tracked entities meet a condition, or a sum/count over the subset.
+    The condition must reference at least one attribute field.
+    Example: "Which tracked quotes were approved with a discount above 15%?"
+    `target_entities`: all tracked entity IDs (the filter selects the subset).
+
+  - **retraction_status**: Ask whether tracked entities are currently active or have
+    been retracted (cancelled, withdrawn, closed, deleted). The correct answer
+    requires recognising the FINAL lifecycle event for each named entity — whether
+    a retraction event was issued after corrections.
+    Example: "Which of the tracked tickets are still active?" or "Is DEAL-5501 still being tracked?"
+    `target_entities`: any subset of tracked entity IDs (typically all of them when the
+    probe asks "which are still active?"; a single entity for a yes/no question).
+    REQUIRED: at least one tracked entity must be marked `retracted=true` and at least
+    one must be `retracted=false`, so the answer set is non-trivial.
+
+  Use the SEED value to vary which entities are referenced by each probe type
+  (e.g. alternate which entity is the direct_lookup target across seeds).
+
+  ---
+
+  ## Output
+
+  Produce exactly:
+  - `shared_correction_field`: the single scalar field all entities will be corrected on
+  - `tracked_entities`: list of {MIN_TRACKED_ENTITIES}–{MAX_TRACKED_ENTITIES} `TrackedEntitySpec` objects
+  - `probe_targets`: list of exactly {N_PROBE_TYPES} `ProbeTargetSpec` objects
+    (one per requested type, in the order: {PROBE_TYPES_LIST})
+
+  Each `TrackedEntitySpec`:
+  - `entity_id`: the entity's identifier string (e.g. "QUOTE-1042")
+  - `entity_type`: the entity type (e.g. "quote", "order", "ticket")
+  - `n_corrections`: integer 1–{MAX_CORRECTIONS_PER_ENTITY}
+  - `retracted`: bool — true iff the retraction directive applies AND this entity should
+    be the one (or one of the ones) that gets retracted. Default: false.
+
+  Each `ProbeTargetSpec`:
+  - `probe_id`: unique ID for this probe, format "P{N:03d}" (P001, P002, …)
+  - `probe_type`: one of {PROBE_TYPES_LIST}
+  - `target_entities`: list of entity_ids this probe references
+
+  ---
+
+  ## Constraint Check (do before writing output)
+
+  1. Count core relevant events: sum over all tracked entities of
+     (1 creation + 1 transition + n_corrections). Retraction events are one-shot
+     lifecycle events and are NOT counted against this budget.
+     This estimate must be ≤ {MAX_RELEVANT_EVENTS}.
+  2. Each requested probe_type ({PROBE_TYPES_LIST}) appears exactly once. No other types appear.
+  3. Each tracked entity_id is referenced by at least one probe.
+  4. entity_ids are valid numeric identifiers (contain digits).
+  5. If retraction_status is in scope: at least one entity has retracted=true AND at least
+     one has retracted=false. Otherwise: ALL entities have retracted=false.
