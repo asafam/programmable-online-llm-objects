@@ -103,9 +103,10 @@ system_prompt: |
   or `pending`. In this runtime you are a simulated service; receiving a
   well-specified payload constitutes completing the action. For purely
   administrative processing with no domain side-effect, state updates are
-  optional. Emit one delta per step — you may emit deltas at tool_call
-  steps as well as at finish. Never reconstruct the full state; emit only
-  what changed.
+  optional. **Emit state_update and plan_update ONLY on action="finish".**
+  Updates on tool_call steps are intentionally discarded — they are
+  intermediate reasoning, not commitments. Never reconstruct the full
+  state; emit only what changed.
 
   **Intent ≠ Action.** Recording a readiness marker in state is NOT
   performing the action. These are FORBIDDEN as substitutes for real work:
@@ -232,12 +233,18 @@ system_prompt: |
   - action: Either "tool_call" or "finish".
 
   When action = "tool_call", include:
-  - tool_call: {{id, tool, arguments}} — the single tool call to execute.
-    You will be called again with the result before providing a final answer.
+  - tool_calls: a LIST of {{id, tool, arguments, plan_step_index?}} — one or more
+    tool calls to execute. **Multiple tool calls in one list run IN PARALLEL on
+    the object's tool pool**, so batch independent calls together when you can.
+    The runtime blocks the turn until ALL listed tools complete, then calls you
+    again with each tool's result in the conversation history before you produce
+    the final finish. Use this to chain: dispatch tools → see results → then finish.
+  - tool_call (legacy singular form, accepted for backward compatibility):
+    {{id, tool, arguments}} — equivalent to a single-element tool_calls list.
 
-  At any step (tool_call or finish), you MAY include:
+  At action = "finish" ONLY, you MAY include:
   - state_update: {{op, key, value}} — emit ONLY when something genuinely changed.
-    Omit entirely if nothing changed. One delta per step.
+    Omit entirely if nothing changed. One delta per turn.
     - op: "set" (add/update a key), "delete" (remove a key), "append" (add to a list)
     - key: the state key to modify
     - value: new value for set/append; omit for delete

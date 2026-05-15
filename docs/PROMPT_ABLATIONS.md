@@ -1124,3 +1124,141 @@ across all runs of the same setup. Those are the targets that matter.
 | Change | Pass rate | Decision |
 |---|---|---|
 | **D operating point (2-run, ≥2 gate reverted)** | **0.7009 std 0.1454** | ✅ confirmed stable; matches historical 0.756 within noise |
+| **D operating point (3-run)** | **0.6607 std 0.1932** | std grew with n; population variance > n=2 captured |
+
+### 3-run individual run breakdown
+
+Three runs of D's setup yielded **0.85, 0.56, 0.58** — a 27pt range
+across identical config. SE on 3-run mean ≈ 0.112. The 0.72 target sits
+~0.5 SE above the 3-run mean: indistinguishable from the noise band.
+
+### Per-TC categorization at n=3 (79 TCs with 3 complete runs)
+
+| Category | Count | Notes |
+|---|---|---|
+| Stable pass (3/3) | 28 | Down from 36 at n=2 — 8 "stable" TCs at n=2 flipped at n=3 |
+| Mostly pass (2 of 3) | 14 | Flaky toward pass |
+| Stable partial (same value) | 5 | Consistent partial credit |
+| Other flaky | 16 | Vary across all 3 runs |
+| Mostly fail (2 of 3) | 8 | Flaky toward fail — potential lifts |
+| Stable hard-fail (0/3) | **8** | The real targets |
+
+### Stable hard-fails at n=3 (8 TCs — overlap heavily with prior model-capacity-bound list)
+
+- `automate-release-notes-jira-gitlab-exception`
+- `automated-blog-content-generator-claude-ai-temporal`
+- `contact-list-exception`
+- `email-assistant-turn-starred-emails-into-asana-tasks-with-ai-temporal`
+- `engineering-work-intake-slack-jira-exception`
+- `identify-sales-opportunities-support-tickets-contextual`
+- `save-email-attachments-temporal`
+- `slack-thread-summarizer-exception`
+
+6 of these 8 appeared in the 2026-05-12 "both-fail at gpt-5.4-mini AND
+gpt-5.4" list — i.e., the prior ablation work already classified them
+as **model-capacity bound**, not prompt-addressable. The
+`v20260512_1438` "no async queue" rule was specifically designed for
+this pattern, applied perfectly, and still hit -3.7pt due to collateral.
+
+### Honest conclusion
+
+This dataset × gpt-5.4-mini × runtime is **at the local optimum**, with
+mean ~0.66–0.71 and std ~0.15–0.19 per-run. The 0.756 historical was a
+high-side draw from this same distribution, not a regressed peak. The
+0.72 target is achievable on any given run but not *reliably*
+reproducible.
+
+Tractable directions:
+- **Higher n (5+ runs)** to drive SE below 0.07. Cost: ~2h per
+  multi-run; doesn't change the mean.
+- **Lift mostly-fail TCs (8 TCs at ~0.17 mean)** if a specific failure
+  mode is targetable. Each lift to "mostly pass" is worth ~+0.7pt on
+  aggregate.
+- **Accept the operating point.** Document at this level and move on
+  to other workstreams.
+
+Continuing to iterate on the aggregate metric is unlikely to surface
+real signal at the current noise level.
+
+---
+
+## 2026-05-15 — Per-trace plans architecture (4-stage refactor)
+
+Major architectural refactor shipped in another session (commits
+`ce3ce9f`, `bc1d683`, `11ac4b5`, `def8e4e` on top of checkpoint
+`21e0961`):
+
+- **Per-trace plans**: `_active_plans: dict[trace_id, Plan]` — multiple
+  concurrent plans per object, keyed by trace_id, no cross-talk.
+- **Typed durable step results**: reply payloads auto-captured on
+  `step.result` as NL string; tool returns auto-captured as structured
+  JSON when LLM tags the call with `plan_step_index`.
+- **Step kinds renamed**: `ask | tell | tool | reason` (effect accepted
+  as legacy alias). New `tool` kind, `effect` → `reason`.
+- **Plan-result rendering**: native shape + (nl|tool|reason) tag
+  surfaced in LLM prompt.
+- **Retirement policy**: stale plans (>180s) auto-retire as abandoned;
+  cardinality cap (32 plans/object) evicts oldest.
+- Plans archived in bounded `_completed_plans` deque (max 64).
+
+Backward compatible: `active_plan` property still works for single-plan
+use cases.
+
+### 3-run result (new architecture, prompts NOT yet updated)
+
+| Metric | D (pre-refactor, 3-run) | New (post-refactor, 3-run) | Δ |
+|---|---|---|---|
+| Mean pass rate | 0.6607 std 0.1932 | **0.6694 std 0.1716** | +0.9pt (within SE) |
+| Samples completion | 0.5395 | 0.5351 | ~flat |
+
+### Per-TC categorization shift
+
+| Category | D | New | Δ |
+|---|---|---|---|
+| Stable pass (3/3) | 28 | 27 | −1 |
+| Mostly pass (2 of 3) | 14 | 15 | +1 |
+| Stable partial (same value) | 5 | **11** | **+6** |
+| Other flaky | 16 | **11** | **−5** |
+| Mostly fail (2 of 3) | 8 | 6 | −2 |
+| Stable hard-fail (0/3) | 8 | 9 | +1 |
+
+**Real signal: variance shape changed.** 5 TCs moved from "flaky" to
+"stable partial" — per-trace plan isolation reduces cross-trace bleed.
+Std dropped 0.193 → 0.172, consistent with this.
+
+### Hard-fail movement
+
+- 0 of D's 8 stable hard-fails recovered to stable pass.
+- 1 lifted to mostly-pass (`automated-blog-content-generator`).
+- 6 still fail (the model-capacity-bound list).
+- 3 NEW stable hard-fails (`ai-image-generator`,
+  `automate-github-issues-from-slack`, `automate-sales-follow-up`). The
+  first two were "mostly fail" before — borderline tipped over. The
+  third is a real regression (Δ -0.67) on a previously partial TC.
+
+### Diagnosis
+
+The aggregate didn't move because **the LLM isn't using the new
+mechanics yet**. Code-side, per-trace plans + typed step results +
+`tool`/`reason` kinds are live; prompt-side, `object.yaml` and
+`planner.yaml` still describe the old single-plan, untyped-result API.
+The variance reduction is the only signal that's leaked through — and
+that's purely from the isolation property (concurrent plans no longer
+collide), not from the LLM doing anything differently.
+
+### Deferred work (per the refactor's "your eval gate" note)
+
+- `object.yaml`: teach the LLM about the new step kinds (`tool`,
+  `reason`) and the state-vs-result discipline (working memory belongs
+  on `step.result`, not in `state`).
+- `planner.yaml`: emit `reason` instead of `effect` (currently still
+  emits `effect`, normalized on input).
+
+Both prompt updates were intentionally deferred pending an aggregate
+baseline measurement of the new architecture — which we now have at
+0.6694. The next eval gate is the prompt update.
+
+| Change | Pass rate (3-run, steps-only) | Decision |
+|---|---|---|
+| **New architecture (per-trace plans, prompts NOT updated)** | **0.6694 std 0.1716** | ✅ baseline established; variance shape improved |
+| New architecture + updated prompts | TBD | pending — the deferred work |

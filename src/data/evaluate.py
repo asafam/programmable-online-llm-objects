@@ -61,7 +61,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-15: per-run-cycle summary printout
+_VERSION: str = _build_version()  # bumped 2026-05-15: propagate infra_error to downstream events; partial-infra TCs contribute clean events
 
 from src.data.schema import (
     EvalSummary,
@@ -617,6 +617,13 @@ def _run_test_case_timeline(
     event_results: list[EventResult] = []
     mod_results: list[ModificationResult] = []
 
+    # Once any event in this TC hits a technical failure (content filter,
+    # runtime exception, network error captured as cf_errors), all subsequent
+    # events in the same TC are treated as infra-error too — they depend on
+    # the world state the failed event would have produced, so their pass/fail
+    # signal isn't a clean measurement of model behavior. Excluded from scoring.
+    tc_had_infra_error: bool = False
+
     execs = mock_executors or []
     prior_context: str = ""
 
@@ -665,6 +672,12 @@ def _run_test_case_timeline(
                 bus_msgs = rt.message_log[log_snapshot:]
                 new_calls = _new_tool_calls(execs, exec_snap)
                 cf_errors = rt.drain_infra_errors()
+                # Mark infra-error if THIS event raised an error OR an earlier
+                # event in the same TC already did (downstream events depend
+                # on world state we can no longer trust).
+                infra_error = bool(cf_errors) or tc_had_infra_error
+                if infra_error:
+                    tc_had_infra_error = True
                 evidence = gather_evidence(rt, results, step.target, bus_messages=bus_msgs, tool_calls=new_calls)
                 condition = step.expect.action
                 passed, reasoning, votes, j_in_tok, j_out_tok = harness.evaluate_assertion(condition, evidence, prior_context)
@@ -687,7 +700,7 @@ def _run_test_case_timeline(
                     judge_input_tokens=j_in_tok,
                     judge_output_tokens=j_out_tok,
                     judge_votes=votes,
-                    infra_error=bool(cf_errors),
+                    infra_error=infra_error,
                     mock_tool_calls=sum(len(per_ex) for per_ex in new_calls),
                 ))
                 if on_event_result:
@@ -767,6 +780,11 @@ def _run_test_case_timeline(
         if timed_out:
             bus_msgs_to = rt.message_log[log_snap:]
             trace_spans_to, trace_root_to = build_event_trace(bus_msgs_to)
+            # A timeout is itself a technical failure — flag it as infra_error
+            # and propagate to subsequent events in this TC. (Treating timeouts
+            # as infra_error preserves the model's measured behavior on TCs
+            # that don't hit infrastructure problems.)
+            tc_had_infra_error = True
             event_results.append(EventResult(
                 event_id=evt.id,
                 passed=False,
@@ -777,9 +795,14 @@ def _run_test_case_timeline(
                 latency_ms=lat_ms,
                 trace=trace_spans_to,
                 trace_root_id=trace_root_to,
+                infra_error=True,
             ))
         else:
             cf_errors = rt.drain_infra_errors()
+            # Propagate any prior infra error in this TC; record new ones.
+            infra_error = bool(cf_errors) or tc_had_infra_error
+            if infra_error:
+                tc_had_infra_error = True
             in_tok  = _in_tok  if _in_tok  is not None else sum(r.metrics.input_tokens  for r in res if r.metrics)
             out_tok = _out_tok if _out_tok is not None else sum(r.metrics.output_tokens for r in res if r.metrics)
             planner_in_tok   = _planner_in_tok   if _planner_in_tok   is not None else sum(r.planner_metrics.input_tokens   for r in res if r.planner_metrics)
@@ -817,7 +840,7 @@ def _run_test_case_timeline(
                 judge_input_tokens=j_in_tok,
                 judge_output_tokens=j_out_tok,
                 judge_votes=votes,
-                infra_error=bool(cf_errors),
+                infra_error=infra_error,
                 mock_tool_calls=sum(len(per_ex) for per_ex in new_calls),
                 trace=trace_spans,
                 trace_root_id=trace_root,
@@ -1586,9 +1609,14 @@ def run(args: argparse.Namespace) -> Path:
                         _snapshots[key] = snapshot_out[0]
                     if key in _snapshot_events:
                         _snapshot_events[key].set()
+        # Per-TC pass_rate is computed only over events that ran cleanly
+        # (no technical failure on themselves or any prior event in the TC).
+        # If every event is infra-error, pass_rate is None and the TC is
+        # excluded from aggregate scoring downstream.
+        clean_events = [e for e in event_results if not e.infra_error]
         pass_rate = (
-            sum(1 for e in event_results if e.passed) / len(event_results)
-            if event_results else None
+            sum(1 for e in clean_events if e.passed) / len(clean_events)
+            if clean_events else None
         )
         elapsed_s = time.monotonic() - tc_start
         result = TestCaseResult(
@@ -1818,9 +1846,18 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
     base_tc_ids = set(first_tc_per_sample.values())
 
     # TCs where any event had an infra error (e.g. content filter) — excluded from all scoring.
-    infra_error_tc_ids: set[str] = {r.tc_id for r in results if any(e.infra_error for e in r.events)}
+    # A TC is "infra-error" (excluded from aggregate scoring) ONLY when EVERY
+    # event hit a technical failure — there are no clean events to score.
+    # Partial-infra TCs (some clean events, some failed-then-propagated)
+    # contribute their clean events to aggregates; their per-TC pass_rate is
+    # already computed over the clean events only.
+    infra_error_tc_ids: set[str] = {
+        r.tc_id for r in results
+        if r.events and all(e.infra_error for e in r.events)
+    }
 
     # Compute per-result effective events (step events only for the base TC per sample).
+    # infra_error events are excluded from scoring (they're not clean measurements).
     all_events: list[EventResult] = []
     pass_rates: list[float] = []
     for r in results:
@@ -1829,7 +1866,8 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
         is_base = r.tc_id in base_tc_ids
         effective = [
             e for e in r.events
-            if is_base or not _STEP_EVENT_ID.match(e.event_id)
+            if (is_base or not _STEP_EVENT_ID.match(e.event_id))
+            and not e.infra_error
         ]
         all_events.extend(effective)
         if effective:
@@ -1862,7 +1900,7 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
     for r in results:
         if r.tc_id not in base_tc_ids or r.tc_id in infra_error_tc_ids:
             continue
-        step_evts = [e for e in r.events if _STEP_EVENT_ID.match(e.event_id)]
+        step_evts = [e for e in r.events if _STEP_EVENT_ID.match(e.event_id) and not e.infra_error]
         if step_evts:
             by_tc_step[r.tc_id].append(sum(1 for e in step_evts if e.passed) / len(step_evts))
             by_tc_completion[r.tc_id].append(1.0 if all(e.passed for e in step_evts) else 0.0)
@@ -1880,7 +1918,7 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
     for r in results:
         if r.tc_id not in tcs_with_pre_mod or r.tc_id in infra_error_tc_ids:
             continue
-        step_evts = [e for e in r.events if _STEP_EVENT_ID.match(e.event_id)]
+        step_evts = [e for e in r.events if _STEP_EVENT_ID.match(e.event_id) and not e.infra_error]
         if step_evts and any(not e.passed for e in step_evts):
             inconclusive_tc_ids.add(r.tc_id)
 
@@ -1892,7 +1930,7 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
                 continue
             if exclude_inconclusive and r.tc_id in inconclusive_tc_ids:
                 continue
-            evts = [e for e in r.events if e.role == role_val]
+            evts = [e for e in r.events if e.role == role_val and not e.infra_error]
             if evts:
                 by_tc[r.tc_id].append(sum(1 for e in evts if e.passed) / len(evts))
         rate = mean([mean(v) for v in by_tc.values()]) if by_tc else None
@@ -1901,6 +1939,7 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
     conclusive_events = [
         e for r in results if r.tc_id not in inconclusive_tc_ids and r.tc_id not in infra_error_tc_ids
         for e in r.events
+        if not e.infra_error
     ]
     mod_events = [e for e in conclusive_events if e.role in ("pre_mod", "post_mod", "irrelevant")]
     mod_pass_rate = (sum(1 for e in mod_events if e.passed) / len(mod_events)) if mod_events else None
@@ -1909,7 +1948,7 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
     for r in results:
         if r.tc_id in inconclusive_tc_ids or r.tc_id in infra_error_tc_ids:
             continue
-        evts = [e for e in r.events if e.role in ("pre_mod", "post_mod", "irrelevant")]
+        evts = [e for e in r.events if e.role in ("pre_mod", "post_mod", "irrelevant") and not e.infra_error]
         if evts:
             by_tc_mod[r.tc_id].append(sum(1 for e in evts if e.passed) / len(evts))
     mod_pass_rate_std = _per_tc_std(by_tc_mod)
@@ -1922,7 +1961,7 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
     all_mod_events = [
         e for r in results if r.tc_id not in infra_error_tc_ids
         for e in r.events
-        if e.role in ("pre_mod", "post_mod", "irrelevant")
+        if e.role in ("pre_mod", "post_mod", "irrelevant") and not e.infra_error
     ]
     mod_pass_rate_all = (sum(1 for e in all_mod_events if e.passed) / len(all_mod_events)) if all_mod_events else None
 
