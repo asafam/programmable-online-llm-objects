@@ -73,7 +73,14 @@ class LLMObject:
     ) -> None:
         self._definition = definition
         self._brain = brain
-        self._state = ""  # mutable runtime state (str from LLM; dict from mock scripts)
+        # Mutable runtime state — str from LLM, dict from mock scripts.
+        # Scope: durable world facts that survive any single request (inventory,
+        # preferences, accumulated knowledge). State writes from different
+        # traces are serialized by the mailbox FIFO — there is no concurrent
+        # mutation; "last write wins" is deterministic by arrival order.
+        # Working memory (in-flight step results within one cascade) belongs
+        # on PlanStep.result, NOT here.
+        self._state = ""
         self._history: list[Message] = []
         self._mailbox: deque[Message] = deque()
         self._tool_registry = tool_registry
