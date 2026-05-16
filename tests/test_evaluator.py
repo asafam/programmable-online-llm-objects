@@ -287,9 +287,12 @@ def test_run_evaluator_skips_when_plan_is_none():
         assert eval_brain.calls == 0, f"expected 0 eval calls for n_peers={n_peers}"
 
 
-def test_run_evaluator_skips_when_all_plan_steps_terminal():
-    """If every plan step is already done/failed/skipped, plan-mode grading
-    has nothing left to do — skip the LLM call."""
+def test_run_evaluator_fires_when_all_plan_steps_terminal():
+    """Even when every plan step is auto-closed (e.g. all tell steps marked
+    done on dispatch), the evaluator MUST still fire to grade COMPLETENESS
+    of the dispatched content. Auto-closure ≠ correctness. The prior skip
+    was the gate that hid the dominant failure mode (orchestrators with
+    pure tell plans whose dispatches were incomplete)."""
     eval_brain = _EvaluatorBrain({"verdict": "PASS", "criteria": [], "feedback": ""})
     obj = LLMObject(
         _make_definition(2), _NoopBrain(),
@@ -305,13 +308,15 @@ def test_run_evaluator_skips_when_all_plan_steps_terminal():
         trace_id="t1",
     )
     eval_dict, _ = obj.run_evaluator([], "", _domain_msg())
-    assert eval_dict is None
-    assert eval_brain.calls == 0
+    assert eval_dict is not None
+    assert eval_brain.calls == 1
 
 
-def test_run_evaluator_skips_when_steps_mixed_terminal_and_failed():
-    """Mixed terminal statuses (done + failed + skipped) still skip plan-mode
-    grading — nothing actionable remains."""
+def test_run_evaluator_fires_on_mixed_terminal_statuses():
+    """Mixed terminal statuses (done + failed + skipped) still invoke the
+    evaluator — it can confirm the outcomes are coherent (no contradictions
+    between status and actual evidence) and grade completeness of the
+    dispatched payloads."""
     eval_brain = _EvaluatorBrain({"verdict": "PASS", "criteria": [], "feedback": ""})
     obj = LLMObject(
         _make_definition(2), _NoopBrain(),
@@ -328,8 +333,8 @@ def test_run_evaluator_skips_when_steps_mixed_terminal_and_failed():
         trace_id="t1",
     )
     eval_dict, _ = obj.run_evaluator([], "", _domain_msg())
-    assert eval_dict is None
-    assert eval_brain.calls == 0
+    assert eval_dict is not None
+    assert eval_brain.calls == 1
 
 
 def test_run_evaluator_fires_when_at_least_one_planned_step_remains():

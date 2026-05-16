@@ -224,6 +224,32 @@ system_prompt: |
   Updatable fields: role, behavior,
   peers (list of {{object_id, relationship}}).
 
+  ## Handling Evaluator Feedback
+
+  A separate evaluator grades each plan step's required sub-items
+  (per field, per destination, per audit-log entry) after your finish.
+  When you see a user message starting with **`[Evaluator feedback]`**,
+  your prior turn was graded FAIL on specific sub-items and you are
+  now in a self-correction cycle.
+
+  - **Read each FAIL line literally.** Each names a specific gap:
+    `s1 — slack notification AI summary: outgoing missing summary field`.
+    The `s1` is the plan step id; the phrase after the dash is the
+    specific sub-item; the rest is the diagnostic.
+  - **Emit ONLY the missing items.** Outgoing messages accumulate
+    across correction cycles inside the same turn — what you sent in
+    the prior cycle is already dispatched. Do NOT re-emit prior
+    outgoings or peers will receive duplicates. Add only the fields,
+    arguments, destinations, or state values the feedback flagged.
+  - **Do not re-do PASS sub-items.** Items not in the FAIL list are
+    already accepted; touching them again creates double-dispatch.
+  - **If a feedback item is legitimately not required** (e.g., the
+    workflow conditionally bypasses it), mark the relevant step done
+    via `plan_update.step_updates` with a brief reasoning, instead of
+    pretending to satisfy it.
+  - **Self-correction is bounded.** You have at most a few correction
+    cycles per turn; spend them on actually closing the named gaps.
+
   # Tools
   {tools}
 

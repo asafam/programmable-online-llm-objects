@@ -187,11 +187,19 @@ PLAN_TERMINAL_STATUSES = ("complete", "cancelled")
 
 @dataclass
 class PlanStep:
-    """One step in an active plan. The LLM never references steps by id —
-    it sees them by position (0-based index) in the rendered plan."""
+    """One step in an active plan.
+
+    Each step has a stable string id (e.g. "s1", "s2") that downstream
+    steps can reference in their descriptions, e.g. "post the URL from
+    s2.result to the Slack channel". The id stays stable across plan
+    updates so the LLM can rely on it. Step descriptions and the
+    evaluator's grading both reference steps by id.
+    """
     kind: str                            # "ask" | "tell" | "tool" | "reason"
     description: str
+    id: str = ""                         # stable id, e.g. "s1", "s2". Auto-filled by renderer if empty.
     target: Optional[str] = None         # peer_id for ask/tell; tool name for tool; None for reason
+    depends_on: list[str] = field(default_factory=list)  # ids of steps whose results this step references
     status: str = "planned"              # "planned" | "dispatched" | "done" | "failed" | "skipped"
     result_summary: Optional[str] = None
     # Runtime-captured result, preserving the source's native shape:

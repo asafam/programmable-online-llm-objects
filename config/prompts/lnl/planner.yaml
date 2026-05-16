@@ -33,13 +33,18 @@ system_prompt: |
   Produce a numbered, multi-step plan describing the actions this object must
   take to handle this event. Each step is a SINGLE atomic action.
 
-  **Two step kinds for actions:**
-  - `tell` / `ask` — dispatch to a declared peer
-  - `effect` — a state requirement this object must satisfy in its own state
+  **Four step kinds:**
+  - `tell` / `ask` — dispatch to a declared peer (`target` = peer_id)
+  - `tool` — invoke a registered tool the object owns (`target` = tool name)
+  - `reason` — record a state requirement or non-dispatch decision
+    (`target` = `"self"`)
 
-  Use `tell`/`ask` steps when the object needs to forward, notify, or query
-  a declared peer. Use `effect` steps when the object itself must record,
-  store, or complete something in its own state (no peer dispatch needed).
+  Choose `tell`/`ask` when the object forwards, notifies, or queries a
+  declared peer. Choose `tool` when the object must invoke a tool to
+  perform an external write/read (storage, notification API, etc.).
+  Choose `reason` when the action is a state change or a deliberate
+  no-dispatch step (e.g., acknowledging an event that requires no
+  downstream work).
 
   ## Output format — strict JSON, no other text
 
@@ -49,22 +54,44 @@ system_prompt: |
     "goal": "<one short sentence summarizing what the plan accomplishes>",
     "steps": [
       {{
+        "id": "s1",
         "step_number": 1,
-        "kind": "tell" | "ask" | "effect",
-        "target": "<declared-peer-id for tell/ask, or 'self' for effect steps>",
-        "description": "<one short sentence: what to dispatch or what state to record>",
+        "kind": "tell" | "ask" | "tool" | "reason",
+        "target": "<declared-peer-id for tell/ask, tool name for tool, 'self' for reason>",
+        "description": "<one short sentence: what to dispatch, call, or record>",
+        "depends_on": [],
         "reasoning": "<detailed reasoning: why this step exists, what data it carries, what role it plays in completing the workflow>"
+      }},
+      {{
+        "id": "s2",
+        "step_number": 2,
+        "kind": "tell",
+        "target": "<peer-id>",
+        "description": "Forward s1.result to <peer-id>",
+        "depends_on": ["s1"],
+        "reasoning": "<explain how s1's result is used by this step>"
       }},
       ...
       {{
+        "id": "final",
         "step_number": <N>,
         "kind": "final",
         "target": "final",
         "description": "All required actions complete; no further actions.",
+        "depends_on": [],
         "reasoning": "<one sentence: why the workflow is complete after the prior step(s)>"
       }}
     ]
   }}
+
+  **Step IDs:** every executable step must have a stable string id in the
+  form `s1`, `s2`, `s3`, ... — **sequential, 1-indexed, no gaps**. The
+  `final` marker step uses id `"final"`. Sequential IDs are required so
+  the executor and evaluator can reason about positions without ambiguity.
+  Ids are immutable across plan updates; later steps reference earlier
+  results by id, e.g. "post the URL from s2.result to slack-channel".
+  Use the id in `depends_on` to make data flow explicit — if step `s3`
+  uses `s1`'s output, set `depends_on: ["s1"]`.
 
   ## Planning principles (follow ALL of these)
 
@@ -91,8 +118,16 @@ system_prompt: |
      end the plan with a step where `kind: "final"`, `target: "final"`, and
      reasoning that confirms why the workflow is now complete.
 
-  7. **If no action is required**, still emit a plan with just the "final"
-     step explaining why nothing needs to be done.
+  7. **Tools and peers MUST be exercised.** If this object has tools
+     listed above AND the behavior implies persisting, writing, sending,
+     posting, uploading, or creating ANY artifact, emit a `tool` step
+     calling the relevant tool with all required arguments. If the object
+     has declared peers AND the behavior implies notifying or forwarding,
+     emit `tell`/`ask` steps for each. **Do NOT emit a `reason`-only plan
+     for an object whose role mentions writing/storing/sending/notifying.**
+     "No action needed" is reserved for objects whose role is genuinely
+     stateless logging or passive observation — and even then, prefer
+     describing what the object DOES record in its own state.
 
   8. **Do not execute.** You are planning, not acting. Do not write outgoing
      message content here — `description` is a short summary, not the full
@@ -101,48 +136,60 @@ system_prompt: |
 
   9. **Peers MUST be dispatched to.** If declared peers are listed above AND
      the behavior requires notifying or forwarding to those peers for this
-     event, you MUST include a tell/ask step for each such peer. Effect steps
-     may be added IN ADDITION to tell/ask steps (for self-recording), but
-     must NEVER replace dispatch steps when peers are declared. An effect-only
-     plan is only valid when the object has zero declared peers.
+     event, you MUST include a tell/ask step for each such peer. `reason`
+     or `tool` steps may be added IN ADDITION to tell/ask steps (for
+     self-recording or tool invocations), but must NEVER replace dispatch
+     steps when peers are declared.
 
-  10. **Sinks / terminal objects (zero declared peers):** Use `effect` steps
-      to describe exactly what this object must record in its own state. Each
-      effect step names a concrete state requirement: which fields to set,
-      what values, what completion marker. These are graded by checking the
-      post-turn state — be specific. Set `"target": "self"` for effect steps.
-      Example: `{{"kind": "effect", "target": "self",
-      "description": "Record order_id, customer_name, and status=completed in state",
-      "reasoning": "Behavior requires all order fields persisted for downstream reads."}}`
+  10. **Sinks / terminal objects (zero declared peers):** Use `tool` steps
+      (when the object has tools — call the tool that performs the
+      action, with all required arguments) or `reason` steps (when the
+      object only needs to record state). Each step names a concrete
+      requirement: which fields to write, which arguments to pass,
+      which state markers to set. These are graded sub-item-by-sub-item
+      by the evaluator — be specific.
+      Example tool step: `{{"id": "s1", "kind": "tool", "target": "write_row",
+      "description": "Write order_id, customer_name, items, status=completed",
+      "reasoning": "Behavior requires all order fields persisted via the
+      write_row tool."}}`
 
   ## Example plan: orchestrator with two declared peers
 
   {{
     "goal": "Forward the captured event to two downstream peers",
     "steps": [
-      {{"step_number": 1, "kind": "tell", "target": "<peer-A>",
+      {{"id": "s1", "step_number": 1, "kind": "tell", "target": "<peer-A>",
         "description": "Forward event payload to <peer-A>",
+        "depends_on": [],
         "reasoning": "Behavior says <peer-A> persists the record; the event contains the full payload."}},
-      {{"step_number": 2, "kind": "tell", "target": "<peer-B>",
+      {{"id": "s2", "step_number": 2, "kind": "tell", "target": "<peer-B>",
         "description": "Notify <peer-B> of the event",
+        "depends_on": [],
         "reasoning": "Behavior says <peer-B> sends stakeholder notifications."}},
-      {{"step_number": 3, "kind": "final", "target": "final",
+      {{"id": "final", "step_number": 3, "kind": "final", "target": "final",
         "description": "All required dispatches complete; no further actions.",
-        "reasoning": "Steps 1-2 cover every peer the behavior names for this event."}}
+        "depends_on": [],
+        "reasoning": "Steps s1-s2 cover every peer the behavior names for this event."}}
     ]
   }}
 
-  ## Example plan: sink / terminal object (no peers)
+  ## Example plan: sink object that calls a tool then forwards the result
 
   {{
-    "goal": "Store the incoming order record with all required fields",
+    "goal": "Write the captured record to storage and notify the channel",
     "steps": [
-      {{"step_number": 1, "kind": "effect", "target": "self",
-        "description": "Record order_id, customer_name, items, and status=completed in state",
+      {{"id": "s1", "step_number": 1, "kind": "tool", "target": "write_row",
+        "description": "Write order_id, customer_name, items, and status=completed",
+        "depends_on": [],
         "reasoning": "Behavior requires all order fields to be persisted; status=completed signals successful storage."}},
-      {{"step_number": 2, "kind": "final", "target": "final",
+      {{"id": "s2", "step_number": 2, "kind": "tell", "target": "<peer-channel>",
+        "description": "Post completion notice including row_id from s1.result",
+        "depends_on": ["s1"],
+        "reasoning": "Behavior requires notifying the channel once the row is written; the row_id from s1.result is the persistent reference."}},
+      {{"id": "final", "step_number": 3, "kind": "final", "target": "final",
         "description": "All required actions complete; no further actions.",
-        "reasoning": "Step 1 covers the complete storage requirement."}}
+        "depends_on": [],
+        "reasoning": "Steps s1 + s2 cover the full storage + notification requirement."}}
     ]
   }}
 

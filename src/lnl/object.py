@@ -352,6 +352,7 @@ class LLMObject:
         outgoing_messages: list,
         reply: str,
         message: "Optional[Message]" = None,
+        tool_calls_this_turn: "Optional[list[str]]" = None,
     ) -> "tuple[Optional[dict], Optional[InferenceMetrics]]":  # type: ignore[name-defined]
         """Invoke the evaluator brain on this object's last turn. Runs only
         when an active plan with non-terminal steps exists (plan mode).
@@ -368,8 +369,15 @@ class LLMObject:
         plan = self.plan_for(message.trace_id)
         if plan is None or not plan.steps:
             return None, None
-        if all(s.status in STEP_TERMINAL_STATUSES for s in plan.steps):
-            return None, None
+        # Previously: skipped the evaluator when every step was already
+        # "terminal" (auto-closed on dispatch or by auto-close logic).
+        # This silently let "auto-closed because outgoing was dispatched"
+        # pass — even when the outgoing was incomplete, missing fields, or
+        # missing entire destinations. The dominant failure mode in the
+        # diagnostic was: orchestrators with pure tell/ask plans → every
+        # step auto-closed → evaluator skipped → granular grading never
+        # checked sub-items. Always run the evaluator when there's a plan;
+        # let it grade COMPLETENESS, not just status-transitions.
         try:
             prompt = build_evaluator_prompt(
                 self._definition,
@@ -378,6 +386,7 @@ class LLMObject:
                 outgoing_messages,
                 reply,
                 message,
+                tool_calls_this_turn=tool_calls_this_turn,
             )
             result, metrics = self._evaluator_brain.evaluate_call(
                 prompt, object_id=self.object_id,
@@ -558,6 +567,12 @@ class LLMObject:
         """If this is a sink and the finish lacks completion evidence, inject
         a synthesized artifact into state and augment the reply. Mutates
         pending_deltas in place; returns a (possibly new) ReactFinish.
+
+        Fires when: object is a sink role AND state has no completion marker
+        AND reply has no artifact. The previous gate also required deferral
+        language in the reply, but error analysis showed the dominant sink
+        failure mode is the sink producing an empty/non-deferral reply with
+        no work done — exactly the case the deferral gate excluded.
         """
         if not self._enable_sink_completion_shim:
             return finish
@@ -567,11 +582,6 @@ class LLMObject:
         if self._state_has_completion(merged):
             return finish
         if self._reply_has_artifact(finish.reply or ""):
-            return finish
-        # Only fire when the reply contains explicit deferral language.
-        # Avoids over-firing on legitimate mid-workflow sink turns where the
-        # model is processing correctly and would complete on its own.
-        if not self._reply_indicates_deferral(finish.reply or ""):
             return finish
         # Conditions met — synthesize and inject.
         artifact = self._synthesize_artifact()
@@ -664,6 +674,13 @@ class LLMObject:
                         planner_prompt, object_id=self.object_id,
                     )
                     plan = plan_dict_to_plan(plan_dict, trace_id=trace_id)
+                    # If the planner produced no executable steps, do NOT
+                    # synthesize a fallback — the planner.yaml mandate says
+                    # every plan must have ≥1 step; an empty result indicates
+                    # a planner bug worth surfacing, not a sink that needs
+                    # silent acknowledgement. Without a stored plan, the
+                    # executor falls back to its own definition + behavior,
+                    # which is the safer recovery path.
                     if plan.steps:
                         with self._plans_lock:
                             if trace_id is not None:
@@ -728,6 +745,11 @@ class LLMObject:
         # evaluator feedback and loop. Outgoings accumulate; final reply is
         # the last cycle's reply.
         accumulated_outgoing: list[OutgoingMessage] = []
+        # Cumulative list of tool names dispatched across all cycles within
+        # this process_message invocation. Surfaced to the evaluator so it
+        # can verify plan `tool` steps actually fired (the evaluator only
+        # sees state + outgoings otherwise — it can't see tool execution).
+        tools_called_total: list[str] = []
         final_reply = ""
         final_status: Optional[str] = None
         final_error: Optional[str] = None
@@ -736,7 +758,8 @@ class LLMObject:
         evaluator_total = InferenceMetrics(model="")
 
         while True:
-            finish, pending_deltas, react_metrics = self._run_react_cycle(messages, trace_id, origin_msg=message)
+            finish, pending_deltas, react_metrics, tools_called = self._run_react_cycle(messages, trace_id, origin_msg=message)
+            tools_called_total.extend(tools_called)
             total_metrics = _accumulate_metrics(total_metrics, react_metrics)
             executor_total = _accumulate_metrics(executor_total, react_metrics)
 
@@ -772,7 +795,11 @@ class LLMObject:
 
             self._auto_create_plan_from_outgoing(finish.outgoing_messages or [], message)
             cycle_outgoing = self._correlate_outgoing(finish.outgoing_messages, trace_id)
-            self._auto_close_plan_if_complete(trace_id)
+            # NOTE: auto-close deferred until AFTER the evaluator gets a chance
+            # to grade the plan. Early auto-close (when all tell/ask steps were
+            # auto-marked done on dispatch) deleted the plan before the
+            # evaluator could see it — diagnostic on the slim-executor run
+            # showed 67 failed events had a plan but eval skipped due to this.
 
             if finish.updated_definition:
                 self._apply_definition_update(finish.updated_definition)
@@ -784,17 +811,23 @@ class LLMObject:
             final_error = finish.error
 
             # Self-evaluation. run_evaluator returns (None, None) when the
-            # evaluator should be skipped (disabled, no plan, all steps
-            # already terminal).
+            # evaluator should be skipped (disabled, no plan, no message).
             if not self._enable_evaluator or eval_cycle >= self._evaluator_max_cycles:
+                # Evaluator disabled or cycle cap reached — auto-close now
+                # to preserve no-evaluator runtime behavior.
+                self._auto_close_plan_if_complete(trace_id)
                 break
             eval_dict, eval_metrics = self.run_evaluator(
                 accumulated_outgoing, final_reply, message,
+                tool_calls_this_turn=tools_called_total,
             )
             if eval_metrics is not None:
                 total_metrics = _accumulate_metrics(total_metrics, eval_metrics)
                 evaluator_total = _accumulate_metrics(evaluator_total, eval_metrics)
             if eval_dict is None:
+                # Evaluator legitimately skipped (no plan at all, or no
+                # message context) — auto-close to match prior behavior.
+                self._auto_close_plan_if_complete(trace_id)
                 break
 
             verdict = (eval_dict.get("verdict") or "").upper()
@@ -891,7 +924,7 @@ class LLMObject:
         messages: list[dict],
         trace_id: Optional[str] = None,
         origin_msg: "Optional[Message]" = None,
-    ) -> "tuple[ReactFinish, list[StateDelta], InferenceMetrics]":
+    ) -> "tuple[ReactFinish, list[StateDelta], InferenceMetrics, list[str]]":
         """ReAct loop with PARALLEL tool execution.
 
         Tools are conceptually Asks — the orchestrator always waits for results
@@ -905,12 +938,16 @@ class LLMObject:
         LLM's commitment, not intermediate reasoning. Updates emitted on
         action="tool_call" steps are discarded.
 
-        Returns (finish, pending_deltas_from_this_cycle, accumulated_metrics).
+        Returns (finish, pending_deltas, accumulated_metrics, tools_called):
+        tools_called is the ordered list of tool names actually dispatched
+        during this cycle, surfaced to the evaluator so it can verify that
+        plan `tool` steps were executed.
         """
         metrics = InferenceMetrics(model="")
         pending_deltas: list[StateDelta] = []
         tool_rounds = 0
         finish: ReactFinish | None = None
+        tools_called: list[str] = []
 
         while True:
             step, m = self._brain.react_call(messages, object_id=self.object_id)
@@ -953,6 +990,7 @@ class LLMObject:
             pool = self._get_tool_pool()
             futures: list[tuple] = []
             for tc in tcs:
+                tools_called.append(tc.tool)
                 try:
                     fut = pool.submit(self._execute_tool, tc, trace_id)
                     futures.append((tc, fut))
@@ -988,24 +1026,31 @@ class LLMObject:
                                + (f"\nError: {result.error}" if result.error else ""),
                 })
 
-        return finish, pending_deltas, metrics
+        return finish, pending_deltas, metrics, tools_called
 
     def _build_evaluator_feedback_text(self, criteria: list, feedback: str) -> str:
-        """Format the evaluator's diagnostics into a user-message prompt for
-        the next ReAct cycle."""
-        fail_diagnostics = [
-            f"  step[{c.get('step_index')}]: {c.get('diagnostic','')}"
-            for c in criteria
-            if isinstance(c, dict) and c.get("status") == "FAIL"
-        ]
+        """Format the evaluator's per-sub-item diagnostics into a user-message
+        prompt for the next ReAct cycle. Each FAIL names a specific missing
+        sub-item (field, destination, audit entry, etc.) so the executor can
+        target it precisely on the next turn."""
+        fail_lines: list[str] = []
+        for c in criteria:
+            if not isinstance(c, dict) or c.get("status") != "FAIL":
+                continue
+            sid = c.get("step_id") or f"step[{c.get('step_index')}]"
+            sub = c.get("sub_item") or ""
+            diag = c.get("diagnostic", "")
+            sub_str = f" — {sub}" if sub else ""
+            fail_lines.append(f"  {sid}{sub_str}: {diag}")
         return (
-            "[Evaluator feedback] Your last turn was graded against the active "
-            "plan and the verdict is FAIL.\n"
-            + ("\n".join(fail_diagnostics) if fail_diagnostics else "")
+            "[Evaluator feedback] Your last turn was graded per-sub-item against "
+            "the active plan and the verdict is FAIL. Specific gaps:\n"
+            + ("\n".join(fail_lines) if fail_lines else "")
             + (f"\n{feedback}" if feedback else "")
-            + "\n\nAddress the gaps above. Emit the missing outgoing message(s) "
-            "now; update state if relevant. If a step is no longer required, "
-            "mark it done via plan_update.step_updates with a brief reasoning."
+            + "\n\nAddress each gap above. Emit the missing outgoing field(s), "
+            "tool argument(s), or state update(s) NOW. Do not re-do work that's "
+            "already PASS. If a sub-item is legitimately not required, mark its "
+            "step done via plan_update.step_updates with a brief reasoning."
         )
 
     def _log_evaluator_event(
@@ -1056,14 +1101,27 @@ class LLMObject:
         # Shape 1: create or replace.
         if update.goal is not None and update.steps is not None:
             new_steps = []
+            auto_idx = 0
+            seen_ids: set[str] = set()
             for s in update.steps:
                 if not isinstance(s, dict):
                     continue
                 kind = _normalize_step_kind(s.get("kind", ""))
+                auto_idx += 1
+                raw_id = (s.get("id") or "").strip()
+                sid = raw_id or f"s{auto_idx}"
+                while sid in seen_ids:
+                    sid = f"{sid}_{auto_idx}"
+                seen_ids.add(sid)
+                depends_on = s.get("depends_on") or []
+                if not isinstance(depends_on, list):
+                    depends_on = []
                 new_steps.append(PlanStep(
+                    id=sid,
                     kind=kind,
                     description=s.get("description", ""),
                     target=s.get("target") if kind in ("ask", "tell", "tool") else None,
+                    depends_on=[d for d in depends_on if isinstance(d, str) and d],
                     status=s.get("status") or "planned",
                     result_summary=s.get("result_summary"),
                 ))
@@ -1094,7 +1152,9 @@ class LLMObject:
             with self._plans_lock:
                 plan = self._active_plans.get(trace_id) if trace_id is not None else None
                 if plan is None:
-                    logger.warning(
+                    # Expected for non-entry-point peers (the planner only fires
+                    # for the initial DOMAIN message). Downgrade to debug.
+                    logger.debug(
                         "Plan close for %s (trace=%s): no active plan — dropped",
                         self.object_id, trace_id,
                     )
@@ -1108,7 +1168,9 @@ class LLMObject:
         with self._plans_lock:
             plan = self._active_plans.get(trace_id) if trace_id is not None else None
             if plan is None:
-                logger.warning(
+                # Expected for non-entry-point peers (no planner fired for them).
+                # The runtime correctly drops the update; this is informational.
+                logger.debug(
                     "Plan incremental update for %s (trace=%s): no active plan — dropped",
                     self.object_id, trace_id,
                 )
@@ -1116,35 +1178,73 @@ class LLMObject:
             for su in update.step_updates or []:
                 if not isinstance(su, dict):
                     continue
-                idx = su.get("index")
-                if not isinstance(idx, int) or idx < 0 or idx >= len(plan.steps):
-                    logger.warning(
-                        "Plan update for %s: step index %r out of range (%d steps) — dropped",
-                        self.object_id, idx, len(plan.steps),
+                # Resolve the step by id (preferred, post-Phase-A) or by
+                # numeric index (legacy). The LLM may emit either after
+                # plans have stable ids in the rendered prompt.
+                step = None
+                sid = su.get("id") or su.get("step_id")
+                if isinstance(sid, str) and sid:
+                    for ps in plan.steps:
+                        if ps.id == sid:
+                            step = ps
+                            break
+                    # Position-fallback for `sN` ids when the exact match
+                    # fails. The LLM sometimes uses sequential IDs that
+                    # don't match the planner's emitted ids (gaps from
+                    # dropped `final` markers, or 0-indexed thinking).
+                    # Try `sN` → position N-1 (1-indexed, our convention),
+                    # then position N (0-indexed, what some LLMs assume).
+                    if step is None and len(sid) > 1 and sid[0] in ("s", "S"):
+                        try:
+                            n = int(sid[1:])
+                            if 1 <= n <= len(plan.steps):
+                                step = plan.steps[n - 1]
+                            elif 0 <= n < len(plan.steps):
+                                step = plan.steps[n]
+                        except ValueError:
+                            pass
+                if step is None:
+                    idx = su.get("index")
+                    if isinstance(idx, int) and 0 <= idx < len(plan.steps):
+                        step = plan.steps[idx]
+                if step is None:
+                    logger.debug(
+                        "Plan update for %s: step %r not found (%d steps) — dropped",
+                        self.object_id, sid or su.get("index"), len(plan.steps),
                     )
                     continue
-                step = plan.steps[idx]
                 status = su.get("status")
                 if status in STEP_TERMINAL_STATUSES:
                     step.status = status
                 elif status:
                     logger.warning(
-                        "Plan update for %s step[%d]: status=%r not allowed (terminal only) — ignored",
-                        self.object_id, idx, status,
+                        "Plan update for %s step[%s]: status=%r not allowed (terminal only) — ignored",
+                        self.object_id, step.id or "?", status,
                     )
                 rs = su.get("result_summary")
                 if rs is not None:
                     step.result_summary = rs
+            existing_ids = {s.id for s in plan.steps if s.id}
             for raw in update.add_steps or []:
                 if not isinstance(raw, dict):
                     continue
                 kind = _normalize_step_kind(raw.get("kind") or "")
                 if kind not in VALID_STEP_KINDS:
                     continue
+                raw_id = (raw.get("id") or "").strip()
+                sid = raw_id or f"s{len(plan.steps) + 1}"
+                while sid in existing_ids:
+                    sid = f"{sid}_{len(plan.steps) + 1}"
+                existing_ids.add(sid)
+                depends_on = raw.get("depends_on") or []
+                if not isinstance(depends_on, list):
+                    depends_on = []
                 plan.steps.append(PlanStep(
+                    id=sid,
                     kind=kind,
                     description=raw.get("description", ""),
                     target=raw.get("target") if kind in ("ask", "tell", "tool") else None,
+                    depends_on=[d for d in depends_on if isinstance(d, str) and d],
                     status=raw.get("status") or "planned",
                     result_summary=raw.get("result_summary"),
                 ))

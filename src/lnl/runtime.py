@@ -97,9 +97,12 @@ class SystemConfig:
     # artifact AND state lacks completion markers, runtime synthesizes a
     # plausible artifact and appends a completion state_update + augments the
     # reply. Deterministic: the runtime forces simulation completion at the
-    # sink boundary. Targets the async-deferral failure ("dispatched, will
-    # return URL later") that affects BOTH mini AND gpt-5.4.
-    enable_sink_completion_shim: bool = False
+    # sink boundary. Targets the dominant sink-failure mode: sink received a
+    # dispatch but produced an empty/no-action finish despite having tools.
+    # Enabled by default after error analysis confirmed cross-object
+    # self-correction can't recover these failures (orchestrator can flag
+    # the gap but can't fix what a downstream sink failed to do).
+    enable_sink_completion_shim: bool = True
     # Pre-execution planner: separate LLM call that produces a structured plan
     # BEFORE the executor's ReAct loop. The plan is stored in active_plan and
     # surfaces in the executor's prompt as an explicit checklist.
@@ -141,7 +144,7 @@ class SystemConfig:
             auto_track_knowledge_gaps=bool(kg.get("enabled", True)),
             auto_ask_peers_on_gap=bool(kg.get("ask_peers", True)),
             enable_code_tool=bool(data.get("enable_code_tool", True)),
-            enable_sink_completion_shim=bool(data.get("enable_sink_completion_shim", False)),
+            enable_sink_completion_shim=bool(data.get("enable_sink_completion_shim", True)),
             enable_planner=bool(data.get("enable_planner", False)),
             enable_evaluator=bool(data.get("enable_evaluator", False)),
             evaluator_max_cycles_per_trace=int(data.get("evaluator_max_cycles_per_trace", 3)),

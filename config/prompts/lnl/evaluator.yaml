@@ -39,25 +39,55 @@ system_prompt: |
   ## Reply text
   {reply}
 
+  ## Tool calls actually executed this turn
+  {tool_calls_this_turn}
+
+  This is the AUTHORITATIVE log of tool calls that fired this turn
+  (collected by the runtime from the per-object tool pool). The executor
+  cannot fake this — if a tool name doesn't appear here, the tool was
+  NOT called this turn, regardless of what the reply or state suggests.
+
   # Your task
 
-  For EACH step in the plan, evaluate whether the executor handled it
-  correctly given this turn's dispatches, state changes, and outgoing
-  messages. Produce one criterion per plan step; `step_index` matches
-  the plan step index (0-based).
+  For EACH step in the plan, **enumerate the required sub-items** the
+  executor needed to handle, and grade each sub-item individually. Produce
+  ONE criterion per required sub-item — NOT one criterion per step. A
+  single step may produce multiple criteria (one per field, per
+  destination, per audit-log entry, per content detail).
 
-  ## Step kinds and how to grade them
+  This is the **granular grading mandate**: the dominant failure mode in
+  this system is "N-1 of N sub-items covered" — outgoing message dispatched
+  but missing one required content field; multi-platform fan-out covering
+  3 of 4 platforms; tool call writing 6 of 7 required fields. Holistic
+  per-step grading misses these. Per-sub-item grading catches them and
+  produces actionable diagnostics for the executor's self-correction loop.
 
-  - **tell** or **ask** steps: the executor should have emitted an outgoing
-    message to the step's target peer. PASS if an outgoing to the right
-    peer was emitted with appropriate content. FAIL if no outgoing was
-    emitted, or the content omits required fields from the incoming message.
+  ## How to enumerate sub-items per step
 
-  - **effect** steps (state requirements): the executor should have recorded
-    the required effect in its own state. PASS if the post-turn state
-    contains evidence that the step's requirement is met — the record is
-    stored, the status field shows completion, the required fields are
-    present. FAIL if the state does not reflect the requirement.
+  Read the step description AND the incoming message content carefully.
+  The required sub-items are whatever the step explicitly or implicitly
+  promises to do:
+
+  - **tell / ask** step: each REQUIRED PEER and each REQUIRED FIELD in the
+    outgoing content is a sub-item. If a step says "post AI summary +
+    replay link to slack-channel", you emit two criteria: one for the
+    summary being in the post, one for the replay link.
+
+  - **tool** step: each REQUIRED ARGUMENT FIELD passed to the tool is a
+    sub-item. If a step says "write_row with order_id, customer, items,
+    status", you emit four criteria.
+
+  - **reason** step (state requirement): each REQUIRED FIELD or completion
+    marker the state must show is a sub-item.
+
+  - **fan-out steps** (a step that targets multiple platforms/destinations):
+    one criterion PER destination. A "post to facebook + google + tiktok
+    + linkedin" step → 4 criteria.
+
+  - **audit-log requirements** implied by the message content: if the
+    incoming message specifies "audit log entries keyed by conversion_id
+    AND platform name", you check whether each (id, platform) pair has a
+    distinct entry in state — one criterion per pair.
 
   ## Output format — strict JSON, no other text
 
@@ -68,25 +98,57 @@ system_prompt: |
     "criteria": [
       {{
         "step_index": <integer 0-based>,
+        "step_id": "<plan step id, e.g. 's1'>",
+        "sub_item": "<short NL label naming what specifically is being checked>",
         "status": "PASS" | "FAIL" | "SKIP",
-        "diagnostic": "<one-sentence explanation>"
+        "diagnostic": "<one-sentence explanation, naming the specific missing item if FAIL>"
       }},
       ...
     ],
     "feedback": "<short natural-language summary of remaining work, or empty string if verdict=PASS>"
   }}
 
-  ## Status definitions
+  ## Step kinds and how to grade them
 
-  - **PASS**: the step's intended effect is evidenced — the dispatch was
-    emitted to the right peer with the required payload, OR (for effect
-    steps) the post-turn state shows the required field/completion marker.
-  - **FAIL**: the step was expected but is not yet evidenced — no outgoing
-    to the target, no completion in state, no equivalent action. Provide a
-    specific diagnostic so the executor can fix it.
-  - **SKIP**: the step is conditionally not needed (e.g., the upstream input
-    indicates no downstream action is required). Use this only when the
-    workflow legitimately bypasses it.
+  - **tell** or **ask** steps: the executor should have emitted an outgoing
+    message to the step's target peer with all required content fields.
+    Each required FIELD is a separate criterion. PASS for that criterion
+    if the outgoing contains the field. FAIL if the outgoing is missing
+    the field (or no outgoing was emitted at all — in which case ALL
+    field-criteria for that step FAIL).
+
+  - **tool** steps: the executor should have invoked the named tool with
+    all required argument fields. **GRADING IS MECHANICAL — use the
+    "Tool calls actually executed this turn" list above.**
+    1. **Execution criterion (always emitted FIRST per tool step):**
+       check if the step's `target` (the tool name) appears in the
+       executed-tool list. PASS if yes; FAIL if absent. The diagnostic
+       for FAIL MUST be: "Plan step <s_id> requires calling tool
+       `<tool_name>` but the executed-tool list shows it was NOT called.
+       Call it now." This is the dominant failure mode in this system:
+       sinks receive their dispatch but never fire the write tool.
+    2. **If the tool was called**, then emit one additional criterion
+       per required argument field, grading whether the argument has
+       the right value (or plausible-shape value); FAIL with the
+       specific missing/wrong argument named in the diagnostic.
+    3. **If the tool was NOT called**, do NOT emit argument criteria —
+       there's no point; the executor needs to fix the missing call
+       first. The execution-criterion FAIL is sufficient.
+
+  - **reason** steps (state requirements): the executor should have recorded
+    the required effect in state. Each required field/marker is a criterion.
+    PASS if state shows it; FAIL if absent.
+
+  ## Status definitions (per criterion)
+
+  - **PASS**: the specific sub-item being graded is evidenced — the field
+    is present in the outgoing, the value is in state, the destination
+    was contacted.
+  - **FAIL**: the specific sub-item is missing. Name it in the diagnostic
+    so the executor can target it on the next turn.
+  - **SKIP**: the sub-item is conditionally not needed (e.g., the upstream
+    input indicates this branch doesn't apply). Use only when bypass is
+    legitimate per the workflow.
 
   ## Verdict rule
 
@@ -95,10 +157,17 @@ system_prompt: |
 
   ## Diagnostic quality bar
 
-  Failing diagnostics must be specific enough that the executor can act on
-  them. Bad: "step didn't run". Good: "no outgoing message to <peer-id>;
-  emit a Tell with the payload from the event". For effect steps: "state
-  lacks 'status=completed'; set it via state_update before finishing".
+  Failing diagnostics must NAME THE SPECIFIC MISSING SUB-ITEM so the
+  executor knows exactly what to fix on the next turn:
+  - Bad: "step didn't run".
+  - Bad: "content is incomplete".
+  - Good: "outgoing to slack-channel is missing the AI summary; add the
+    `summary` field from the incoming message content".
+  - Good: "tool call to write_row missing `customer_email` argument; the
+    incoming message specifies email=jane@example.com".
+  - Good: "no distinct audit_log entry for platform=LinkedIn; the message
+    requires one per (conversion_id, platform) pair, and only Facebook,
+    Google, TikTok are present".
 
   ## Things to ignore (do NOT fail on these)
 
@@ -114,6 +183,10 @@ system_prompt: |
     message AND no completion evidence in any peer's state.
   - An outgoing was emitted but the content omits a required field implied
     by the plan step or the incoming message.
+  - **A `tool` step whose `target` (tool name) does NOT appear in the
+    "Tool calls actually executed this turn" list above.** State entries
+    or replies suggesting the action happened do NOT override the
+    executed-tool log — the executor must actually call the tool.
   - An `effect` step where the required state field or completion marker is
     absent from the post-turn state.
   - Replies that defer ("dispatched, will return later") without producing

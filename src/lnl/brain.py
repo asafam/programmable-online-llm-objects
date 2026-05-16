@@ -322,18 +322,26 @@ def _peer_interaction_loop(pending_timeout_seconds: float, heartbeat_interval_se
 
 
 def _render_active_plan(plan: Optional[Plan]) -> str:
-    """Render the active plan for the prompt. Hides internal ids; LLM sees
-    goal, status, and steps with 0-based indices. Captured step results are
-    rendered in their native shape (NL for peer replies, JSON for tool returns)
-    so downstream steps can reference them directly without state-write hops."""
+    """Render the active plan for the prompt.
+
+    Each step is identified by its stable string id (e.g., 's1', 's2'). The LLM
+    can reference any earlier step's captured result in NL — e.g., "use the
+    URL from s2.result". Captured step results are rendered in their native
+    shape (NL for peer replies, JSON for tool returns) so downstream steps can
+    reference them directly without state-write hops.
+    """
     if plan is None:
         return "(none)"
     lines = [f"goal: {plan.goal}", f"status: {plan.status}", "steps:"]
     if not plan.steps:
         lines.append("  (empty)")
     for i, s in enumerate(plan.steps):
+        # Fall back to position-based id when the planner didn't supply one.
+        sid = s.id or f"s{i+1}"
         target = f" → {s.target}" if s.target else ""
-        lines.append(f"  [{i}] {s.kind}{target}: \"{s.description}\"  status={s.status}")
+        deps = f"  deps={s.depends_on}" if s.depends_on else ""
+        lines.append(f"  {sid}: {s.kind}{target}  status={s.status}{deps}")
+        lines.append(f"      description: \"{s.description}\"")
         if s.result is not None:
             kind_tag = f" ({s.result_kind})" if s.result_kind else ""
             if isinstance(s.result, str):
@@ -394,6 +402,7 @@ def build_evaluator_prompt(
     reply: str,
     message=None,  # the incoming Message this turn processed (context for evaluator)
     prompt_file: str = "evaluator.yaml",
+    tool_calls_this_turn: "Optional[list[str]]" = None,
 ) -> str:
     """Build the evaluator system prompt from `evaluator.yaml`.
 
@@ -424,12 +433,13 @@ def build_evaluator_prompt(
     else:
         incoming_message = "(incoming message not available)"
 
-    # Plan section — renders the active plan with step kinds and statuses.
+    # Plan section — renders the active plan with step ids, kinds and statuses.
     if plan is not None and getattr(plan, "steps", None):
         plan_steps_lines = []
         for i, s in enumerate(plan.steps):
+            sid = s.id or f"s{i+1}"
             tgt = f" → {s.target}" if s.target else ""
-            plan_steps_lines.append(f"  [{i}] {s.kind}{tgt}: {s.description}  status={s.status}")
+            plan_steps_lines.append(f"  {sid}: {s.kind}{tgt}: {s.description}  status={s.status}")
         plan_section = (
             f"Goal: {plan.goal}\n\nPlanned steps (in order):\n"
             + "\n".join(plan_steps_lines)
@@ -447,6 +457,18 @@ def build_evaluator_prompt(
     else:
         out_str = "  (none — executor emitted no outgoings this turn)"
 
+    # Tools-called-this-turn section — surfaces the actual tool execution
+    # log so the evaluator can verify that plan `tool` steps fired.
+    if tool_calls_this_turn:
+        # Render as a count-per-tool list so the evaluator can see if a
+        # tool was called multiple times (batched) vs once vs not at all.
+        from collections import Counter as _Counter
+        tc_counter = _Counter(tool_calls_this_turn)
+        tools_lines = [f"  - {name} (×{n})" for name, n in tc_counter.items()]
+        tools_str = "\n".join(tools_lines)
+    else:
+        tools_str = "  (none — no tools executed this turn)"
+
     return template.format(
         object_id=definition.object_id,
         role=definition.role,
@@ -457,6 +479,7 @@ def build_evaluator_prompt(
         current_state=state_str,
         outgoing_messages=out_str,
         reply=str(reply).strip() or "(empty)",
+        tool_calls_this_turn=tools_str,
     )
 
 
@@ -475,10 +498,16 @@ def plan_dict_to_plan(plan_dict: dict, trace_id: Optional[str] = None) -> "Plan"
     """Convert a raw plan dict (matching PLANNER_RESPONSE_SCHEMA) into a Plan
     object the runtime can use. Filters out the terminal `final` step — it's
     a planning marker, not an executable step.
+
+    Each executable step gets a stable string id (from the planner, or
+    auto-assigned as 's{n}' if missing). Ids are stable across plan updates
+    and referenced by later steps and by the evaluator's per-step criteria.
     """
     goal = plan_dict.get("goal", "")
     steps_in = plan_dict.get("steps", []) or []
     steps_out: list[PlanStep] = []
+    auto_idx = 0
+    used_ids: set[str] = set()
     for s in steps_in:
         if not isinstance(s, dict):
             continue
@@ -488,10 +517,22 @@ def plan_dict_to_plan(plan_dict: dict, trace_id: Optional[str] = None) -> "Plan"
             continue
         # ask/tell target a peer; tool targets a tool name; reason has no target
         target = s.get("target") if kind in ("ask", "tell", "tool") else None
+        # Step id: prefer planner-supplied; fall back to auto-assigned 's{n}'.
+        # Deduplicate if the planner emits collisions.
+        auto_idx += 1
+        raw_id = (s.get("id") or "").strip()
+        step_id = raw_id or f"s{auto_idx}"
+        if step_id in used_ids:
+            step_id = f"{step_id}_{auto_idx}"
+        used_ids.add(step_id)
+        depends_on_raw = s.get("depends_on") or []
+        depends_on = [d for d in depends_on_raw if isinstance(d, str) and d]
         steps_out.append(PlanStep(
+            id=step_id,
             kind=kind,
             description=s.get("description", "") or "",
             target=target,
+            depends_on=depends_on,
             status="planned",
             result_summary=None,
         ))
@@ -570,14 +611,41 @@ EVALUATOR_RESPONSE_SCHEMA: dict[str, Any] = {
         "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
         "criteria": {
             "type": "array",
+            "description": (
+                "Per-sub-item grades. ONE criterion per required sub-item "
+                "(per field, per destination, per audit-log entry, per content "
+                "detail) — NOT one per plan step. Multiple criteria MAY share "
+                "the same step_index when the step requires several sub-items."
+            ),
             "items": {
                 "type": "object",
                 "properties": {
                     "step_index": {"type": "integer", "minimum": 0},
+                    "step_id": {
+                        "type": "string",
+                        "description": "The plan step id (e.g. 's1'). Matches the rendered plan.",
+                    },
+                    "sub_item": {
+                        "type": "string",
+                        "description": (
+                            "Short NL label naming the specific thing being checked, "
+                            "e.g. 'slack notification contains AI summary', "
+                            "'airtable row has role=Designer for Jordan Mitchell', "
+                            "'audit log entry for LinkedIn platform exists'. "
+                            "Use this to disambiguate when a step has multiple sub-items."
+                        ),
+                    },
                     "status": {"type": "string", "enum": ["PASS", "FAIL", "SKIP"]},
-                    "diagnostic": {"type": "string"},
+                    "diagnostic": {
+                        "type": "string",
+                        "description": (
+                            "Failing diagnostics must be specific enough for the executor "
+                            "to fix: name the field, the missing value, the omitted destination, "
+                            "the audit-log entry not present, etc."
+                        ),
+                    },
                 },
-                "required": ["step_index", "status", "diagnostic"],
+                "required": ["step_index", "step_id", "sub_item", "status", "diagnostic"],
                 "additionalProperties": False,
             },
         },
@@ -601,13 +669,30 @@ PLANNER_RESPONSE_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": (
+                            "Stable short id for this step, e.g. 's1', 's2', 's3'. "
+                            "Used to reference this step's result from later steps' "
+                            "descriptions (e.g. 'post the URL from s2.result to Slack')."
+                        ),
+                    },
                     "step_number": {"type": "integer", "minimum": 1},
-                    "kind": {"type": "string", "enum": ["tell", "ask", "effect", "final"]},
-                    "target": {"type": "string", "description": "Declared peer id, 'self' for effect steps, or 'final'."},
+                    "kind": {"type": "string", "enum": ["tell", "ask", "tool", "reason", "effect", "final"]},
+                    "target": {"type": "string", "description": "Declared peer id (for ask/tell), tool name (for tool), 'self' (for reason), or 'final'."},
                     "description": {"type": "string"},
+                    "depends_on": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional list of step ids whose results this step uses. "
+                            "Make explicit any data flow between steps so the executor "
+                            "and evaluator can reason about it."
+                        ),
+                    },
                     "reasoning": {"type": "string"},
                 },
-                "required": ["step_number", "kind", "target", "description", "reasoning"],
+                "required": ["id", "step_number", "kind", "target", "description", "reasoning"],
                 "additionalProperties": False,
             },
         },

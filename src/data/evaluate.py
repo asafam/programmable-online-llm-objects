@@ -61,7 +61,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-15: propagate infra_error to downstream events; partial-infra TCs contribute clean events
+_VERSION: str = _build_version()  # bumped 2026-05-16: rollback to 0.7356-era state (removed dispatch shim, removed generic turn-summary fallback, restored sink shim default=True with narrow keywords)
 
 from src.data.schema import (
     EvalSummary,
@@ -1591,7 +1591,7 @@ def run(args: argparse.Namespace) -> Path:
                 max_history=getattr(args, "max_history", None),
                 tracked_harness=tracked_harness,
                 enable_code_tool=getattr(args, "code_tool", True),
-                enable_sink_completion_shim=getattr(args, "sink_shim", False),
+                enable_sink_completion_shim=getattr(args, "sink_shim", True),
                 enable_planner=getattr(args, "enable_planner", False),
                 enable_evaluator=getattr(args, "enable_evaluator", False),
                 planner_brain=planner_brain,
@@ -2186,18 +2186,18 @@ Examples:
     )
     parser.add_argument(
         "--sink-shim",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         dest="sink_shim",
-        default=False,
+        default=True,
         help=(
             "Sink Completion Shim: for objects whose role identifies them as "
             "write/notify sinks (Write Service, Storage, Notifier, Publisher), "
             "if the LLM finishes without producing an artifact (URL/ID) in its "
             "reply AND without a completion marker (status: sent/stored/...) "
             "in state, the runtime synthesizes a plausible artifact and "
-            "injects it into state + augments the reply. Targets the "
-            "async-deferral failure mode where sinks say 'dispatched, will "
-            "return later' without completing. (default: off)"
+            "injects it into state + augments the reply. Default: ENABLED — "
+            "error analysis confirmed cross-object self-correction can't "
+            "recover sink-incompletion failures. Use --no-sink-shim to disable."
         ),
     )
     parser.add_argument(
