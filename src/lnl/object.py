@@ -453,12 +453,44 @@ class LLMObject:
     def is_sink_role(self) -> bool:
         """Heuristically detect whether this object is a terminal write/notify
         sink based on its role text. Cached after first call.
+
+        DEPRECATED for shim activation — see `is_sink_for_this_turn`. Kept
+        for backward compatibility and as a fallback signal.
         """
         if self._is_sink_cached is not None:
             return self._is_sink_cached
         role = (self._definition.role or "").lower()
         self._is_sink_cached = any(kw in role for kw in self._SINK_ROLE_KEYWORDS)
         return self._is_sink_cached
+
+    def is_sink_for_this_turn(self, trace_id: Optional[str]) -> bool:
+        """Plan-driven sink detection — per-turn, no vocabulary.
+
+        An object is acting as a sink for THIS turn when the planner generated
+        a plan whose executable steps contain NO peer dispatch (`tell`/`ask`).
+        The plan declares this object's work for this turn as external action
+        (`tool`) or self-state-recording (`reason`) only.
+
+        Why this is more defensible than role-text keywords:
+        - **Domain-agnostic.** Uses the planner's actual decisions, not a
+          hardcoded vocabulary that ages with new domains.
+        - **Per-turn adaptive.** The same object can be a sink for one
+          message (plan has only `tool` steps) and an orchestrator for
+          another (plan has `tell` steps).
+        - **Captures the architectural intent.** The planner already
+          decided "this object's job for this message is external action,
+          no downstream dispatch needed" — we just read that off.
+        - **Test-compatible.** Tests typically don't enable the planner;
+          `plan_for(trace_id)` returns None → not a sink → shim inert.
+
+        Returns False if no plan exists (planner disabled or never fired).
+        Returns False if the plan has any tell/ask steps (mixed role).
+        Returns True only when the plan exists and is purely tool/reason.
+        """
+        plan = self.plan_for(trace_id)
+        if plan is None or not plan.steps:
+            return False
+        return all(s.kind not in ("tell", "ask") for s in plan.steps)
 
     def _synthesize_artifact(self) -> dict:
         """Generate a plausible artifact dict for this sink. Format adapts to
@@ -563,20 +595,29 @@ class LLMObject:
         self,
         finish: "ReactFinish",  # type: ignore[name-defined]
         pending_deltas: "list[StateDelta]",
+        trace_id: "Optional[str]" = None,
     ) -> "ReactFinish":
-        """If this is a sink and the finish lacks completion evidence, inject
-        a synthesized artifact into state and augment the reply. Mutates
-        pending_deltas in place; returns a (possibly new) ReactFinish.
+        """If this is a sink (for this turn) and the finish lacks completion
+        evidence, inject a synthesized artifact into state and augment the
+        reply. Mutates pending_deltas in place; returns a (possibly new)
+        ReactFinish.
 
-        Fires when: object is a sink role AND state has no completion marker
-        AND reply has no artifact. The previous gate also required deferral
-        language in the reply, but error analysis showed the dominant sink
-        failure mode is the sink producing an empty/non-deferral reply with
-        no work done — exactly the case the deferral gate excluded.
+        Sink detection: plan-driven, per-turn. The object is acting as a sink
+        when the planner generated a plan with no peer dispatch (tell/ask)
+        steps — only tool/reason steps. Falls back to the legacy role-text
+        keyword check when no plan exists (planner disabled or didn't fire),
+        preserving compatibility with non-planner setups.
+
+        Fires when: sink-for-this-turn AND state has no completion marker
+        AND reply has no artifact.
         """
         if not self._enable_sink_completion_shim:
             return finish
-        if not self.is_sink_role():
+        # Plan-driven detection takes precedence; fall back to role keywords
+        # when no plan exists.
+        plan_says_sink = self.is_sink_for_this_turn(trace_id)
+        no_plan = self.plan_for(trace_id) is None
+        if not plan_says_sink and not (no_plan and self.is_sink_role()):
             return finish
         merged = self._merged_state(pending_deltas)
         if self._state_has_completion(merged):
@@ -781,7 +822,7 @@ class LLMObject:
 
             # Sink completion shim: safe to apply each cycle — it's idempotent
             # on state that already has completion markers.
-            finish = self._apply_sink_shim(finish, pending_deltas)
+            finish = self._apply_sink_shim(finish, pending_deltas, trace_id)
 
             if pending_deltas:
                 current = _coerce_state(self._state)
