@@ -195,10 +195,10 @@ class PlanStep:
     updates so the LLM can rely on it. Step descriptions and the
     evaluator's grading both reference steps by id.
     """
-    kind: str                            # "ask" | "tell" | "tool" | "reason"
+    kind: str                            # "ask" | "tell" | "tool" | "reason" | "wait"
     description: str
     id: str = ""                         # stable id, e.g. "s1", "s2". Auto-filled by renderer if empty.
-    target: Optional[str] = None         # peer_id for ask/tell; tool name for tool; None for reason
+    target: Optional[str] = None         # peer_id for ask/tell; tool name for tool; None for reason/wait
     depends_on: list[str] = field(default_factory=list)  # ids of steps whose results this step references
     status: str = "planned"              # "planned" | "dispatched" | "done" | "failed" | "skipped"
     result_summary: Optional[str] = None
@@ -206,9 +206,17 @@ class PlanStep:
     # - NL string for peer replies (ask)
     # - structured dict/list/scalar for tool returns
     # - short note for reason steps (LLM-emitted at closure)
+    # - NL content of the absorbing event (wait)
     result: Optional[Any] = None
-    result_kind: Optional[str] = None    # "nl" | "tool" | "reason"
+    result_kind: Optional[str] = None    # "nl" | "tool" | "reason" | "event"
     completed_at: Optional[datetime.datetime] = None
+    # ── Wait-step fields (kind == "wait") ─────────────────────────────────────
+    # The planner emits these so the runtime can correlate a later-arriving
+    # external event back to the pending plan instead of starting a new plan.
+    wait_predicate: Optional[str] = None        # NL description of what to wait for
+    wait_source: Optional[str] = None           # expected event source/sender (soft hint)
+    wait_timeout_seconds: Optional[float] = None  # overrides the plan-level stale threshold
+    matched_event_id: Optional[str] = None      # runtime-stamped when a wait closes
 
 
 @dataclass
@@ -217,10 +225,14 @@ class Plan:
     may coexist on a single object — one per concurrent cascade."""
     goal: str
     steps: list[PlanStep] = field(default_factory=list)
-    status: str = "active"               # "active" | "complete" | "cancelled" | "abandoned" | "failed"
+    status: str = "active"               # "active" | "waiting" | "complete" | "cancelled" | "abandoned" | "failed"
     trace_id: Optional[str] = None       # cascade this plan belongs to
     created_at: datetime.datetime = field(default_factory=_utcnow)
     last_progress_at: datetime.datetime = field(default_factory=_utcnow)
+    # Secondary trace_ids absorbed via wait-step matching. plan_for() checks
+    # both the primary trace_id and this set so post-correlation lookups
+    # resolve to the absorbing plan.
+    additional_trace_ids: set[str] = field(default_factory=set)
 
 
 @dataclass

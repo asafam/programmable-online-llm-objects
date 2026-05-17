@@ -195,6 +195,57 @@ system_prompt: |
 
   {peer_interaction_loop}
 
+  ## Multi-stage workflows — emit a `wait` step when a later event is expected
+
+  Your behavior text may describe TWO trigger clauses where the second is
+  semantically a response to the first — e.g.:
+
+  > "When a new <X> arrives, ... When an <approval/decision/response/
+  > callback/confirmation/reply/webhook> arrives, ..."
+
+  Telltale words for the second trigger: **approval, rejection, approve,
+  reject, decision, callback, webhook, confirmation, reply, response,
+  completes, confirms, finishes, returns, signs, acknowledges, clicks
+  (approve/reject), responds with**.
+
+  If this pattern is present AND this turn handles the FIRST clause (you
+  just dispatched the work that will produce the awaited response), emit
+  a `wait` step via `plan_update.add_steps` to keep both halves of the
+  workflow on ONE plan. Without the wait, the awaited event arrives on a
+  separate trace, you lose access to this turn's identifiers (request id,
+  document id, order id), and the workflow fragments — exactly the bug
+  the wait mechanism exists to fix.
+
+  Shape of a wait step in `plan_update.add_steps`:
+
+  ```json
+  {{
+    "id": "s_wait",
+    "kind": "wait",
+    "description": "Wait for <second trigger> for <entity id>",
+    "depends_on": ["<id of the last first-stage step>"],
+    "wait_predicate": "<NL description including the concrete identifier the awaited event will carry, e.g. 'Approval decision for document DOC-2024-1118-002' or 'Shipping confirmation for order ORD-7821'>",
+    "wait_source": "<expected sender/peer id, e.g. 'approval-action-receiver' or 'email-gateway' — optional, soft hint>"
+  }}
+  ```
+
+  Critical rules:
+  - **Always include a concrete identifier in `wait_predicate`** — pull
+    the order/request/document id from the incoming message content or
+    from a prior step's `result`. Without it the runtime cannot safely
+    correlate the awaited event to this plan.
+  - **Emit the wait on the same turn you dispatch the first stage**
+    (don't defer to a later turn). The runtime registers the wait when
+    the turn closes; the awaited event may arrive seconds later.
+  - **The two normal exceptions where you DON'T emit a wait**: (a) the
+    later event is a peer's reply to an `ask` you sent THIS turn — the
+    runtime correlates ask/reply automatically; (b) the behavior is
+    single-clause with no later-trigger description.
+
+  Steps you add AFTER the wait (via `add_steps` on a later turn, when the
+  awaited event arrives) can reference the wait's `result` (the absorbing
+  event's content) via `depends_on`.
+
   # Response Format
 
   Each response is a single JSON object with:
@@ -223,6 +274,12 @@ system_prompt: |
     or add steps, or replace. Reference steps by their `id` from the rendered
     Active Plan. If the Active Plan shows `(none)`, do NOT emit `plan_update`
     — there is nothing to update.
+    **`add_steps` use cases**: (a) add follow-up steps you realize are
+    required as you execute; (b) **add a `wait` step** when your behavior
+    has a multi-stage pattern (see the *Multi-stage workflows* section
+    above) — `kind:"wait"` items must include `wait_predicate` (with the
+    awaited event's concrete identifier) and may include `wait_source`
+    and `wait_timeout_seconds`.
   - `updated_definition`: only on Admin messages that change your
     definition (role/behavior/peers).
 

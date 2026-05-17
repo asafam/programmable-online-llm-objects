@@ -342,6 +342,9 @@ def _render_active_plan(plan: Optional[Plan]) -> str:
         deps = f"  deps={s.depends_on}" if s.depends_on else ""
         lines.append(f"  {sid}: {s.kind}{target}  status={s.status}{deps}")
         lines.append(f"      description: \"{s.description}\"")
+        if s.kind == "wait" and s.wait_predicate:
+            src = f" (source hint: {s.wait_source})" if s.wait_source else ""
+            lines.append(f"      waiting_for: \"{s.wait_predicate}\"{src}")
         if s.result is not None:
             kind_tag = f" ({s.result_kind})" if s.result_kind else ""
             if isinstance(s.result, str):
@@ -483,7 +486,75 @@ def build_evaluator_prompt(
     )
 
 
-VALID_STEP_KINDS = ("ask", "tell", "tool", "reason")
+def build_wait_matcher_prompt(
+    object_id: str,
+    message,                   # the inbound EVENT message being matched
+    candidates: list[dict],    # see _register_wait for full entry schema
+    prompt_file: str = "wait_matcher.yaml",
+) -> str:
+    """Build the wait-matcher system prompt.
+
+    The matcher receives the inbound event and the list of pending waits on
+    this object. It must return either the id (`<trace_id>:<step_index>`) of
+    the single concretely-matching wait, or null. Ambiguous matches MUST
+    return null — silent misrouting is worse than starting a fresh plan.
+
+    Each candidate is rendered with:
+    - plan_goal / step_description / wait_predicate / expected_source —
+      what the planner said it was waiting for.
+    - originating_event — the message that triggered this plan (its
+      identifying tokens are usually what the awaited event will reference).
+    - prior_step_results — captured results from earlier plan steps (tool
+      returns, peer replies) — the richest source of correlation tokens
+      that weren't known at plan time (e.g. an order_id from a tool return).
+    """
+    config = _load_prompt_config(prompt_file)
+    template = config["system_prompt"]
+    sender = getattr(message, "sender", "(unknown)")
+    content = str(getattr(message, "content", ""))
+    if not candidates:
+        candidates_str = "(none)"
+    else:
+        lines = []
+        for c in candidates:
+            cid = f"{c.get('trace_id','')}:{c.get('step_index','')}"
+            src = c.get("wait_source") or "(any)"
+            orig_sender = c.get("originating_sender") or "(unknown)"
+            orig_content = (c.get("originating_content") or "").strip()
+            if len(orig_content) > 320:
+                orig_content = orig_content[:317] + "..."
+            prior = c.get("prior_step_results") or []
+            if prior:
+                prior_lines = []
+                for r in prior:
+                    sid = r.get("step_id", "?") or "?"
+                    kind = r.get("kind") or "?"
+                    summary = (r.get("summary") or "").strip()
+                    prior_lines.append(f"      - {sid} ({kind}): {summary}")
+                prior_block = "\n".join(prior_lines)
+            else:
+                prior_block = "      (no completed steps yet)"
+            lines.append(
+                f"- id: {cid}\n"
+                f"  plan_goal: {c.get('plan_goal','')}\n"
+                f"  step_description: {c.get('step_description','')}\n"
+                f"  wait_predicate: {c.get('wait_predicate','')}\n"
+                f"  expected_source: {src}\n"
+                f"  originating_event:\n"
+                f"      from: {orig_sender}\n"
+                f"      content: {orig_content}\n"
+                f"  prior_step_results:\n{prior_block}"
+            )
+        candidates_str = "\n".join(lines)
+    return template.format(
+        object_id=object_id,
+        event_source=sender,
+        event_content=content,
+        candidates=candidates_str,
+    )
+
+
+VALID_STEP_KINDS = ("ask", "tell", "tool", "reason", "wait")
 
 
 def _normalize_step_kind(raw: str) -> str:
@@ -515,7 +586,7 @@ def plan_dict_to_plan(plan_dict: dict, trace_id: Optional[str] = None) -> "Plan"
         if kind not in VALID_STEP_KINDS:
             # `final` marker step — drop. Auto-close handles plan completion.
             continue
-        # ask/tell target a peer; tool targets a tool name; reason has no target
+        # ask/tell target a peer; tool targets a tool name; reason/wait have no peer target
         target = s.get("target") if kind in ("ask", "tell", "tool") else None
         # Step id: prefer planner-supplied; fall back to auto-assigned 's{n}'.
         # Deduplicate if the planner emits collisions.
@@ -527,6 +598,20 @@ def plan_dict_to_plan(plan_dict: dict, trace_id: Optional[str] = None) -> "Plan"
         used_ids.add(step_id)
         depends_on_raw = s.get("depends_on") or []
         depends_on = [d for d in depends_on_raw if isinstance(d, str) and d]
+        # Wait-step fields: only attached when kind=="wait". A wait with no
+        # predicate is unmatchable, so the runtime would never close it; we
+        # tolerate that here and let the runtime's stale-sweep recover.
+        wait_predicate = None
+        wait_source = None
+        wait_timeout_seconds: Optional[float] = None
+        if kind == "wait":
+            wp = s.get("wait_predicate")
+            wait_predicate = wp.strip() if isinstance(wp, str) and wp.strip() else None
+            ws = s.get("wait_source")
+            wait_source = ws.strip() if isinstance(ws, str) and ws.strip() else None
+            wt = s.get("wait_timeout_seconds")
+            if isinstance(wt, (int, float)) and wt > 0:
+                wait_timeout_seconds = float(wt)
         steps_out.append(PlanStep(
             id=step_id,
             kind=kind,
@@ -535,6 +620,9 @@ def plan_dict_to_plan(plan_dict: dict, trace_id: Optional[str] = None) -> "Plan"
             depends_on=depends_on,
             status="planned",
             result_summary=None,
+            wait_predicate=wait_predicate,
+            wait_source=wait_source,
+            wait_timeout_seconds=wait_timeout_seconds,
         ))
     return Plan(goal=goal, steps=steps_out, status="active", trace_id=trace_id)
 
@@ -678,8 +766,8 @@ PLANNER_RESPONSE_SCHEMA: dict[str, Any] = {
                         ),
                     },
                     "step_number": {"type": "integer", "minimum": 1},
-                    "kind": {"type": "string", "enum": ["tell", "ask", "tool", "reason", "effect", "final"]},
-                    "target": {"type": "string", "description": "Declared peer id (for ask/tell), tool name (for tool), 'self' (for reason), or 'final'."},
+                    "kind": {"type": "string", "enum": ["tell", "ask", "tool", "reason", "wait", "effect", "final"]},
+                    "target": {"type": "string", "description": "Declared peer id (for ask/tell), tool name (for tool), 'self' (for reason/wait), or 'final'."},
                     "description": {"type": "string"},
                     "depends_on": {
                         "type": "array",
@@ -691,6 +779,32 @@ PLANNER_RESPONSE_SCHEMA: dict[str, Any] = {
                         ),
                     },
                     "reasoning": {"type": "string"},
+                    "wait_predicate": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "Required when kind=='wait'. Natural-language description of the "
+                            "external event being awaited, including identifying tokens "
+                            "(order id, ticket id, customer email) derivable from prior step "
+                            "results so the runtime can correlate the inbound event back to "
+                            "this plan. Omitted for non-wait steps."
+                        ),
+                    },
+                    "wait_source": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "Optional hint when kind=='wait'. The event source/sender id you "
+                            "expect the event to arrive from (e.g. 'email-gateway'). Used as "
+                            "a soft prefilter; the matcher may still consider other sources."
+                        ),
+                    },
+                    "wait_timeout_seconds": {
+                        "type": ["number", "null"],
+                        "description": (
+                            "Optional when kind=='wait'. Maximum seconds to wait before the "
+                            "step fails and the plan closes. Defaults to a long window "
+                            "(e.g. 24h) when omitted."
+                        ),
+                    },
                 },
                 "required": ["id", "step_number", "kind", "target", "description", "reasoning"],
                 "additionalProperties": False,
@@ -698,6 +812,29 @@ PLANNER_RESPONSE_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["goal", "steps"],
+    "additionalProperties": False,
+}
+
+
+WAIT_MATCHER_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "match": {
+            "type": ["string", "null"],
+            "description": (
+                "The candidate id (formatted '<trace_id>:<step_index>') of the "
+                "pending wait that this inbound event satisfies, or null when "
+                "no candidate is a concrete match. Ambiguous candidates MUST "
+                "return null rather than guess — a wrong match silently "
+                "hijacks an unrelated workflow."
+            ),
+        },
+        "reasoning": {
+            "type": "string",
+            "description": "One short sentence explaining the decision.",
+        },
+    },
+    "required": ["match", "reasoning"],
     "additionalProperties": False,
 }
 
@@ -759,6 +896,24 @@ class LLMBrain(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} does not implement evaluate_call. "
             "Use OpenAIBrain or AzureBrain, or override evaluate_call."
+        )
+
+    def match_wait_call(
+        self,
+        system_prompt: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        """One wait-matcher call: returns {'match': '<trace_id>:<step_index>' | None,
+        'reasoning': '...'} matching WAIT_MATCHER_RESPONSE_SCHEMA, plus its metrics.
+
+        Used by the runtime to decide whether an inbound EVENT should be
+        absorbed into an existing plan's pending `wait` step (rather than
+        starting a fresh plan). Subclasses override for efficiency.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement match_wait_call. "
+            "Use OpenAIBrain or AzureBrain, or override match_wait_call."
         )
 
 
@@ -930,6 +1085,41 @@ class OpenAIBrain(LLMBrain):
         if choice.finish_reason == "length":
             raise RuntimeError(
                 f"OpenAI evaluator response truncated for object {object_id}."
+            )
+        raw = _safe_json_loads(choice.message.content or "{}")
+        return raw, metrics
+
+    def match_wait_call(
+        self,
+        system_prompt: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system_prompt}],
+            "temperature": self._temperature,
+            "max_completion_tokens": 512,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "wait_match", "schema": WAIT_MATCHER_RESPONSE_SCHEMA},
+            },
+        }
+        if self._seed is not None:
+            kwargs["seed"] = self._seed
+        t0 = time.time()
+        resp = self._client.chat.completions.create(**kwargs)
+        latency_ms = (time.time() - t0) * 1000
+        metrics = InferenceMetrics(
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                f"OpenAI wait-matcher response truncated for object {object_id}."
             )
         raw = _safe_json_loads(choice.message.content or "{}")
         return raw, metrics
@@ -1131,6 +1321,45 @@ class AzureBrain(LLMBrain):
         if choice.finish_reason == "length":
             raise RuntimeError(
                 f"Azure evaluator response truncated for object {object_id}."
+            )
+        raw = _safe_json_loads(choice.message.content or "{}")
+        return raw, metrics
+
+    def match_wait_call(
+        self,
+        system_prompt: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "system", "content": system_prompt}],
+            "temperature": self._temperature,
+            "max_completion_tokens": 512,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "wait_match", "schema": WAIT_MATCHER_RESPONSE_SCHEMA},
+            },
+        }
+        if self._seed is not None:
+            kwargs["seed"] = self._seed
+        try:
+            t0 = time.time()
+            resp = self._client.chat.completions.create(**kwargs)
+            latency_ms = (time.time() - t0) * 1000
+        except Exception as exc:
+            self._raise_if_content_filter(exc, object_id)
+            raise
+        metrics = InferenceMetrics(
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                f"Azure wait-matcher response truncated for object {object_id}."
             )
         raw = _safe_json_loads(choice.message.content or "{}")
         return raw, metrics
@@ -1440,6 +1669,13 @@ class MockBrain(LLMBrain):
         self._default_response: Optional[LLMResponse] = None
         self.call_log: list[CallRecord] = []
         self._react_queue: list[tuple[ReactStep, InferenceMetrics]] = []
+        # Plan-call queue: dicts shaped per PLANNER_RESPONSE_SCHEMA.
+        # Per-object scripts take precedence over the global queue.
+        self._plan_scripts: dict[str, list[dict]] = {}
+        self._plan_queue: list[dict] = []
+        # Wait-matcher queue: list of {'match': '<trace_id>:<step_index>' | None,
+        # 'reasoning': '...'} payloads consumed in FIFO order.
+        self._wait_match_queue: list[dict] = []
 
     def script(
         self,
@@ -1501,6 +1737,47 @@ class MockBrain(LLMBrain):
             ),
             InferenceMetrics(model="mock"),
         )
+
+    def script_plan(self, plan_dict: dict, object_id: Optional[str] = None) -> None:
+        """Enqueue a scripted plan-call response (raw dict shaped per
+        PLANNER_RESPONSE_SCHEMA). When object_id is provided the script is
+        per-object FIFO; otherwise the dict goes onto the global queue."""
+        if object_id:
+            self._plan_scripts.setdefault(object_id, []).append(plan_dict)
+        else:
+            self._plan_queue.append(plan_dict)
+
+    def script_wait_match(self, match: Optional[str], reasoning: str = "") -> None:
+        """Enqueue a scripted wait-matcher response. `match` is either
+        '<trace_id>:<step_index>' or None."""
+        self._wait_match_queue.append({"match": match, "reasoning": reasoning})
+
+    def plan_call(
+        self,
+        system_prompt: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        if object_id is not None:
+            entries = self._plan_scripts.get(object_id, [])
+            if entries:
+                return entries.pop(0), InferenceMetrics(model="mock")
+        if self._plan_queue:
+            return self._plan_queue.pop(0), InferenceMetrics(model="mock")
+        # No script — let the runtime treat the planner as a no-op.
+        raise NotImplementedError("MockBrain.plan_call: no scripted plan available")
+
+    def match_wait_call(
+        self,
+        system_prompt: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        if self._wait_match_queue:
+            return self._wait_match_queue.pop(0), InferenceMetrics(model="mock")
+        # No script: behave like "no match" — safe default that exercises
+        # the fall-through path without forcing every test to script it.
+        return {"match": None, "reasoning": "mock: no script"}, InferenceMetrics(model="mock")
 
     def react_call(
         self,

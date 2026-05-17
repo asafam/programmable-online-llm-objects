@@ -46,6 +46,14 @@ system_prompt: |
   no-dispatch step (e.g., acknowledging an event that requires no
   downstream work).
 
+  Note: a fifth step kind `wait` exists for multi-stage workflows that
+  span asynchronous external events. **Do not author wait steps in this
+  initial plan** — the executor amends the plan with wait steps from
+  inside its iteration loop, where it has access to evaluator feedback
+  and can pull identifiers from prior step results. Plan the steps you'd
+  emit for the FIRST event you've been given; let the executor add the
+  wait when (and if) appropriate.
+
   ## Output format — strict JSON, no other text
 
   Respond with a single JSON object:
@@ -152,6 +160,7 @@ system_prompt: |
       "description": "Write order_id, customer_name, items, status=completed",
       "reasoning": "Behavior requires all order fields persisted via the
       write_row tool."}}`
+
 
   ## Example plan: orchestrator with two declared peers
 

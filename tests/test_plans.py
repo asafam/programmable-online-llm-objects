@@ -425,8 +425,9 @@ class TestNestedPlans:
 
 
 class TestPromptRendering:
-    def test_active_plan_rendered_without_ids(self):
-        """Active plan is rendered in the system prompt without internal ids."""
+    def test_active_plan_rendered_with_stable_ids(self):
+        """Active plan is rendered in the system prompt using the stable
+        string step ids (s1, s2, ...) the planner and executor both reference."""
         from src.lnl.brain import build_system_prompt
 
         brain = MockBrain()
@@ -452,8 +453,8 @@ class TestPromptRendering:
         )
         # Active plan rendered — goal derived from message content
         assert "Active Plan" in sys_prompt
-        # Steps rendered by index, no runtime ids.
-        assert "[0]" in sys_prompt
+        # Steps rendered with stable string ids the planner authors.
+        assert "s1:" in sys_prompt
         # Ask hr step is visible
         assert "hr" in sys_prompt
 

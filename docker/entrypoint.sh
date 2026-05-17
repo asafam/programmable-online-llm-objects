@@ -108,7 +108,7 @@ while true; do
     # launcher by exact name and fall back to the gateway child name.
     if ! kill -0 "${OC_PID}" 2>/dev/null; then
         NEW_PID=""
-        for _i in 1 2 3 4 5; do
+        for _i in $(seq 1 15); do
             sleep 2
             NEW_PID=$(pgrep -x "openclaw" 2>/dev/null | head -1 || true)
             [ -n "${NEW_PID}" ] && break
