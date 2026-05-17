@@ -117,8 +117,7 @@ class MockInProcessExecutor:
     """Mock executor for evaluation.
 
     Returns scripted responses to the calling LLM-object (FIFO, falls back to
-    ``response_template`` when exhausted) and dispatches cross-object events via
-    ``inject_event`` in the tool context.
+    ``response_template`` when exhausted).
 
     Two response modes:
       - In-process (default): the response is computed locally from
@@ -126,8 +125,6 @@ class MockInProcessExecutor:
       - Remote (``remote_url`` set): the response is served by the HTTP mock
         server — the same ``POST /tool/{method}`` path the OpenClaw baseline
         uses — so LNL and the baseline exercise an identical tool-call surface.
-        Triggers are still dispatched in-process in both modes, mirroring the
-        baseline (whose per-TC triggers never go through the server).
 
     Each call is assigned a 1-based ``call_index`` tracking position in the mock
     chain. Templates may use ``{call_index}`` alongside argument names:
@@ -193,23 +190,6 @@ class MockInProcessExecutor:
             except KeyError:
                 response_text = template
         log_entry["response"] = response_text
-
-        # Fire orchestration triggers when match conditions are satisfied.
-        # In-process in BOTH modes — mirrors the baseline, whose per-TC triggers
-        # never go through the mock server.
-        if self._matches(args):
-            inject = context.get("inject_event")
-            if inject:
-                for trigger in self._tool_def.triggers:
-                    try:
-                        msg = trigger.message_template.format(**interp_vars)
-                    except KeyError:
-                        msg = trigger.message_template
-                    inject(trigger.target_object_id, msg, trigger.source)
-                    log_entry.setdefault("triggered", []).append(
-                        {"target": trigger.target_object_id, "message": msg}
-                    )
-
         return ToolResult(id=call.id, output=response_text)
 
     def _fetch_remote(self, method: str, args: dict) -> str:
@@ -224,13 +204,6 @@ class MockInProcessExecutor:
         )
         resp.raise_for_status()
         return resp.json().get("result", "")
-
-    def _matches(self, args: dict) -> bool:
-        """Return True if all match conditions pass (empty match always passes)."""
-        for key, pattern in self._tool_def.match.items():
-            if not re.search(pattern, str(args.get(key, ""))):
-                return False
-        return True
 
     @staticmethod
     def _arg_matches(args: dict, match: dict) -> bool:

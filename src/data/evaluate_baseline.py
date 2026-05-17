@@ -26,6 +26,7 @@ import asyncio
 import concurrent.futures
 import dataclasses
 import json
+import random
 import re
 import statistics
 import sys
@@ -51,6 +52,7 @@ from src.data.schema import (
     TestCaseResult,
 )
 from src.data.mock_server import MockServer, merge_tc_mock_tools, resolve_mock_configs
+from src.data.evaluate import INTER_EVENT_TIMEOUT_S
 from src.data.utils import (
     format_tc_event_detail,
     infer_provider,
@@ -291,7 +293,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-15: sync with evaluate.py per-run-cycle summary
+_VERSION: str = _build_version()  # bumped 2026-05-17: static-timeline overhaul — removed tmap/tttmap trigger systems; all events driven in when-order; INTER_EVENT_TIMEOUT_S pinned
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
@@ -299,6 +301,17 @@ _INFRA_ERROR_PATTERNS: list[str] = [
     "pairing required",
     "network connection error",
     ": terminated",
+    # Gateway / connection failures that indicate infra problems, not eval failures
+    "gateway did not become ready",
+    "not connected. call await gw.connect",
+    "timed out connecting to ws://",
+    "gateway became unstable after config write",
+    "websocket disconnected",
+    "keepalive ping timeout",
+    "gatewaydisconnected",
+    # Generic timeout strings from websockets (TimeoutError("timed out")) and
+    # subprocess.TimeoutExpired ("Command '...' timed out after 60 seconds")
+    "timed out",
 ]
 
 def _classify_error_type(reasoning_texts: list[str]) -> Optional[str]:
@@ -429,36 +442,59 @@ async def _ensure_worker_healthy(worker: "WorkerConfig") -> bool:
     import subprocess as _sp
     import httpx as _httpx
 
-    # Quick health check — if the gateway responds, nothing to do
+    # Quick health check — HTTP *and* WebSocket must both be up.
+    # HTTP /health can return 200 while the WS server is still restarting
+    # (hot-reload cycle); if we skip the WS probe and return "healthy" here,
+    # the caller connects, gets "Not connected", and retries forever.
     ws_url = worker.gateway_url or "ws://127.0.0.1:18789"
     http_url = ws_url.replace("ws://", "http://").replace("wss://", "https://")
     health_url = f"{http_url}/health"
     try:
         r = _httpx.get(health_url, timeout=2.0)
         if r.status_code == 200:
-            return False  # healthy — no restart needed
+            ws_ok = await _probe_ws_connection(ws_url, timeout=3.0)
+            if ws_ok:
+                return False  # fully healthy — no restart needed
     except Exception:
         pass
 
-    # Gateway is down — restart the container (serialised to avoid Docker races)
+    # Gateway is down (HTTP or WS) — restart the container (serialised to avoid Docker races)
     if not worker.container_name:
         return False
     async with _restart_lock:
         # Re-check after acquiring lock (another coroutine may have fixed it)
         try:
             r = _httpx.get(health_url, timeout=2.0)
-            if r.status_code == 200:
+            if r.status_code == 200 and await _probe_ws_connection(ws_url, timeout=3.0):
                 return False
         except Exception:
             pass
         tqdm.write(f"  [{worker.name}] Gateway is down — restarting container...")
-        await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: _sp.run(
-                ["docker", "restart", worker.container_name],
-                check=True, capture_output=True, timeout=60,
-            ),
-        )
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _sp.run(
+                    ["docker", "restart", worker.container_name],
+                    check=True, capture_output=True, timeout=120,
+                ),
+            )
+        except _sp.TimeoutExpired:
+            # restart command itself timed out — force-kill and try a fresh start
+            tqdm.write(f"  [{worker.name}] docker restart timed out — force-stopping and restarting...")
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _sp.run(
+                    ["docker", "stop", "-t", "5", worker.container_name],
+                    capture_output=True,
+                ),
+            )
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _sp.run(
+                    ["docker", "start", worker.container_name],
+                    check=True, capture_output=True, timeout=30,
+                ),
+            )
 
     # Wait for mock server
     deadline = asyncio.get_event_loop().time() + 60.0
@@ -817,12 +853,23 @@ def _preregister_agents_on_workers(
     """Pre-register ALL agents on every worker by writing the config file
     to the bind-mounted data directory.
 
+    Writes one worker at a time and waits for each gateway to complete its
+    hot-reload before writing the next.  This staggers the reload cycle so
+    workers never crash simultaneously (the entrypoint PID-tracking bug
+    kills the container if a hot-reload fires while the process is still
+    settling from a previous one).
+
     Also cleans up stale ``.bak`` / ``.clobbered`` files that cause the
-    gateway's "Config observe anomaly" warning (it compares the new config
-    size against the largest backup it finds on disk).
+    gateway's "Config observe anomaly" warning.
     """
     import time as _time
     import httpx as _httpx
+
+    n_agents = len(all_object_ids) + (1 if single_agent_id else 0)
+    print(
+        f"Pre-registering {n_agents} agents on {len(workers)} workers (staggered)...",
+        flush=True,
+    )
 
     for w in workers:
         # Remove stale backup files to prevent "size-drop-vs-last-good" anomaly
@@ -833,21 +880,43 @@ def _preregister_agents_on_workers(
 
         _write_worker_config(w, all_object_ids, provider, model, single_agent_id)
 
-    # Wait for all gateways to pick up the new config (file watcher).
-    _time.sleep(3)
-    for w in workers:
+        # Wait for this worker's gateway to complete its hot-reload (HTTP + WS
+        # stable for 3s) before writing the next worker.  Prevents the
+        # thundering-herd crash when all N containers reload simultaneously.
         ws_url = w.gateway_url or "ws://127.0.0.1:18789"
-        health_url = ws_url.replace("ws://", "http://") + "/health"
-        deadline = _time.monotonic() + 30.0
+        http_url = ws_url.replace("ws://", "http://").replace("wss://", "https://")
+        health_url = f"{http_url}/health"
+        deadline = _time.monotonic() + 60.0
+        stable_since: Optional[float] = None
         while _time.monotonic() < deadline:
+            http_ok = False
+            ws_ok = False
             try:
                 r = _httpx.get(health_url, timeout=1.0)
-                if r.status_code == 200:
-                    break
+                http_ok = r.status_code == 200
             except Exception:
                 pass
+            if http_ok:
+                try:
+                    from websockets.sync.client import connect as _ws_connect_sync
+                    with _ws_connect_sync(ws_url, open_timeout=2.0):
+                        pass
+                    ws_ok = True
+                except Exception:
+                    pass
+            if http_ok and ws_ok:
+                if stable_since is None:
+                    stable_since = _time.monotonic()
+                if _time.monotonic() - stable_since >= 8.0:
+                    break
+            else:
+                stable_since = None
             _time.sleep(0.5)
-        print(f"  [{w.name}] Ready.", flush=True)
+        else:
+            raise RuntimeError(
+                f"[{w.name}] Gateway did not stabilise within 60s after pre-registration"
+            )
+        print(f"  [{w.name}] Ready ({n_agents} agents).", flush=True)
 
 
 async def _wait_for_gateway_restart(
@@ -897,24 +966,39 @@ async def _wait_for_gateway_restart(
     await _wait_for_gateway(gateway_url, openclaw_home, timeout_s=ready_timeout_s, stable_for_s=stable_for_s)
 
 
+async def _probe_ws_connection(ws_url: str, timeout: float = 3.0) -> bool:
+    """Return True if the WebSocket server is accepting connections right now.
+
+    The HTTP /health endpoint and the WebSocket server can be out of sync during
+    hot-reloads: HTTP returns 200 while the WS server is still restarting.  A
+    raw WS connect (without auth) confirms the server is actually accepting TCP
+    upgrade requests at this instant.
+    """
+    try:
+        from websockets.asyncio.client import connect as _ws_connect
+        async with asyncio.timeout(timeout):
+            conn = await _ws_connect(ws_url)
+            await conn.close()
+        return True
+    except Exception:
+        return False
+
+
 async def _wait_for_gateway(
     gateway_url: Optional[str] = None,
     openclaw_home: Optional[Path] = None,
     timeout_s: float = 30.0,
     stable_for_s: float = 0.0,
 ) -> None:
-    """Poll until the gateway accepts a connection, then return.
+    """Poll until the gateway accepts HTTP *and* WebSocket connections, then return.
 
-    If stable_for_s > 0, the gateway must remain reachable for that many
-    consecutive seconds before this function returns.  This prevents declaring
-    the gateway "ready" during a brief lull between two hot-reload cycles.
+    If stable_for_s > 0, both must remain reachable for that many consecutive
+    seconds before this function returns.  This prevents declaring the gateway
+    "ready" during a brief lull between two hot-reload cycles.
 
-    Uses a simple HTTP health check instead of the SDK's WebSocket connection.
-    The SDK's ``_connect_with_backoff`` retries indefinitely with exponential
-    backoff, which masks brief connection drops — the stability timer never
-    resets because the SDK reconnects internally before raising an exception.
-    A raw HTTP GET to ``/health`` fails fast (1s timeout), so each probe
-    accurately reflects whether the gateway is up *at that instant*.
+    HTTP /health confirms the process is up; a raw WebSocket probe confirms the
+    WS server is actually accepting connections — the two can be out of sync
+    during hot-reloads (HTTP stays up while WS server restarts).
 
     Raises:
         asyncio.TimeoutError: if the gateway does not respond within timeout_s.
@@ -930,19 +1014,24 @@ async def _wait_for_gateway(
     deadline = _time.monotonic() + timeout_s
     stable_since: Optional[float] = None
     while _time.monotonic() < deadline:
+        http_ok = False
+        ws_ok = False
         try:
             r = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: _httpx.get(health_url, timeout=1.0)
             )
-            if r.status_code == 200:
-                if stable_since is None:
-                    stable_since = _time.monotonic()
-                if stable_for_s <= 0.0 or (_time.monotonic() - stable_since) >= stable_for_s:
-                    return  # gateway is up (and stable long enough)
-            else:
-                stable_since = None
+            http_ok = r.status_code == 200
         except Exception:
-            stable_since = None  # reset stability timer on any connection failure
+            pass
+        if http_ok:
+            ws_ok = await _probe_ws_connection(ws_url, timeout=2.0)
+        if http_ok and ws_ok:
+            if stable_since is None:
+                stable_since = _time.monotonic()
+            if stable_for_s <= 0.0 or (_time.monotonic() - stable_since) >= stable_for_s:
+                return  # gateway is up (and stable long enough)
+        else:
+            stable_since = None
         await asyncio.sleep(0.5)
     raise asyncio.TimeoutError(
         f"OpenClaw gateway did not become ready within {timeout_s:.0f}s"
@@ -1155,6 +1244,7 @@ async def _execute_tc_async(
     concurrency_seed: int = 42,
     tracked_harness=None,
     thinking: Optional[str] = None,
+    sequential: bool = False,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Async core: open persistent sessions for ALL agents simultaneously, then send messages.
 
@@ -1169,6 +1259,7 @@ async def _execute_tc_async(
     """
     from openclaw_sdk import OpenClawClient
     from openclaw_sdk.core.config import ExecutionOptions
+    from openclaw_sdk.core.exceptions import GatewayError as _OcGatewayError
     from src.lnl.openclaw_export import rewrite_agents_md
 
     _oc_thinking = {"disabled": "off", "enabled": "enabled"}.get(thinking, thinking) if thinking else None
@@ -1186,15 +1277,6 @@ async def _execute_tc_async(
     # via state.md files; session conversation history does NOT carry over.
     # run_session_name is unused in multi-agent mode — see _make_event_handles().
     run_session_name = None
-
-    # Build trigger map: event_id → list of triggered events (test-case schema)
-    trigger_map: dict[str, list[Any]] = {}
-    for evt in tc.events:
-        if evt.triggered_by:
-            trigger_map.setdefault(evt.triggered_by, []).append(evt)
-
-    # Build tool trigger map for in-process trigger dispatch (mirrors evaluate.py)
-    tool_trigger_map = {t.tool_name: t for t in tc.mock_tools if t.triggers}
 
     # Build ordered message list (identical logic to the old sync version)
     messages: list[dict[str, Any]] = []
@@ -1222,10 +1304,9 @@ async def _execute_tc_async(
     for mod in active_mods:
         timeline.append((parse_when(mod.when), "mod", mod))
     for evt in tc.events:
-        if evt.triggered_by is None:
-            if all(mid in allowed_mod_ids for mid in (evt.after_mod_ids or [])):
-                if not evt.concurrent_group or event_concurrency == 0:
-                    timeline.append((parse_when(evt.when), "event", evt))
+        if all(mid in allowed_mod_ids for mid in (evt.after_mod_ids or [])):
+            if not evt.concurrent_group or event_concurrency == 0:
+                timeline.append((parse_when(evt.when), "event", evt))
     timeline.sort(key=lambda x: x[0])
 
     for _, kind, item in timeline:
@@ -1243,13 +1324,6 @@ async def _execute_tc_async(
                 "target": item.recipient,
                 "content": f"[Event from {item.source} at {item.when}]: {item.input}",
             })
-            for triggered in trigger_map.get(item.id, []):
-                messages.append({
-                    "kind": "event",
-                    "item": triggered,
-                    "target": triggered.recipient,
-                    "content": f"[Event from {triggered.source} (triggered by {item.id})]: {triggered.input}",
-                })
 
     event_results: list[EventResult] = partial_events if partial_events is not None else []
     mod_results: list[ModificationResult] = partial_mods if partial_mods is not None else []
@@ -1305,7 +1379,21 @@ async def _execute_tc_async(
         return ev_handles, ev_session_names
 
     # ── One persistent connection for the whole TC run ────────────────────────
-    async with await OpenClawClient.connect(**_openclaw_connect_kwargs(gateway_url, openclaw_home)) as client:
+    # Bound connect time: the SDK's _connect_with_backoff retries ConnectionRefusedError
+    # indefinitely (up to 30s between attempts), so if the gateway is down it can hang
+    # for hundreds of seconds before the 900s wall-clock timeout fires.  A 30s limit
+    # here causes a fast GatewayError → caught by the gateway retry loop → _ensure_worker_healthy.
+    _connect_timeout_s = 30.0
+    try:
+        _oc_client = await asyncio.wait_for(
+            OpenClawClient.connect(**_openclaw_connect_kwargs(gateway_url, openclaw_home)),
+            timeout=_connect_timeout_s,
+        )
+    except asyncio.TimeoutError:
+        raise _OcGatewayError(
+            f"OpenClaw client did not connect within {_connect_timeout_s:.0f}s (gateway may be reloading)"
+        )
+    async with _oc_client as client:
 
         # Single-agent: one session for the whole run (no per-event refresh needed).
         if single_agent_id:
@@ -1327,13 +1415,15 @@ async def _execute_tc_async(
                 batch = rng.sample(group, event_concurrency)
 
             async def _one(evt):
-                # Each event gets its own independent session so OpenClaw receives
-                # N truly concurrent requests rather than serializing them within
-                # a shared session.
                 if not single_agent_id:
+                    # Multi-agent: fresh session per event for true concurrency.
                     evt_handles, _ = await _make_event_handles(client)
                 else:
-                    evt_handles = handles
+                    # Single-agent: fresh session per concurrent event so parallel
+                    # calls don't race on a shared WebSocket connection.
+                    OpenClawAgent._global_counter += 1
+                    sname = f"eval-{single_agent_id}-{OpenClawAgent._global_counter}"
+                    evt_handles = {single_agent_id: client.get_agent(single_agent_id, session_name=sname)}
                 lookup = single_agent_id or evt.recipient
                 h = evt_handles.get(lookup)
                 if h is None:
@@ -1347,16 +1437,16 @@ async def _execute_tc_async(
                     return evt, exc, (time.time() - t_evt) * 1000
 
             t0 = time.time()
-            if single_agent_id:
-                # Single-agent uses one shared session — concurrent calls race on it
-                # and drop the connection. Run sequentially instead.
-                pairs = [await _one(e) for e in batch]
+            if sequential:
+                pairs = []
+                for e in batch:
+                    pairs.append(await _one(e))
             else:
                 pairs = await asyncio.gather(*[_one(e) for e in batch])
             lat_ms = (time.time() - t0) * 1000
 
             if mock_server:
-                await _wait_mock_quiescence(mock_server, max_wait_s=60.0, quiet_s=3.0,
+                await _wait_mock_quiescence(mock_server, max_wait_s=INTER_EVENT_TIMEOUT_S, quiet_s=3.0,
                                             slot_id=slot_suffix or "default")
                 batch_tool_calls = mock_server.get_log(slot_id=slot_suffix or "default")
             else:
@@ -1479,7 +1569,7 @@ async def _execute_tc_async(
                     # Multi-agent: wait for any agentToAgent cascade to complete.
                     # With sessions_send(timeout=300s) per hop, cascades can still
                     # be running after execute() returns — give them extra time.
-                    await _wait_mock_quiescence(mock_server, max_wait_s=30.0, quiet_s=3.0,
+                    await _wait_mock_quiescence(mock_server, max_wait_s=INTER_EVENT_TIMEOUT_S, quiet_s=3.0,
                                                 slot_id=slot_suffix or "default")
                 event_tool_calls = mock_server.get_log(slot_id=slot_suffix or "default")
                 _mock_tool_calls = len(event_tool_calls)
@@ -1491,51 +1581,6 @@ async def _execute_tc_async(
             # result.token_usage which only covers the entry-point session.
             tok_snap_after = await _snapshot_session_tokens(client.gateway)
             _agent_in_tok, _agent_out_tok = _delta_tokens(tok_snap_before, tok_snap_after)
-
-            if mock_server:
-                # In-process triggers: dispatch tool-triggered messages directly
-                # (mirrors MockInProcessExecutor in evaluate.py)
-                for call in list(event_tool_calls):
-                    if call.get("is_callback") or call.get("is_orchestration"):
-                        continue
-                    tool_def = tool_trigger_map.get(call["method"])
-                    if tool_def is None:
-                        continue
-                    if not _tool_call_matches(tool_def.match, call.get("args", {})):
-                        continue
-                    for trigger in tool_def.triggers:
-                        tgt_id = trigger.target_object_id
-                        tgt_lookup = single_agent_id if single_agent_id else tgt_id
-                        tgt_handle = handles.get(tgt_lookup)
-                        if tgt_handle is None:
-                            if verbose:
-                                tqdm.write(f"  Warning: trigger target {tgt_id!r} not in handles, skipping")
-                            continue
-                        if mock_server:
-                            tgt_sname = session_names[tgt_lookup]
-                            tgt_agent_id_for_key = f"{tgt_lookup}{slot_suffix}" if not single_agent_id else tgt_lookup
-                            tgt_mock_key = f"agent:{tgt_agent_id_for_key}:{tgt_sname}"
-                            mock_server.configure(tgt_mock_key, slot_id=slot_suffix or "default")
-                        try:
-                            trigger_msg = trigger.message_template.format(**call.get("args", {}))
-                        except KeyError as _ke:
-                            import logging as _logging
-                            _logging.getLogger(__name__).warning(
-                                "Tool trigger key missing: %s  tool=%s  template=%r  args=%s",
-                                _ke, call["method"], trigger.message_template, call.get("args", {})
-                            )
-                            trigger_msg = trigger.message_template
-                        triggered_content = f"[Event from {trigger.source}]: {trigger_msg}"
-                        if verbose:
-                            tqdm.write(f"  [TRIGGER→{tgt_id}] {triggered_content[:120]}")
-                        await tgt_handle.execute(triggered_content, options=_exec_opts)
-                        if single_agent_id:
-                            await asyncio.sleep(0.3)
-                        else:
-                            await _wait_mock_quiescence(mock_server, max_wait_s=5.0, quiet_s=0.5,
-                                                        slot_id=slot_suffix or "default")
-                        trigger_calls = mock_server.get_log(slot_id=slot_suffix or "default")
-                        event_tool_calls.extend(trigger_calls)
 
             # Read post-execution state(s)
             # Quiescence ensures the cascade is complete; state.md is written synchronously
@@ -1658,6 +1703,7 @@ def _execute_test_case_inner(
     concurrency_seed: int = 42,
     tracked_harness=None,
     thinking: Optional[str] = None,
+    sequential: bool = False,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Sync wrapper: delegate to _execute_tc_async with persistent multi-agent sessions."""
     gateway_url = next(iter(agents.values()))._gateway_url if agents else None
@@ -1671,6 +1717,7 @@ def _execute_test_case_inner(
         concurrency_seed=concurrency_seed,
         tracked_harness=tracked_harness,
         thinking=thinking,
+        sequential=sequential,
     ))
 
 
@@ -1690,6 +1737,7 @@ def execute_test_case(
     concurrency_seed: int = 42,
     tracked_harness=None,
     thinking: Optional[str] = None,
+    sequential: bool = False,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase with an optional wall-clock timeout."""
     if timeout_s is None:
@@ -1702,7 +1750,8 @@ def execute_test_case(
                                         event_concurrency=event_concurrency,
                                         concurrency_seed=concurrency_seed,
                                         tracked_harness=tracked_harness,
-                                        thinking=thinking)
+                                        thinking=thinking,
+                                        sequential=sequential)
 
     partial_events: list[EventResult] = []
     partial_mods: list[ModificationResult] = []
@@ -1713,6 +1762,7 @@ def execute_test_case(
             harness, mock_server, verbose, steps_only, single_agent_id,
             partial_events, partial_mods, slot_suffix, max_modifications,
             event_concurrency, concurrency_seed, tracked_harness, thinking,
+            sequential,
         )
         try:
             return future.result(timeout=timeout_s)
@@ -2080,24 +2130,34 @@ async def _run_all_tcs_concurrent(
                         if workers:
                             was_restarted = await _ensure_worker_healthy(worker)
                             if was_restarted:
+                                # Container restart wipes openclaw.json — clear the
+                                # export cache so the per-TC config write below fires.
                                 seen_exports_per_slot[slot].clear()
-                                # Container restart wipes agent config — the export
-                                # block below will re-write it for the current sample.
+                            elif _gateway_attempt > 0:
+                                # Retry after a connection error: wait for true stability.
+                                await _wait_for_gateway(
+                                    slot_gateway_url, None,
+                                    timeout_s=30.0, stable_for_s=5.0,
+                                )
                             _clear_worker_state(tc.objects, slot_openclaw_home, single_agent_id)
 
-                        # ── Export + configure (pool mode: per-sample lazy) ──
-                        # When the sample changes, export workspace files AND
-                        # write a fresh config with only this sample's agents.
-                        # Keeping the agent list small avoids gateway slowdowns
-                        # from routing across hundreds of registered agents.
+                        # ── Export workspace files + write config (pool mode: per-sample) ──
+                        # When the sample changes, export workspace files and write a
+                        # fresh config with only this sample's agents (2-3 IDs).  Keeping
+                        # the agent list small ensures hot-reload restarts finish quickly
+                        # (well within the entrypoint's 12s PID-tracking window).
                         if workers and tc.sample_id not in seen_exports_per_slot[slot]:
+                            # Stagger first config write per slot so all N workers don't
+                            # hot-reload simultaneously on TC001.  Only needed when the
+                            # slot cache is empty (fresh start or post-restart).
+                            if not seen_exports_per_slot[slot]:
+                                await asyncio.sleep(slot * 2.0)
                             if single_agent_id:
                                 export_single_agent_workspace(tc.objects, slot_openclaw_home,
                                                               agent_id=single_agent_id, force=True)
                             else:
                                 export_workflow_from_objects(tc.objects, slot_openclaw_home,
                                                              force=True, write_config=False)
-                            # Write config with just this sample's agents
                             tc_agent_ids = {obj.object_id for obj in tc.objects}
                             if single_agent_id:
                                 tc_agent_ids = {single_agent_id}
@@ -2107,12 +2167,14 @@ async def _run_all_tcs_concurrent(
                                 worker, tc_agent_ids, _provider, _model, single_agent_id,
                                 verbose=False, preserve_a2a_allow=True,
                             )
-                            await asyncio.sleep(3)  # file watcher pickup
+                            await _wait_for_gateway_restart(
+                                slot_gateway_url, None,
+                                drop_timeout_s=15.0,
+                                ready_timeout_s=45.0,
+                                stable_for_s=5.0,
+                            )
                             # Delete BOOTSTRAP.md so the gateway doesn't run its
-                            # onboarding flow (which overrides SOUL.md and makes
-                            # agents respond "Hey, who am I?" instead of executing).
-                            # The gateway auto-creates this file for new workspaces;
-                            # our SOUL.md already encodes identity and behavior.
+                            # onboarding flow (which overrides SOUL.md).
                             for _obj in tc.objects:
                                 _bs = slot_openclaw_home / f"workspace-{_obj.object_id}{slot_suffix}" / "BOOTSTRAP.md"
                                 _bs.unlink(missing_ok=True)
@@ -2183,10 +2245,11 @@ async def _run_all_tcs_concurrent(
                                     _partial_ev, _partial_mod,
                                     slot_suffix=slot_suffix,
                                     max_modifications=getattr(args, "modifications", None),
-                                    event_concurrency=getattr(args, "concurrency", 0),
+                                    event_concurrency=getattr(args, "concurrency", None) or getattr(args, "sequential", None) or 0,
                                     concurrency_seed=getattr(args, "seed", None) or 42,
                                     tracked_harness=tracked_harness,
                                     thinking=getattr(args, "thinking", None),
+                                    sequential=bool(getattr(args, "sequential", None)),
                                 )
                                 if tc_timeout:
                                     event_results, mod_results = await asyncio.wait_for(coro, timeout=tc_timeout)
@@ -2657,6 +2720,13 @@ def run(args: argparse.Namespace) -> Path:
             if r.error_type == "timeout":
                 timeout_rerun_count += 1
                 continue  # exclude from completed → will be re-run with higher timeout
+            # Re-classify TCs saved with error_type=None but infra-matching reasoning.
+            # Handles results written before the current _INFRA_ERROR_PATTERNS were in place.
+            if r.error_type is None:
+                _re = _classify_error_type([e.reasoning or "" for e in (r.events or [])])
+                if _re == "infra":
+                    infra_rerun_count += 1
+                    continue
             completed.add((r.tc_index, r.run_index))
             all_tc_results.append(r)
         if completed:
@@ -2711,7 +2781,9 @@ def run(args: argparse.Namespace) -> Path:
           if workers:
             # ── Pool mode: clean stale backups, then dispatch ─────────────
             # Agent config is written per-sample in the TC loop (via
-            # _write_worker_config) — not pre-registered upfront.
+            # _write_worker_config) — not pre-registered upfront.  Writing
+            # only this TC's 2-3 agents keeps the config small so hot-reload
+            # restarts complete well within the entrypoint's 12s PID window.
             # Clean stale .bak files to avoid "Config observe anomaly".
             for w in workers:
                 for bak in w.data_dir.glob("openclaw.json.bak*"):
@@ -2993,10 +3065,15 @@ Examples:
                         help="Number of TCs to run concurrently (default: 1). "
                              "N>1 requires --multi-agent. Each concurrent slot gets isolated "
                              "workspace dirs (workspace-{id}-cN) and session names.")
-    parser.add_argument("--concurrency", type=int, default=0, metavar="N",
-                        help="Fire N events per concurrent group simultaneously (default: 0 = sequential). "
+    conc_group = parser.add_mutually_exclusive_group()
+    conc_group.add_argument("--concurrency", type=int, default=None, metavar="N",
+                        help="Fire N events per concurrent group in parallel. "
                              "Mirrors --concurrency in evaluate.py: same stress test, same semantics, "
                              "applied to OpenClaw. Requires TCs generated with --concurrent-events.")
+    conc_group.add_argument("--sequential", type=int, default=None, metavar="N",
+                        help="Fire N events per concurrent group one at a time (sequential dispatch). "
+                             "Mutually exclusive with --concurrency. "
+                             "Requires TCs generated with --concurrent-events.")
     parser.add_argument("--modifications", type=int, default=None, metavar="N",
                         help="Limit evaluation to the first N modifications per test case (default: all). "
                              "Events whose after_mod_ids reference mods beyond N are skipped. "

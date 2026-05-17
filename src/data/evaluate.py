@@ -33,6 +33,12 @@ import yaml
 from dotenv import load_dotenv
 from tqdm import tqdm
 
+# Maximum seconds the evaluator waits for the system to finish processing one event
+# before injecting the next. Applied identically to LNL (per-event timeout) and
+# OpenClaw (quiescence max_wait_s). Pinned so both systems are measured under the
+# same conditions.
+INTER_EVENT_TIMEOUT_S: float = 30.0
+
 load_dotenv()
 
 # ── Version ───────────────────────────────────────────────────────────────────
@@ -61,7 +67,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-16: rollback to 0.7356-era state (removed dispatch shim, removed generic turn-summary fallback, restored sink shim default=True with narrow keywords)
+_VERSION: str = _build_version()  # bumped 2026-05-17: static-timeline overhaul — removed tmap/tttmap trigger systems; all events driven in when-order; INTER_EVENT_TIMEOUT_S constant
 
 from src.data.schema import (
     EvalSummary,
@@ -207,15 +213,6 @@ def _restore_snapshot(rt, mock_executors: list, snapshot: StepsSnapshot) -> None
         if name is not None and name in snapshot.tool_call_counts:
             ex._call_count = snapshot.tool_call_counts[name]
             ex.call_log = list(snapshot.tool_call_logs.get(name, []))
-
-
-def _build_trigger_map(tc: "TestCase") -> "dict[str, list]":
-    """Build a map from event_id → list of events triggered by that event."""
-    trigger_map: dict[str, list] = {}
-    for event in tc.events:
-        if event.triggered_by:
-            trigger_map.setdefault(event.triggered_by, []).append(event)
-    return trigger_map
 
 
 # ── Timestamp parsing ──────────────────────────────────────────────────────────
@@ -387,14 +384,14 @@ def _execute_test_case_inner(
     concurrency: int = 0,
     concurrency_seed: int = 42,
     max_modifications: Optional[int] = None,
-    object_prompt: str = "object.yaml",
+    object_prompt: str = "executor.yaml",
     planner_prompt: str = "planner.yaml",
     max_history: Optional[int] = None,
     tracked_harness=None,
     enable_code_tool: bool = True,
     enable_sink_completion_shim: bool = False,
-    enable_planner: bool = False,
-    enable_evaluator: bool = False,
+    enable_planner: bool = True,
+    enable_evaluator: bool = True,
     planner_brain=None,
     evaluator_brain=None,
     mock_server_url: "str | None" = None,
@@ -494,7 +491,6 @@ def _execute_test_case_inner(
     for obj_def in tc.objects:
         rt.create_object(to_lnl_definition(obj_def))
 
-    trigger_map = _build_trigger_map(tc)
     try:
         return _run_test_case_timeline(
             tc, rt, gw, harness,
@@ -503,7 +499,6 @@ def _execute_test_case_inner(
             mock_executors=mock_executors + [passthrough] if final_mock_tools else [],
             steps_snapshot=steps_snapshot,
             snapshot_out=snapshot_out,
-            trigger_map=trigger_map,
             on_event_result=on_event_result,
             on_mod_applied=on_mod_applied,
             concurrency=concurrency,
@@ -603,7 +598,6 @@ def _run_test_case_timeline(
     timeout_s: Optional[float] = None,
     steps_only: bool = False,
     mock_executors: "list | None" = None,
-    trigger_map: "dict[str, list] | None" = None,
     on_event_result=None,   # callable(EventResult, is_step: bool)
     on_mod_applied=None,    # callable(Modification)
     steps_snapshot: "Optional[StepsSnapshot]" = None,   # restore from this; skip step execution
@@ -714,8 +708,6 @@ def _run_test_case_timeline(
     if steps_only:
         return event_results, mod_results
 
-    tmap = trigger_map or {}
-
     # Apply --modifications N: limit to first N modifications and filter events.
     active_mods = tc.modifications[:max_modifications] if max_modifications is not None else tc.modifications
     allowed_mod_ids: set[str] = {m.id for m in active_mods}
@@ -736,13 +728,13 @@ def _run_test_case_timeline(
                 concurrent_event_ids.add(evt.id)
 
     # 3. Build sorted timeline: tag each item with its type and when-ordinal.
-    # Triggered events and concurrent-group events are excluded from the main
-    # timeline ordering — they are dispatched via their own mechanisms.
+    # Concurrent-group events are excluded from the main timeline — dispatched as batches.
+    # All other events (including those with triggered_by) are placed in the static timeline.
     timeline: list[tuple[int, str, object]] = []
     for mod in active_mods:
         timeline.append((parse_when(mod.when), "mod", mod))
     for evt in tc.events:
-        if evt.triggered_by is None and evt.id not in concurrent_event_ids and _event_in_scope(evt):
+        if evt.id not in concurrent_event_ids and _event_in_scope(evt):
             timeline.append((parse_when(evt.when), "event", evt))
     timeline.sort(key=lambda x: x[0])
 
@@ -770,6 +762,7 @@ def _run_test_case_timeline(
                              _planner_in_tok: int = None, _planner_out_tok: int = None,
                              _executor_in_tok: int = None, _executor_out_tok: int = None,
                              _evaluator_in_tok: int = None, _evaluator_out_tok: int = None):
+        nonlocal tc_had_infra_error
         if evt.expect is None:
             return  # background event — no judgment
         active_harness = (
@@ -972,16 +965,6 @@ def _run_test_case_timeline(
                     on_event_result(event_results[-1], False)
             prior_context = _format_prior_state(rt)
 
-            # Dispatch events triggered by this one (in declaration order)
-            for triggered_evt in tmap.get(item.id, []):
-                tr, tt, tl, tls, tes = _dispatch_event(triggered_evt)
-                if triggered_evt.expect is not None:
-                    tctx = _build_event_ctx(triggered_evt, active_mods, prior_context)
-                    _record_event_result(triggered_evt, tr, tt, tl, tls, tes, tctx)
-                    if on_event_result:
-                        on_event_result(event_results[-1], False)
-                prior_context = _format_prior_state(rt)
-
     return event_results, mod_results
 
 
@@ -989,7 +972,7 @@ def execute_test_case(
     tc: TestCase,
     brain,
     harness,
-    timeout_s: Optional[float] = None,
+    timeout_s: Optional[float] = INTER_EVENT_TIMEOUT_S,
     debug_messages: bool = False,
     steps_only: bool = False,
     max_chain_depth: int = 20,
@@ -1003,14 +986,14 @@ def execute_test_case(
     concurrency: int = 0,
     concurrency_seed: int = 42,
     max_modifications: Optional[int] = None,
-    object_prompt: str = "object.yaml",
+    object_prompt: str = "executor.yaml",
     planner_prompt: str = "planner.yaml",
     max_history: Optional[int] = None,
     tracked_harness=None,
     enable_code_tool: bool = True,
     enable_sink_completion_shim: bool = False,
-    enable_planner: bool = False,
-    enable_evaluator: bool = False,
+    enable_planner: bool = True,
+    enable_evaluator: bool = True,
     planner_brain=None,
     evaluator_brain=None,
     mock_server_url: "str | None" = None,
@@ -1320,16 +1303,16 @@ def run(args: argparse.Namespace) -> Path:
             f"{p}/{m}" for p, m in parsed_judges
         )
 
-    object_prompt = getattr(args, "object_prompt", "object.yaml")
-    # Planner line — only shown when --enable-planner is set; otherwise "(disabled)".
-    if getattr(args, "enable_planner", False):
+    object_prompt = getattr(args, "object_prompt", "executor.yaml")
+    # Planner line — only shown when planner is enabled; otherwise "(disabled)".
+    if getattr(args, "enable_planner", True):
         planner_provider = getattr(args, "planner_provider", None) or args.provider
         planner_model = getattr(args, "planner_model", None) or args.model
         planner_label = f"{planner_provider}/{planner_model}"
     else:
         planner_label = "(disabled)"
-    # Evaluator line — only shown when --enable-evaluator is set.
-    if getattr(args, "enable_evaluator", False):
+    # Evaluator line — only shown when evaluator is enabled.
+    if getattr(args, "enable_evaluator", True):
         evaluator_provider = getattr(args, "evaluator_provider", None) or args.provider
         evaluator_model = getattr(args, "evaluator_model", None) or args.model
         evaluator_label = f"{evaluator_provider}/{evaluator_model}"
@@ -1586,14 +1569,14 @@ def run(args: argparse.Namespace) -> Path:
                 concurrency=getattr(args, "concurrency", 0),
                 concurrency_seed=getattr(args, "seed", None) or 42,
                 max_modifications=getattr(args, "modifications", None),
-                object_prompt=getattr(args, "object_prompt", "object.yaml"),
+                object_prompt=getattr(args, "object_prompt", "executor.yaml"),
                 planner_prompt=getattr(args, "planner_prompt", "planner.yaml"),
                 max_history=getattr(args, "max_history", None),
                 tracked_harness=tracked_harness,
                 enable_code_tool=getattr(args, "code_tool", True),
                 enable_sink_completion_shim=getattr(args, "sink_shim", True),
-                enable_planner=getattr(args, "enable_planner", False),
-                enable_evaluator=getattr(args, "enable_evaluator", False),
+                enable_planner=getattr(args, "enable_planner", True),
+                enable_evaluator=getattr(args, "enable_evaluator", True),
                 planner_brain=planner_brain,
                 evaluator_brain=evaluator_brain,
                 mock_server_url=mock_server_url,
@@ -2146,28 +2129,30 @@ Examples:
     )
     parser.add_argument(
         "--enable-planner",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         dest="enable_planner",
-        default=False,
+        default=True,
         help=(
             "Pre-execution planner: separate LLM call that produces a structured "
             "plan BEFORE the executor's ReAct loop. The plan is stored in the "
             "object's active_plan and surfaces in the executor prompt as a "
-            "checklist. (default: off)"
+            "checklist. Default: ENABLED (paired with executor.yaml object-prompt "
+            "and --enable-evaluator). Use --no-enable-planner to disable."
         ),
     )
     parser.add_argument(
         "--enable-evaluator",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         dest="enable_evaluator",
-        default=False,
+        default=True,
         help=(
             "Post-execution evaluator: separate LLM call that grades the "
             "executor's last turn against the active plan, returning structured "
             "criterion-level PASS/FAIL. On FAIL, the runtime delivers a feedback "
             "heartbeat so the executor can fix the gaps. Capped at N cycles per "
             "trace to bound cost. Requires --enable-planner for there to be a "
-            "plan to evaluate against. (default: off)"
+            "plan to evaluate against. Default: ENABLED. Use --no-enable-evaluator "
+            "to disable."
         ),
     )
     parser.add_argument(
@@ -2257,8 +2242,12 @@ Examples:
     )
     parser.add_argument(
         "--object-prompt",
-        default="object.yaml",
-        help="Object system-prompt template filename relative to config/prompts/lnl/ (default: object.yaml).",
+        default="executor.yaml",
+        help=(
+            "Object system-prompt template filename relative to config/prompts/lnl/. "
+            "Default: executor.yaml (the slim executor that pairs with --enable-planner "
+            "and --enable-evaluator). Pass object.yaml for the legacy self-planning agent."
+        ),
     )
     parser.add_argument(
         "--planner-prompt",

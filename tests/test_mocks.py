@@ -178,11 +178,13 @@ class TestMockInProcessExecutorMatchResponses:
 # ── MockInProcessExecutor trigger tests ──────────────────────────────────────
 
 class TestMockInProcessExecutorTriggers:
-    """Tests for the cross-object event injection mechanism on MockInProcessExecutor.
+    """Tests for the trigger contract on MockInProcessExecutor.
 
-    When a mock tool is called, MockToolTrigger entries dispatch events to other
-    LNL objects via inject_event in the tool context — simulating real-world
-    callbacks like "email sent → Slack message arrives in a channel."
+    Trigger orchestration (dispatching cross-object events when a tool is called)
+    is owned by the evaluator, not the executor. The executor's only job is to
+    return a scripted response and log the call. Tests here verify that the
+    executor stays clean of trigger dispatch, and that trigger metadata is
+    accessible to the evaluator via tool_def.triggers.
     """
 
     def _make_def(self, triggers=None, match=None, **kwargs):
@@ -209,8 +211,8 @@ class TestMockInProcessExecutorTriggers:
             arguments=args or {"to": "alice@company.com", "subject": "Hello"},
         )
 
-    def test_trigger_fires_inject_event_with_correct_target_message_and_source(self):
-        """When the tool is called, inject_event is called with the declared target, interpolated message, and source."""
+    def test_executor_never_fires_inject_event(self):
+        """Executor does not call inject_event even when triggers are configured — that is the evaluator's job."""
         from src.data.schema import MockToolTrigger
         from src.lnl.tools import MockInProcessExecutor
 
@@ -228,130 +230,10 @@ class TestMockInProcessExecutorTriggers:
             {"inject_event": lambda t, m, s: injected.append((t, m, s))},
         )
 
-        assert len(injected) == 1
-        target, message, source = injected[0]
-        assert target == "slack-monitor"
-        assert "alice@company.com" in message
-        assert "Q2 report" in message
-        assert source == "slack"
-
-    def test_trigger_message_template_interpolates_all_arg_fields(self):
-        """All {arg_name} placeholders in message_template are replaced with tool call argument values."""
-        from src.data.schema import MockToolTrigger
-        from src.lnl.tools import MockInProcessExecutor
-
-        injected = []
-        executor = MockInProcessExecutor(self._make_def(triggers=[
-            MockToolTrigger(
-                target_object_id="notification-handler",
-                message_template="New message in #deal-alerts: {subject} from {to}, body: {body}",
-                source="slack",
-            ),
-        ]))
-
-        executor.execute(
-            self._make_call(args={"to": "bob@company.com", "subject": "Deal closed", "body": "Acme Corp signed"}),
-            {"inject_event": lambda t, m, s: injected.append((t, m, s))},
-        )
-
-        _, message, _ = injected[0]
-        assert "bob@company.com" in message
-        assert "Deal closed" in message
-        assert "Acme Corp signed" in message
-        assert "#deal-alerts" in message
-
-    def test_trigger_message_template_includes_call_index(self):
-        """{call_index} is available in message_template and increments per call."""
-        from src.data.schema import MockToolTrigger
-        from src.lnl.tools import MockInProcessExecutor
-
-        injected = []
-
-        def record(t, m, s):
-            injected.append(m)
-
-        executor = MockInProcessExecutor(self._make_def(triggers=[
-            MockToolTrigger(
-                target_object_id="audit-log",
-                message_template="Email #{call_index} dispatched to {to}",
-                source="audit",
-            ),
-        ]))
-
-        executor.execute(self._make_call(args={"to": "alice@company.com", "subject": "First"}), {"inject_event": record})
-        executor.execute(self._make_call(args={"to": "bob@company.com", "subject": "Second"}), {"inject_event": record})
-
-        assert "Email #1 dispatched to alice@company.com" in injected[0]
-        assert "Email #2 dispatched to bob@company.com" in injected[1]
-
-    def test_trigger_fires_when_tool_level_match_passes(self):
-        """Trigger fires when the tool-level match condition is satisfied."""
-        from src.data.schema import MockToolTrigger
-        from src.lnl.tools import MockInProcessExecutor
-
-        injected = []
-        executor = MockInProcessExecutor(self._make_def(
-            match={"to": r"@company\.com$"},
-            triggers=[MockToolTrigger(
-                target_object_id="internal-notifier",
-                message_template="Internal email sent to {to}",
-                source="internal",
-            )],
-        ))
-
-        executor.execute(
-            self._make_call(args={"to": "alice@company.com", "subject": "Internal memo"}),
-            {"inject_event": lambda t, m, s: injected.append((t, m, s))},
-        )
-
-        assert len(injected) == 1
-        assert "alice@company.com" in injected[0][1]
-
-    def test_trigger_suppressed_when_tool_level_match_fails(self):
-        """Trigger does not fire when the tool-level match condition is not met."""
-        from src.data.schema import MockToolTrigger
-        from src.lnl.tools import MockInProcessExecutor
-
-        injected = []
-        executor = MockInProcessExecutor(self._make_def(
-            match={"to": r"@company\.com$"},
-            triggers=[MockToolTrigger(
-                target_object_id="internal-notifier",
-                message_template="Internal email sent to {to}",
-                source="internal",
-            )],
-        ))
-
-        # External address — match fails, trigger must not fire
-        executor.execute(
-            self._make_call(args={"to": "vendor@external.com", "subject": "Order confirm"}),
-            {"inject_event": lambda t, m, s: injected.append((t, m, s))},
-        )
-
         assert len(injected) == 0
 
-    def test_multiple_triggers_all_fire_on_single_call(self):
-        """All MockToolTrigger entries fire when a single tool call occurs."""
-        from src.data.schema import MockToolTrigger
-        from src.lnl.tools import MockInProcessExecutor
-
-        injected = []
-        executor = MockInProcessExecutor(self._make_def(triggers=[
-            MockToolTrigger(target_object_id="slack-monitor",  message_template="Email to {to}", source="slack"),
-            MockToolTrigger(target_object_id="crm-updater",    message_template="Contact {to} emailed", source="crm"),
-            MockToolTrigger(target_object_id="audit-log",      message_template="Outbound: {to}", source="audit"),
-        ]))
-
-        executor.execute(self._make_call(), {"inject_event": lambda t, m, s: injected.append((t, m, s))})
-
-        targets = [t for t, _, _ in injected]
-        assert len(injected) == 3
-        assert "slack-monitor" in targets
-        assert "crm-updater" in targets
-        assert "audit-log" in targets
-
-    def test_trigger_graceful_when_inject_event_absent_from_context(self):
-        """No exception is raised when inject_event is not provided in the tool context."""
+    def test_executor_returns_response_when_triggers_configured(self):
+        """Executor still returns the correct scripted response when triggers are present."""
         from src.data.schema import MockToolTrigger
         from src.lnl.tools import MockInProcessExecutor
 
@@ -359,12 +241,11 @@ class TestMockInProcessExecutorTriggers:
             MockToolTrigger(target_object_id="slack-monitor", message_template="Email to {to}", source="slack"),
         ]))
 
-        # Must not raise; tool still returns a response
         result = executor.execute(self._make_call(), {})
-        assert result.output is not None
+        assert result.output == "email_id: 1"
 
-    def test_trigger_dispatch_recorded_in_call_log(self):
-        """Each trigger dispatch is captured in the executor's call_log for traceability."""
+    def test_call_log_has_no_triggered_key(self):
+        """call_log entries do not contain a 'triggered' key — the evaluator sets that annotation."""
         from src.data.schema import MockToolTrigger
         from src.lnl.tools import MockInProcessExecutor
 
@@ -374,28 +255,20 @@ class TestMockInProcessExecutorTriggers:
 
         executor.execute(self._make_call(), {"inject_event": lambda *a: None})
 
-        assert len(executor.call_log) == 1
-        log = executor.call_log[0]
-        assert "triggered" in log
-        assert log["triggered"][0]["target"] == "slack-monitor"
-        assert "alice@company.com" in log["triggered"][0]["message"]
+        assert "triggered" not in executor.call_log[0]
 
-    def test_no_trigger_log_entry_when_match_fails(self):
-        """call_log has no 'triggered' key when the tool-level match suppresses the trigger."""
+    def test_trigger_metadata_accessible_on_tool_def(self):
+        """MockToolDef.triggers is preserved and available for the evaluator to read."""
         from src.data.schema import MockToolTrigger
         from src.lnl.tools import MockInProcessExecutor
 
-        executor = MockInProcessExecutor(self._make_def(
-            match={"to": r"@company\.com$"},
-            triggers=[MockToolTrigger(target_object_id="notifier", message_template="Hi {to}", source="slack")],
-        ))
-
-        executor.execute(
-            self._make_call(args={"to": "external@other.com", "subject": "Hi"}),
-            {"inject_event": lambda *a: None},
+        trigger = MockToolTrigger(
+            target_object_id="slack-monitor",
+            message_template="Email sent to {to} — subject: {subject}",
+            source="slack",
         )
-
-        assert "triggered" not in executor.call_log[0]
+        executor = MockInProcessExecutor(self._make_def(triggers=[trigger]))
+        assert executor._tool_def.triggers == [trigger]
 
 
 # ── MockInProcessExecutor HTTP (remote) mode ─────────────────────────────────
@@ -476,7 +349,8 @@ class TestMockInProcessExecutorRemoteMode:
         executor.execute(self._make_call(), {})
         assert captured["url"] == "http://127.0.0.1:18888/tool/email.send"
 
-    def test_remote_mode_still_fires_triggers_in_process(self, monkeypatch):
+    def test_remote_mode_does_not_fire_triggers(self, monkeypatch):
+        """In remote mode the executor still does not fire triggers — the evaluator owns that."""
         import httpx
         from src.data.schema import MockToolTrigger
         from src.lnl.tools import MockInProcessExecutor
@@ -498,8 +372,7 @@ class TestMockInProcessExecutorRemoteMode:
             self._make_call(args={"to": "bob@x.com"}),
             {"inject_event": lambda t, m, s: injected.append((t, m, s))},
         )
-        # Triggers fire in-process even though the response arrived over HTTP.
-        assert injected == [("slack-mon", "sent to bob@x.com", "slack")]
+        assert injected == []
 
     def test_remote_mode_populates_call_log(self, monkeypatch):
         import httpx
