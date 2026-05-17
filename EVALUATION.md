@@ -105,6 +105,27 @@ python -m src.data.evaluate \
 
 Output: `test_cases_eval.jsonl` (next to input file)
 
+#### Memory backend (`--memory`)
+
+LLM-objects emit `state_update` deltas that the runtime applies to per-object state. The shape of those deltas — and the resulting state — is governed by a pluggable backend, selected per run with `--memory`:
+
+| Value | Action shape | State shape | When to use |
+|---|---|---|---|
+| `nested` (default) | List of `{op, path, value}` actions with `op ∈ {set, merge, delete, append}` and dotted paths (`tickets.T-042.status`) | Nested JSON object; updates are applied immutably as in Redux, so a single-attribute change touches only that path | Default; targeted updates to nested entities, no full-record re-emit |
+| `flat` | `{op, key, value}` with `op ∈ {set, delete, append}` | Flat top-level dict; nested entities are stored as whole sub-dicts and re-emitted in full on every attribute change | A/B comparison with historical (pre-2026-05-18) runs |
+
+The two backends pair with two different executor prompts — `config/prompts/lnl/executor_nested.yaml` (nested) and `config/prompts/lnl/executor.yaml` (flat). `--memory` picks the right one automatically; do not override `--object-prompt` unless you know what you're doing.
+
+```bash
+# Default (nested): targeted path-based updates
+python -m src.data.evaluate -i test_cases.jsonl --model gpt-4o
+
+# Legacy flat: bit-for-bit identical to pre-2026-05-18 runs
+python -m src.data.evaluate -i test_cases.jsonl --model gpt-4o --memory flat
+```
+
+A/B compare on the same TCs to see whether the nested action model improves precision on multi-attribute entity updates.
+
 #### Mock tool execution
 
 The LNL evaluator supports **in-process mock tools** — scripted implementations of external APIs (Slack, Email, HubSpot, Jira, etc.) that LLM-objects call directly via `tool_calls`, bypassing the message bus.
@@ -344,6 +365,7 @@ See [`docker/README.md`](docker/README.md) for full setup details: bind-mount me
 | `--limit`, `-n` | First N test cases only | First N test cases only |
 | `--tc` | Specific test cases by 1-based index or ID (overrides `--limit`) | Same |
 | `--steps-only` | Run only steps; skip modifications and events | N/A |
+| `--memory` | Memory backend: `nested` (default; Redux-style `{op,path,value}` actions on a nested JSON tree) or `flat` (legacy `{op,key,value}` top-level deltas). Picks the matching executor prompt. | N/A |
 | `--modifications N` | Limit to the first N modifications; events referencing later mods are skipped | Same |
 | `--concurrency N` | Fire N events concurrently per mod window (0 = sequential, default). Requires TCs with `concurrent_group` fields. | N/A |
 | `--reuse-steps` / `--no-reuse-steps` | Run steps once per sample; reuse state across variants (saves ~6× step cost). **Default: on.** | N/A |

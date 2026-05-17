@@ -67,7 +67,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-17: pluggable memory backend (flat | nested) — adds --memory CLI flag; nested uses Redux-style {op, path, value} actions on a nested JSON tree
+_VERSION: str = _build_version()  # bumped 2026-05-18: nested memory backend is now the default; pass --memory flat for legacy behavior / historical comparisons
 
 from src.data.schema import (
     EvalSummary,
@@ -396,7 +396,7 @@ def _execute_test_case_inner(
     evaluator_brain=None,
     mock_server_url: "str | None" = None,
     mock_slot_id: str = "default",
-    memory_backend: str = "flat",
+    memory_backend: str = "nested",
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase and return event + modification results."""
     from src.lnl.gateway import EventGateway
@@ -1003,7 +1003,7 @@ def execute_test_case(
     evaluator_brain=None,
     mock_server_url: "str | None" = None,
     mock_slot_id: str = "default",
-    memory_backend: str = "flat",
+    memory_backend: str = "nested",
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase with a per-event timeout (seconds).
 
@@ -1578,7 +1578,7 @@ def run(args: argparse.Namespace) -> Path:
                 max_modifications=getattr(args, "modifications", None),
                 object_prompt=getattr(args, "object_prompt", None),
                 planner_prompt=getattr(args, "planner_prompt", "planner.yaml"),
-                memory_backend=getattr(args, "memory", "flat"),
+                memory_backend=getattr(args, "memory", "nested"),
                 max_history=getattr(args, "max_history", None),
                 tracked_harness=tracked_harness,
                 enable_code_tool=getattr(args, "code_tool", True),
@@ -2259,12 +2259,13 @@ Examples:
     )
     parser.add_argument(
         "--memory",
-        default="flat",
+        default="nested",
         choices=["flat", "nested"],
         help=(
-            "Memory backend used by LLM-objects. flat: {op, key, value} deltas at "
-            "top-level keys (current default). nested: Redux-style {op, path, value} "
-            "actions over a nested JSON tree (ops: set/merge/delete/append, dotted paths)."
+            "Memory backend used by LLM-objects. nested (default): Redux-style "
+            "{op, path, value} actions over a nested JSON tree (ops: "
+            "set/merge/delete/append, dotted paths). flat: legacy {op, key, value} "
+            "deltas at top-level keys — use for A/B comparison with historical runs."
         ),
     )
     parser.add_argument(

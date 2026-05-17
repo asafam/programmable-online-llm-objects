@@ -124,10 +124,11 @@ class SystemConfig:
     # last_progress_at is force-retired.
     stale_plan_seconds: float = 180.0
     max_active_plans_per_object: int = 32
-    # Memory backend choice — global per run. "flat" preserves the pre-refactor
-    # {op, key, value} delta schema; "nested" switches to the Redux-style
-    # {op, path, value} action list with dotted nested paths.
-    memory_backend: str = "flat"
+    # Memory backend choice — global per run. "nested" is the default: the
+    # Redux-style {op, path, value} action list over a nested JSON tree.
+    # "flat" reverts to the legacy {op, key, value} top-level deltas (kept for
+    # A/B comparison and back-compat with pre-refactor runs).
+    memory_backend: str = "nested"
 
     @staticmethod
     def load(path: Path | None = None) -> "SystemConfig":
@@ -158,7 +159,7 @@ class SystemConfig:
             evaluator_max_cycles_per_trace=int(data.get("evaluator_max_cycles_per_trace", 3)),
             stale_plan_seconds=float(data.get("stale_plan_seconds", 180.0)),
             max_active_plans_per_object=int(data.get("max_active_plans_per_object", 32)),
-            memory_backend=str(data.get("memory_backend", "flat")),
+            memory_backend=str(data.get("memory_backend", "nested")),
         )
 
 
