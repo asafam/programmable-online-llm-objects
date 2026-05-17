@@ -59,7 +59,7 @@ class LLMObject:
         react_cross_objects: bool = True,
         pending_timeout_seconds: float = 90.0,
         heartbeat_interval_seconds: float = 30.0,
-        prompt_file: str = "object.yaml",
+        prompt_file: str = "executor.yaml",
         auto_track_knowledge_gaps: bool = False,
         auto_ask_peers_on_gap: bool = False,
         enable_sink_completion_shim: bool = False,

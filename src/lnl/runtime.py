@@ -188,7 +188,7 @@ class Runtime:
         self._auto_ask_peers_on_gap = cfg.auto_ask_peers_on_gap
         self._pending_timeout_seconds = cfg.pending_timeout_seconds
         self._heartbeat_interval_seconds = cfg.heartbeat_interval_seconds
-        self._prompt_file: str = "object.yaml"
+        self._prompt_file: str = "executor.yaml"
         self._planner_prompt_file: str = "planner.yaml"
         self._sources: dict[str, Path] = {}  # object_id -> file path
         self._modified: set[str] = set()  # object_ids with unsaved changes
