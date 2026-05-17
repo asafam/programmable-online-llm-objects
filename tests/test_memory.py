@@ -215,6 +215,40 @@ class TestLLMObjectNestedBackend:
             "T-017": {"status": "open", "priority": "P2", "assignee": "Bob"},
         }}
 
+    def test_make_delta_returns_nested_for_nested_backend(self):
+        # Regression: runtime call-sites (sink shim, knowledge-gap tracking)
+        # build top-level deltas via backend.make_delta — they must round-trip
+        # through NestedJsonMemory.apply without crashing.
+        m = NestedJsonMemory()
+        m.apply([m.make_delta("set", "auto_completion", {"status": "completed"})])
+        m.apply([m.make_delta("append", "knowledge_gaps", {"question": "?"})])
+        assert m.snapshot() == {
+            "auto_completion": {"status": "completed"},
+            "knowledge_gaps": [{"question": "?"}],
+        }
+
+    def test_runtime_built_deltas_dispatch_under_nested(self):
+        # End-to-end: an object running with the nested backend that hits the
+        # knowledge-gap path must not raise AttributeError on the runtime-built
+        # delta. (Pre-fix this crashed in production with "StateDelta has no
+        # attribute 'path'".)
+        from src.lnl.types import KnowledgeGap
+        brain = MockBrain()
+        brain.script_react(ReactStep(
+            thought="Asking peer.",
+            action="finish",
+            finish=ReactFinish(reply="", knowledge_gap=KnowledgeGap(question="who?", context="")),
+        ))
+        obj = LLMObject(
+            _make_definition(), brain, memory_backend="nested",
+            enable_planner=False, enable_evaluator=False,
+            auto_track_knowledge_gaps=True,
+        )
+        obj.process_message(_user_msg("anything"))
+        snap = obj.state
+        assert "knowledge_gaps" in snap
+        assert snap["knowledge_gaps"][0]["question"] == "who?"
+
     def test_nested_multiple_deltas_one_turn(self):
         brain = MockBrain()
         brain.script_react(ReactStep(

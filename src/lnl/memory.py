@@ -55,6 +55,7 @@ class MemoryBackend(Protocol):
     def parse_delta(self, raw: dict) -> Any: ...
     def state_update_schema(self) -> dict: ...
     def state_update_is_list(self) -> bool: ...
+    def make_delta(self, op: str, key: str, value: Any = None) -> Any: ...
 
 
 # --- Flat (current) backend --------------------------------------------------
@@ -144,6 +145,12 @@ class FlatKeyValueMemory:
 
     def state_update_is_list(self) -> bool:
         return False
+
+    def make_delta(self, op: str, key: str, value: Any = None) -> StateDelta:
+        """Construct a backend-native delta for a runtime-built state write
+        (knowledge-gap tracking, sink shim, etc.). For flat backend, `key` is
+        the top-level state key."""
+        return StateDelta(op=op, key=key, value=value)
 
 
 def _apply_flat_delta(state: dict, delta: StateDelta) -> dict:
@@ -280,6 +287,12 @@ class NestedJsonMemory:
 
     def state_update_is_list(self) -> bool:
         return True
+
+    def make_delta(self, op: str, key: str, value: Any = None) -> NestedDelta:
+        """Construct a backend-native delta. `key` is interpreted as the
+        dotted path (a single top-level segment is the common case for
+        runtime-built writes like knowledge-gap tracking and the sink shim)."""
+        return NestedDelta(op=op, path=key, value=value)
 
 
 def _split_path(path: str) -> list[str]:

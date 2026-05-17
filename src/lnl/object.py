@@ -671,10 +671,10 @@ class LLMObject:
             return finish
         # Conditions met — synthesize and inject.
         artifact = self._synthesize_artifact()
-        pending_deltas.append(StateDelta(
-            op="set",
-            key="auto_completion",
-            value={
+        pending_deltas.append(self._memory.make_delta(
+            "set",
+            "auto_completion",
+            {
                 "status": "completed",
                 "artifact": artifact,
                 "completed_by": "runtime_sink_shim",
@@ -1472,10 +1472,10 @@ class LLMObject:
         auto-ask back to that same peer.
         """
         if self._auto_track_knowledge_gaps:
-            pending_deltas.append(StateDelta(
-                op="append",
-                key="knowledge_gaps",
-                value={"question": gap.question, "context": gap.context, "resolved": False},
+            pending_deltas.append(self._memory.make_delta(
+                "append",
+                "knowledge_gaps",
+                {"question": gap.question, "context": gap.context, "resolved": False},
             ))
         if self._auto_ask_peers_on_gap and self._definition.peers:
             for peer in self._definition.peers:
