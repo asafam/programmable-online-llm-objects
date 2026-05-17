@@ -838,6 +838,11 @@ def main() -> None:
     parser.add_argument("--mode", choices=["probe", "fidelity"], default="probe",
                         help="'probe' (default): group by depth; "
                              "'fidelity': multi-line by n_c, depth on x-axis")
+    parser.add_argument("--chart", default=None, metavar="CHART",
+                        choices=["accuracy", "conditioned", "tokens", "elapsed"],
+                        help="Generate only one chart instead of all. "
+                             "probe mode:    accuracy, conditioned, tokens, elapsed. "
+                             "fidelity mode: accuracy, tokens, elapsed.")
     args = parser.parse_args()
 
     lnl_path      = args.lnl
@@ -892,13 +897,17 @@ def main() -> None:
 
         _print_fidelity_summary(lnl_cells, base_cells, lnl_cond_cells, base_cond_cells)
         print(f"Generating fidelity plots → {plots_dir}")
-        plot_fidelity_accuracy(
-            lnl_cells, base_cells, plots_dir, judge_label,
-            lnl_cond_cells=lnl_cond_cells,
-            base_cond_cells=base_cond_cells,
-        )
-        plot_fidelity_tokens(lnl_cells, base_cells, plots_dir)
-        plot_fidelity_elapsed(lnl_cells, base_cells, plots_dir)
+        c = args.chart
+        if c is None or c == "accuracy":
+            plot_fidelity_accuracy(
+                lnl_cells, base_cells, plots_dir, judge_label,
+                lnl_cond_cells=lnl_cond_cells,
+                base_cond_cells=base_cond_cells,
+            )
+        if c is None or c == "tokens":
+            plot_fidelity_tokens(lnl_cells, base_cells, plots_dir)
+        if c is None or c == "elapsed":
+            plot_fidelity_elapsed(lnl_cells, base_cells, plots_dir)
 
     else:
         print(f"Loading LNL results:      {lnl_path}")
@@ -925,11 +934,14 @@ def main() -> None:
         print_summary(lnl_series, base_series, lnl_cond, base_cond)
         print(f"Generating plots → {plots_dir}")
 
-        plot_probe_accuracy(lnl_series, base_series, plots_dir, judge_label)
-        plot_tokens(lnl_series, base_series, plots_dir)
-        plot_elapsed(lnl_series, base_series, plots_dir)
-
-        if tcs:
+        c = args.chart
+        if c is None or c == "accuracy":
+            plot_probe_accuracy(lnl_series, base_series, plots_dir, judge_label)
+        if c is None or c == "tokens":
+            plot_tokens(lnl_series, base_series, plots_dir)
+        if c is None or c == "elapsed":
+            plot_elapsed(lnl_series, base_series, plots_dir)
+        if (c is None or c == "conditioned") and tcs:
             plot_conditioned_accuracy(lnl_cond, base_cond or {}, plots_dir, judge_label,
                                       lnl_series=lnl_series)
 

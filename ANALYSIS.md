@@ -98,6 +98,13 @@ python scripts/plot_concurrency.py outputs/data/zapier/runs/experiments/concurre
 
 Output → `<exp_dir>/plots/concurrency_passrate.png` — 2×3 panel: same metrics as above.
 
+Use `--metric` to generate a single panel instead of the full grid:
+```bash
+python scripts/plot_concurrency.py --metric post_mod
+# choices: mean, steps, mod, pre_mod, post_mod, irrelevant
+# saves: concurrency_passrate_post_mod.png
+```
+
 File naming convention for inputs:
 ```
 exp_lnl_1mod_conc8.jsonl              # LNL at concurrency 8
@@ -126,6 +133,12 @@ Output PNGs (in `plots_dir` or next to the LNL results file):
 - `probe_conditioned_accuracy_vs_depth.png` — conditioned accuracy (requires `--tcs`)
 - `tokens_vs_depth.png` — agent input tokens per event by depth
 - `elapsed_vs_depth.png` — mean elapsed time per TC by depth
+
+Use `--chart` to generate only one of the above:
+```bash
+python scripts/plot_state_probes.py lnl.jsonl --chart accuracy
+# choices: accuracy, conditioned, tokens, elapsed
+```
 
 ---
 

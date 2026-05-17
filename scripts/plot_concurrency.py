@@ -2,12 +2,13 @@
 """Plot concurrent-events pass rate across concurrency levels and paradigms.
 
 Usage:
-    python scripts/plot_concurrency.py [exp_dir] [--smooth N]
+    python scripts/plot_concurrency.py [exp_dir] [--tension T] [--smooth N]
 
-    exp_dir   — directory containing exp_*.jsonl files
-                (default: outputs/data/zapier/runs/experiments/concurrency)
-    --smooth N — interpolate each line through N points using a cubic spline
-                 so segments curve instead of being straight (default: 0 = off)
+    exp_dir     — directory containing exp_*.jsonl files
+                  (default: outputs/data/zapier/runs/experiments/concurrency)
+    --tension T — curve tension: 0.0 = full cubic spline (most curved),
+                  1.0 = straight lines between points (default: 0.0)
+    --smooth N  — number of interpolation points along the spline (default: 200)
 
 Reads files matching: exp_{lnl|baseline}_{N}mod_conc{C}[_{single|multi}].jsonl
 Generates plots saved to <exp_dir>/plots/:
@@ -58,7 +59,8 @@ MOD_LINESTYLE = {1: "-",  2: "--"}
 MOD_MARKER    = {1: "o",  2: "s"}
 MOD_ALPHA     = {1: 1.0,  2: 0.75}
 
-FILL_ALPHA = 0.12  # gradient fill below each line
+GRADIENT_ALPHA_TOP = 0.28  # opacity at the top of the gradient fill
+GRADIENT_STEPS     = 40   # number of thin slabs for the gradient approximation
 
 _ORIGINAL = "__original__"
 
@@ -226,32 +228,38 @@ def load_experiments(exp_dir: Path) -> tuple[dict, dict]:
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
-def _smooth_xy(x: list, y: list, n_points: int) -> tuple:
-    """Return (xs, ys) interpolated through (x, y) with a cubic spline.
-
-    Falls back to the raw arrays when there are fewer than 3 finite points
-    (not enough for a cubic spline).
-    """
+def _build_spline(xs, ys, x_dense, tension: float):
+    """Return y values on x_dense via cubic spline blended with tension toward linear."""
     try:
         from scipy.interpolate import make_interp_spline
+        curved = make_interp_spline(xs, ys, k=min(3, len(xs) - 1))(x_dense)
     except ImportError:
-        return x, y
+        deg    = min(3, len(xs) - 1)
+        curved = np.polyval(np.polyfit(xs, ys, deg), x_dense)
+    if tension == 0.0:
+        return curved
+    linear = np.interp(x_dense, xs, ys)
+    return tension * linear + (1.0 - tension) * curved
 
-    pairs = [(xi, yi) for xi, yi in zip(x, y) if yi == yi]  # drop NaN
-    if len(pairs) < 3:
-        return x, y
 
-    xs_raw = [p[0] for p in pairs]
-    ys_raw = [p[1] for p in pairs]
-    xs_fine = np.linspace(xs_raw[0], xs_raw[-1], n_points)
-    spline = make_interp_spline(xs_raw, ys_raw, k=min(3, len(pairs) - 1))
-    ys_fine = np.clip(spline(xs_fine), 0.0, 1.0)
-    return xs_fine, ys_fine
+def _draw_gradient_fill(ax, x, y, color, alpha_top=GRADIENT_ALPHA_TOP,
+                        n_steps=GRADIENT_STEPS):
+    """Approximate a gradient fill from color@alpha_top at the line to transparent at y=0."""
+    y_bottom = ax.get_ylim()[0]
+    y_max    = np.nanmax(y)
+    for j in range(n_steps):
+        frac_low   = j / n_steps
+        frac_high  = (j + 1) / n_steps
+        slab_alpha = alpha_top * (1 - frac_low)
+        y_clip_top    = np.minimum(y, y_bottom + (y_max - y_bottom) * (1 - frac_low))
+        y_clip_bottom = np.minimum(y, y_bottom + (y_max - y_bottom) * (1 - frac_high))
+        ax.fill_between(x, y_clip_bottom, y_clip_top,
+                        color=color, alpha=slab_alpha, linewidth=0)
 
 
 def _draw_lines(ax, data: dict, metric_key: str, all_concs: list,
-                smooth: int = 0) -> bool:
-    plotted = False
+                tension: float = 0.0, smooth: int = 200) -> bool:
+    plotted    = False
     multi_mods = len({k[2] for k in data}) > 1
     for series_key, series in sorted(data.items()):
         paradigm, agent_mode, mods = series_key
@@ -262,37 +270,45 @@ def _draw_lines(ax, data: dict, metric_key: str, all_concs: list,
         values = [series[c].get(metric_key) for c in concs]
         if all(v is None for v in values):
             continue
-        y_raw = [v if v is not None else float("nan") for v in values]
+        y_raw = np.array([v if v is not None else float("nan") for v in values],
+                         dtype=float)
 
         color     = SERIES_COLOR.get((paradigm, agent_mode), "#888888")
         linestyle = MOD_LINESTYLE.get(mods, "-")
         marker    = MOD_MARKER.get(mods, "o")
-        alpha     = MOD_ALPHA.get(mods, 1.0)
-        label     = f"{label_base} ({mods} mod{'s' if mods > 1 else ''})" if multi_mods else label_base
+        line_alpha = MOD_ALPHA.get(mods, 1.0)
+        label      = (f"{label_base} ({mods} mod{'s' if mods > 1 else ''})"
+                      if multi_mods else label_base)
 
-        if smooth > 0 and len(concs) >= 3:
-            x_plot, y_plot = _smooth_xy(concs, y_raw, smooth)
-            # Draw the smooth curve (no markers on the interpolated line)
-            ax.plot(x_plot, y_plot, linestyle=linestyle, color=color,
-                    alpha=alpha, linewidth=2, label=label)
-            # Overlay actual data points on top
-            ax.plot(concs, y_raw, linestyle="none", marker=marker,
-                    color=color, alpha=alpha, markersize=7, zorder=5)
-            ax.fill_between(x_plot, y_plot, 0, color=color,
-                            alpha=FILL_ALPHA * alpha)
+        finite_mask = ~np.isnan(y_raw)
+        xs_fin = [c for c, ok in zip(concs, finite_mask) if ok]
+        ys_fin = y_raw[finite_mask]
+
+        if len(xs_fin) >= 2:
+            x_dense = np.linspace(xs_fin[0], xs_fin[-1], smooth)
+            y_dense = np.clip(_build_spline(xs_fin, ys_fin, x_dense, tension),
+                              0.0, 1.0)
         else:
-            ax.plot(concs, y_raw, linestyle=linestyle, marker=marker,
-                    color=color, alpha=alpha, label=label,
-                    linewidth=2, markersize=7)
-            ax.fill_between(concs, y_raw, 0, color=color,
-                            alpha=FILL_ALPHA * alpha)
+            x_dense, y_dense = np.array(xs_fin), ys_fin
+
+        # Smooth curve
+        ax.plot(x_dense, y_dense, linestyle=linestyle, color=color,
+                alpha=line_alpha, linewidth=2, label=label,
+                solid_capstyle="round")
+        # Actual data points on top
+        ax.scatter(concs, y_raw, marker=marker, s=45,
+                   facecolor="white", edgecolor=color,
+                   linewidth=2.0, zorder=5)
+        # Gradient fill below the curve
+        _draw_gradient_fill(ax, x_dense, y_dense, color,
+                            alpha_top=GRADIENT_ALPHA_TOP * line_alpha)
 
         plotted = True
 
     if all_concs:
         ax.set_xticks(all_concs)
     ax.set_xlabel("Concurrency level", fontsize=9)
-    ax.grid(True, alpha=0.3, linestyle=":")
+    ax.grid(axis="y", alpha=0.3, linestyle=":")
     if plotted:
         ax.legend(fontsize=8, loc="best")
     else:
@@ -315,16 +331,32 @@ def _filename_safe(model: str) -> str:
 
 
 def plot_passrate(data: dict, plots_dir: Path, judge_label: str,
-                  filename_suffix: str = "", smooth: int = 0) -> None:
+                  filename_suffix: str = "",
+                  tension: float = 0.0, smooth: int = 200,
+                  metric=None) -> None:
     all_concs = sorted({c for s in data.values() for c in s})
-    fig, axes = plt.subplots(2, 3, figsize=(15, 9))
-    for ax, (key, label) in zip(axes.flatten(), PASS_METRICS):
-        _draw_lines(ax, data, key, all_concs, smooth=smooth)
+
+    metrics = [(k, lbl) for k, lbl in PASS_METRICS if metric is None or k == metric]
+    if metric is not None:
+        # Single-panel figure
+        fig, ax = plt.subplots(figsize=(7, 4))
+        (key, label), = metrics
+        _draw_lines(ax, data, key, all_concs, tension=tension, smooth=smooth)
         ax.set_title(label, fontsize=11, fontweight="bold")
         ax.set_ylabel("Pass rate", fontsize=9)
         ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
         ax.set_ylim(-0.02, 1.05)
-    fname = "concurrency_passrate"
+        fname = f"concurrency_passrate_{metric}"
+    else:
+        fig, axes = plt.subplots(2, 3, figsize=(15, 9))
+        for ax, (key, label) in zip(axes.flatten(), metrics):
+            _draw_lines(ax, data, key, all_concs, tension=tension, smooth=smooth)
+            ax.set_title(label, fontsize=11, fontweight="bold")
+            ax.set_ylabel("Pass rate", fontsize=9)
+            ax.yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
+            ax.set_ylim(-0.02, 1.05)
+        fname = "concurrency_passrate"
+
     if filename_suffix:
         fname += f"__{filename_suffix}"
     fname += ".png"
@@ -340,10 +372,16 @@ def main() -> None:
     parser.add_argument("exp_dir", nargs="?",
                         default="outputs/data/zapier/runs/experiments/concurrency",
                         help="Directory containing exp_*.jsonl files")
-    parser.add_argument("--smooth", type=int, default=0, metavar="N",
-                        help="Interpolate lines with a cubic spline through N points "
-                             "(0 = off, straight segments; 300 = smooth curves). "
-                             "Requires scipy.")
+    parser.add_argument("--tension", type=float, default=0.0, metavar="T",
+                        help="Curve tension: 0.0 = full cubic spline (most curved), "
+                             "1.0 = straight lines (default: 0.0). Requires scipy.")
+    parser.add_argument("--smooth", type=int, default=200, metavar="N",
+                        help="Number of interpolation points for the spline (default: 200).")
+    metric_keys = [k for k, _ in PASS_METRICS]
+    parser.add_argument("--metric", default=None, metavar="METRIC",
+                        choices=metric_keys,
+                        help=f"Plot only one metric panel instead of the full 2×3 grid. "
+                             f"Choices: {', '.join(metric_keys)}")
     args = parser.parse_args()
 
     exp_dir = Path(args.exp_dir)
@@ -373,7 +411,9 @@ def main() -> None:
             display = judge_key
             suffix = _filename_safe(judge_key)
         plot_passrate(data, plots_dir, judge_label=display,
-                      filename_suffix=suffix, smooth=args.smooth)
+                      filename_suffix=suffix,
+                      tension=args.tension, smooth=args.smooth,
+                      metric=args.metric)
 
     print("Done.")
 

@@ -65,7 +65,7 @@ rm -f "${CONFIG_DIR}/identity/device-auth.json"
 
 # ── Start the LNL mock server ─────────────────────────────────────────────────
 echo "[entrypoint] Starting mock server on port 18888..."
-cd /app && python3 -m src.data.mock_server \
+cd /app && python3 mock/server.py \
     --port 18888 \
     --openclaw-url "http://localhost:18789" &
 MOCK_PID=$!

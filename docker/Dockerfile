@@ -39,6 +39,7 @@ WORKDIR /app
 
 COPY src/   src/
 COPY config/ config/
+COPY mock/  mock/
 
 # ── Install the mock-external plugin ─────────────────────────────────────────
 # Stored OUTSIDE /home/node/.openclaw so the pool bind-mount doesn't hide them.

@@ -1,5 +1,25 @@
+import sys
+from pathlib import Path as _Path
+
+# mock/ is a sibling of src/ at the repo root; add it so `from schema import ...` works.
+_mock_dir = str(_Path(__file__).parent.parent.parent / "mock")
+if _mock_dir not in sys.path:
+    sys.path.insert(0, _mock_dir)
+
+from schema import (  # noqa: E402 — mock/schema.py
+    MockImmediateResponse,
+    MockCallback,
+    MockMethodDef,
+    MockSystemDef,
+    MockScript,
+    OrchestratorReaction,
+    OrchestratorTrigger,
+    OrchestratorScript,
+    EventTrigger,
+)
+
 from pydantic import BaseModel, field_validator, Field
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 from enum import Enum
 
 from src.lnl.parser import slugify
@@ -31,7 +51,7 @@ class Event(BaseModel):
     input: str
     when: str  # Same format as modification: "W02-1T09:00"
     expect: Optional[EventExpect] = None
-    triggered_by: Optional[str] = None  # ID of sibling event that causes this one to fire
+    triggered_by: Optional[Union[str, EventTrigger]] = None  # sibling event ID or tool-call trigger
     trigger_delay_minutes: float = 0.0  # simulated delay after triggering event fires
     trigger_delay_seconds: float = 0.0
     role: Optional[Literal["pre_mod", "post_mod", "irrelevant"]] = None
@@ -522,64 +542,8 @@ class EvalSummary(BaseModel):
     total_evaluator_output_tokens: int = 0
 
 
-# ── Mock external system schemas (OpenClaw baseline) ─────────────────────────
-
-class MockImmediateResponse(BaseModel):
-    """Synchronous response returned to the tool caller."""
-    template: str   # e.g. "message_id: {tool_call_id}, delivered to #{channel}"
-    status: str = "ok"
-
-class MockCallback(BaseModel):
-    """Optional follow-up message injected back into the agent session."""
-    delay_seconds: float = 0.5
-    message_template: str   # interpolated with tool call args; ignored in LLM mode
-    source: str             # e.g. "slack" — for log grouping
-
-class MockMethodDef(BaseModel):
-    """Behaviour definition for one tool method."""
-    method: str                          # e.g. "slack_send_message"
-    immediate: MockImmediateResponse
-    callback: Optional[MockCallback] = None
-    llm_persona: Optional[str] = None   # if set, use LLM mode for this method
-
-class MockSystemDef(BaseModel):
-    """Complete mock definition for one external system."""
-    system: str
-    tools: list[MockMethodDef]
-
-class MockScript(BaseModel):
-    """Collection of mock system definitions for one evaluation run."""
-    systems: list[MockSystemDef]
-
-    def get_method(self, method: str) -> Optional[MockMethodDef]:
-        for sys in self.systems:
-            for tool in sys.tools:
-                if tool.method == method:
-                    return tool
-        return None
-
-
-# ── Orchestration schemas ─────────────────────────────────────────────────────
-
-class OrchestratorReaction(BaseModel):
-    """A single action to fire after a trigger matches."""
-    source: str                         # e.g. "slack", "email" — appears in injection prefix
-    message: str                        # template with {arg} interpolation from tool call args
-    after_seconds: float = 0.0          # real-time delay (scaled by time_scale)
-    after_minutes: float = 0.0          # simulated minutes (scaled by time_scale)
-
-class OrchestratorTrigger(BaseModel):
-    """Rule: when tool `tool` fires and args match `match`, schedule `reactions`."""
-    tool: str                           # tool method name, e.g. "email_send"
-    match: dict[str, str] = Field(default_factory=dict)  # arg key → regex pattern (empty = match all)
-    reactions: list[OrchestratorReaction]
-    fire_once: bool = True              # if True, fires only on the first matching call per session
-
-class OrchestratorScript(BaseModel):
-    """Named scenario script defining cross-system event chains."""
-    name: str
-    time_scale: float = 1.0             # compress time: 0.01 → 1 simulated min = 0.6 real sec
-    triggers: list[OrchestratorTrigger]
+# MockImmediateResponse, MockCallback, MockMethodDef, MockSystemDef, MockScript,
+# OrchestratorReaction, OrchestratorTrigger, OrchestratorScript — imported from mock/schema.py above.
 
 
 def to_lnl_class_definition(cls_def: LLMClassDef) -> ObjectDefinition:
