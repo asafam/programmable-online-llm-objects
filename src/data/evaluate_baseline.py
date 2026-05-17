@@ -293,7 +293,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-17: static-timeline overhaul — removed tmap/tttmap trigger systems; all events driven in when-order; INTER_EVENT_TIMEOUT_S pinned
+_VERSION: str = _build_version()  # bumped 2026-05-17: pluggable memory backend lands in LNL evaluate.py — paired bump for cross-run comparability (baseline behavior unchanged)
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 

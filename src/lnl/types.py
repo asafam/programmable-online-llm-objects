@@ -281,7 +281,8 @@ class ReactStep:
     """
     thought: str
     action: str  # "tool_call" | "finish"
-    state_update: Optional[StateDelta] = None  # applied ONLY on action="finish" (commitment, not reasoning)
+    state_update: Optional[Any] = None         # legacy singular delta; first entry of state_updates
+    state_updates: list = field(default_factory=list)  # full list of deltas from this step (flat or nested)
     plan_update: Optional[PlanUpdate] = None   # applied ONLY on action="finish"
     tool_call: Optional[ToolCall] = None       # legacy: singular tool call
     tool_calls: list[ToolCall] = field(default_factory=list)  # preferred: batched tool calls dispatched async
@@ -292,6 +293,11 @@ class ReactStep:
         # either shape; downstream code reads `self.tool_calls` only.
         if self.tool_call is not None and not self.tool_calls:
             self.tool_calls = [self.tool_call]
+        # Mirror state_update <-> state_updates so both forms are populated.
+        if self.state_update is not None and not self.state_updates:
+            self.state_updates = [self.state_update]
+        elif self.state_updates and self.state_update is None:
+            self.state_update = self.state_updates[0]
 
 
 @dataclass

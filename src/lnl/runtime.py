@@ -124,6 +124,10 @@ class SystemConfig:
     # last_progress_at is force-retired.
     stale_plan_seconds: float = 180.0
     max_active_plans_per_object: int = 32
+    # Memory backend choice — global per run. "flat" preserves the pre-refactor
+    # {op, key, value} delta schema; "nested" switches to the Redux-style
+    # {op, path, value} action list with dotted nested paths.
+    memory_backend: str = "flat"
 
     @staticmethod
     def load(path: Path | None = None) -> "SystemConfig":
@@ -154,6 +158,7 @@ class SystemConfig:
             evaluator_max_cycles_per_trace=int(data.get("evaluator_max_cycles_per_trace", 3)),
             stale_plan_seconds=float(data.get("stale_plan_seconds", 180.0)),
             max_active_plans_per_object=int(data.get("max_active_plans_per_object", 32)),
+            memory_backend=str(data.get("memory_backend", "flat")),
         )
 
 
@@ -179,6 +184,14 @@ class Runtime:
         self._brain = brain
         self._planner_brain = planner_brain or brain
         self._evaluator_brain = evaluator_brain or brain
+        # Propagate backend choice to every brain so their ReAct request
+        # schemas + delta parsing match what the runtime is applying.
+        from .memory import make_backend as _make_backend
+        self._memory_backend_name = cfg.memory_backend
+        _shared_backend = _make_backend(self._memory_backend_name)
+        for _b in {self._brain, self._planner_brain, self._evaluator_brain}:
+            if hasattr(_b, "set_memory_backend"):
+                _b.set_memory_backend(_shared_backend)
         self._bus = MessageBus()
         self._max_chain_depth = max_chain_depth if max_chain_depth is not None else cfg.max_chain_depth
         self._max_tool_rounds = cfg.max_tool_rounds
@@ -188,7 +201,9 @@ class Runtime:
         self._auto_ask_peers_on_gap = cfg.auto_ask_peers_on_gap
         self._pending_timeout_seconds = cfg.pending_timeout_seconds
         self._heartbeat_interval_seconds = cfg.heartbeat_interval_seconds
-        self._prompt_file: str = "executor.yaml"
+        # Executor prompt file defaults to whatever the chosen backend names —
+        # flat → executor.yaml, nested → executor_nested.yaml.
+        self._prompt_file: str = _shared_backend.prompt_file
         self._planner_prompt_file: str = "planner.yaml"
         self._sources: dict[str, Path] = {}  # object_id -> file path
         self._modified: set[str] = set()  # object_ids with unsaved changes
@@ -415,6 +430,7 @@ class Runtime:
             log_synthetic_message=self._bus.log_synthetic,
             stale_plan_seconds=self._heartbeat.stale_plan_seconds,
             max_active_plans=self._heartbeat.max_active_plans_per_object,
+            memory_backend=self._memory_backend_name,
         )
         self._bus.register(obj)
         if definition.event_sources:

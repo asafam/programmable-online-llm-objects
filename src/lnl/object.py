@@ -22,6 +22,7 @@ from .brain import (
     plan_dict_to_plan,
 )
 from .tools import ToolRegistry
+from .memory import MemoryBackend, _coerce_to_dict, make_backend
 from .types import (
     PLAN_TERMINAL_STATUSES,
     STEP_TERMINAL_STATUSES,
@@ -37,7 +38,7 @@ from .types import (
     PlanUpdate,
     ProcessingResult,
     ReactFinish,
-    StateDelta,
+    StateDelta,  # flat-backend delta; nested deltas come from .memory
     ToolResult,
 )
 
@@ -77,6 +78,7 @@ class LLMObject:
         wait_matcher_brain: "Optional[LLMBrain]" = None,
         wait_matcher_prompt_file: str = "wait_matcher.yaml",
         default_wait_timeout_seconds: float = 86400.0,  # 24h default for wait steps
+        memory_backend: "str | MemoryBackend" = "flat",
     ) -> None:
         self._definition = definition
         self._brain = brain
@@ -87,7 +89,13 @@ class LLMObject:
         # mutation; "last write wins" is deterministic by arrival order.
         # Working memory (in-flight step results within one cascade) belongs
         # on PlanStep.result, NOT here.
-        self._state = ""
+        if isinstance(memory_backend, str):
+            self._memory: MemoryBackend = make_backend(memory_backend)
+        else:
+            self._memory = memory_backend
+        # Mirror of self._memory.serialize() — kept in sync after every backend
+        # write so read-paths can keep using self._state directly.
+        self._state = self._memory.serialize()
         self._history: list[Message] = []
         self._mailbox: deque[Message] = deque()
         self._tool_registry = tool_registry
@@ -611,15 +619,11 @@ class LLMObject:
         text = reply.lower()
         return any(phrase in text for phrase in self._SINK_DEFERRAL_PHRASES)
 
-    def _merged_state(self, pending_deltas: "list[StateDelta]", trace_id: "Optional[str]" = None) -> dict:
-        base = _coerce_state(self._working_state_for(trace_id))
-        if not isinstance(base, dict):
-            base = {}
-        else:
-            base = dict(base)
-        for delta in pending_deltas:
-            base = _apply_delta(base, delta)
-        return base
+    def _merged_state(self, pending_deltas: "list", trace_id: "Optional[str]" = None) -> dict:
+        backend = make_backend(self._memory.name, initial=self._working_state_for(trace_id))
+        if pending_deltas:
+            backend.apply(pending_deltas)
+        return backend.snapshot()
 
     def _state_has_completion(self, merged: dict) -> bool:
         """True if any string value in merged state matches a completion term."""
@@ -878,24 +882,18 @@ class LLMObject:
                 if active_plan is not None:
                     # Apply deltas to the plan's working state copy; master is
                     # untouched until the plan completes.
-                    current = _coerce_state(active_plan.state)
-                    if not isinstance(current, dict):
-                        current = {}
-                    for delta in pending_deltas:
-                        current = _apply_delta(current, delta)
+                    plan_backend = make_backend(self._memory.name, initial=active_plan.state)
+                    plan_backend.apply(pending_deltas)
                     with self._plans_lock:
-                        active_plan.state = json.dumps(current)
+                        active_plan.state = plan_backend.serialize()
                         active_plan.accumulated_deltas.extend(pending_deltas)
                 else:
                     # No plan — apply directly to master (planner-off path).
-                    current = _coerce_state(self._state)
-                    if not isinstance(current, dict):
-                        current = {}
-                    for delta in pending_deltas:
-                        current = _apply_delta(current, delta)
-                    self._state = json.dumps(current)
+                    self._memory.apply(pending_deltas)
+                    self._state = self._memory.serialize()
             elif finish.updated_state and self.plan_for(trace_id) is None:
-                self._state = finish.updated_state
+                self._memory.set_full(finish.updated_state)
+                self._state = self._memory.serialize()
 
             self._auto_create_plan_from_outgoing(finish.outgoing_messages or [], message)
             cycle_outgoing = self._correlate_outgoing(finish.outgoing_messages, trace_id)
@@ -1068,8 +1066,8 @@ class LLMObject:
 
             if step.action == "finish":
                 # Commitment — apply state/plan updates, return finish.
-                if step.state_update:
-                    pending_deltas.append(step.state_update)
+                if step.state_updates:
+                    pending_deltas.extend(step.state_updates)
                 if step.plan_update is not None:
                     self._apply_plan_update(step.plan_update, trace_id)
                 finish = step.finish or ReactFinish(reply="", updated_state=self._state)
@@ -1283,12 +1281,8 @@ class LLMObject:
                 self._completed_plans.append(plan)
                 del self._active_plans[trace_id]
             if accumulated:
-                current = _coerce_state(self._state)
-                if not isinstance(current, dict):
-                    current = {}
-                for delta in accumulated:
-                    current = _apply_delta(current, delta)
-                self._state = json.dumps(current)
+                self._memory.apply(accumulated)
+                self._state = self._memory.serialize()
             return
 
         # Shape 2: incremental updates to active plan.
@@ -1999,12 +1993,8 @@ class LLMObject:
                 closed = True
         if closed:
             if accumulated:
-                current = _coerce_state(self._state)
-                if not isinstance(current, dict):
-                    current = {}
-                for delta in accumulated:
-                    current = _apply_delta(current, delta)
-                self._state = json.dumps(current)
+                self._memory.apply(accumulated)
+                self._state = self._memory.serialize()
             self._unregister_waits_for_trace(trace_id)
 
     def mark_step_dispatched(self, step_index: int, trace_id: Optional[str] = None) -> None:
@@ -2048,11 +2038,8 @@ class LLMObject:
 
     def set_state(self, state: str | dict) -> None:
         """Set state directly (for testing). Accepts str or dict (dict is JSON-encoded)."""
-        if isinstance(state, dict):
-            import json as _json
-            self._state = _json.dumps(state)
-        else:
-            self._state = state
+        self._memory.load(state)
+        self._state = self._memory.serialize()
 
     def snapshot(self) -> dict:
         """Return a debug snapshot of the object."""
@@ -2076,34 +2063,10 @@ class LLMObject:
         }
 
 
-def _coerce_state(s):
-    """Return state as dict if possible, otherwise the raw string (or {} if empty)."""
-    if isinstance(s, dict):
-        return s
-    if not s:
-        return {}
-    try:
-        parsed = json.loads(s)
-        if isinstance(parsed, dict):
-            return parsed
-    except (json.JSONDecodeError, ValueError):
-        pass
-    return s
-
-
-def _apply_delta(state: dict, delta: StateDelta) -> dict:
-    """Apply a single state delta to a state dict in-place and return it."""
-    if delta.op == "set":
-        state[delta.key] = delta.value
-    elif delta.op == "delete":
-        state.pop(delta.key, None)
-    elif delta.op == "append":
-        lst = state.get(delta.key, [])
-        if not isinstance(lst, list):
-            lst = [lst]
-        lst.append(delta.value)
-        state[delta.key] = lst
-    return state
+# _coerce_state and _apply_delta moved into src/lnl/memory.py. The flat-backend
+# wraps the original _apply_delta logic; _coerce_state is an alias for
+# memory._coerce_to_dict — kept here for callers/tests that imported it.
+_coerce_state = _coerce_to_dict
 
 
 def _accumulate_metrics(base: InferenceMetrics, add: InferenceMetrics) -> InferenceMetrics:

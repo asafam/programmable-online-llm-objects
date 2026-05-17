@@ -35,6 +35,16 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--model", default=None)
     parser.add_argument("--max-chain-depth", type=int, default=10)
     parser.add_argument(
+        "--memory",
+        default=None,
+        choices=["flat", "nested"],
+        help=(
+            "Memory backend for LLM-objects. flat: {op, key, value} deltas at top-level "
+            "keys. nested: Redux-style {op, path, value} actions on a nested JSON tree. "
+            "Default: follows system.yaml (which itself defaults to flat)."
+        ),
+    )
+    parser.add_argument(
         "--code-tool",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -109,6 +119,8 @@ def main(argv: list[str] | None = None) -> None:
     cfg = SystemConfig.load()
     if getattr(args, "code_tool", None) is not None:
         cfg.enable_code_tool = args.code_tool
+    if getattr(args, "memory", None) is not None:
+        cfg.memory_backend = args.memory
     brain = _make_brain(args)
     rt = Runtime(
         brain,

@@ -67,7 +67,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-17: static-timeline overhaul — removed tmap/tttmap trigger systems; all events driven in when-order; INTER_EVENT_TIMEOUT_S constant
+_VERSION: str = _build_version()  # bumped 2026-05-17: pluggable memory backend (flat | nested) — adds --memory CLI flag; nested uses Redux-style {op, path, value} actions on a nested JSON tree
 
 from src.data.schema import (
     EvalSummary,
@@ -384,7 +384,7 @@ def _execute_test_case_inner(
     concurrency: int = 0,
     concurrency_seed: int = 42,
     max_modifications: Optional[int] = None,
-    object_prompt: str = "executor.yaml",
+    object_prompt: Optional[str] = None,
     planner_prompt: str = "planner.yaml",
     max_history: Optional[int] = None,
     tracked_harness=None,
@@ -396,6 +396,7 @@ def _execute_test_case_inner(
     evaluator_brain=None,
     mock_server_url: "str | None" = None,
     mock_slot_id: str = "default",
+    memory_backend: str = "flat",
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase and return event + modification results."""
     from src.lnl.gateway import EventGateway
@@ -463,6 +464,7 @@ def _execute_test_case_inner(
         enable_sink_completion_shim=enable_sink_completion_shim,
         enable_planner=enable_planner,
         enable_evaluator=enable_evaluator,
+        memory_backend=memory_backend,
     )
     rt = Runtime(
         brain,
@@ -472,7 +474,10 @@ def _execute_test_case_inner(
         planner_brain=planner_brain,
         evaluator_brain=evaluator_brain,
     )
-    if object_prompt != "object.yaml":
+    # Only override the runtime's prompt-file defaults when the caller passes
+    # an explicit value — otherwise let the runtime pick its backend-derived
+    # default (executor.yaml for flat, executor_nested.yaml for nested).
+    if object_prompt is not None:
         rt.set_prompt_file(object_prompt)
     if planner_prompt != "planner.yaml":
         rt.set_planner_prompt_file(planner_prompt)
@@ -986,7 +991,7 @@ def execute_test_case(
     concurrency: int = 0,
     concurrency_seed: int = 42,
     max_modifications: Optional[int] = None,
-    object_prompt: str = "executor.yaml",
+    object_prompt: Optional[str] = None,
     planner_prompt: str = "planner.yaml",
     max_history: Optional[int] = None,
     tracked_harness=None,
@@ -998,6 +1003,7 @@ def execute_test_case(
     evaluator_brain=None,
     mock_server_url: "str | None" = None,
     mock_slot_id: str = "default",
+    memory_backend: str = "flat",
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase with a per-event timeout (seconds).
 
@@ -1044,6 +1050,7 @@ def execute_test_case(
         evaluator_brain=evaluator_brain,
         mock_server_url=mock_server_url,
         mock_slot_id=mock_slot_id,
+        memory_backend=memory_backend,
     )
 
 
@@ -1303,7 +1310,7 @@ def run(args: argparse.Namespace) -> Path:
             f"{p}/{m}" for p, m in parsed_judges
         )
 
-    object_prompt = getattr(args, "object_prompt", "executor.yaml")
+    object_prompt = getattr(args, "object_prompt", None) or "(backend default)"
     # Planner line — only shown when planner is enabled; otherwise "(disabled)".
     if getattr(args, "enable_planner", True):
         planner_provider = getattr(args, "planner_provider", None) or args.provider
@@ -1569,8 +1576,9 @@ def run(args: argparse.Namespace) -> Path:
                 concurrency=getattr(args, "concurrency", 0),
                 concurrency_seed=getattr(args, "seed", None) or 42,
                 max_modifications=getattr(args, "modifications", None),
-                object_prompt=getattr(args, "object_prompt", "executor.yaml"),
+                object_prompt=getattr(args, "object_prompt", None),
                 planner_prompt=getattr(args, "planner_prompt", "planner.yaml"),
+                memory_backend=getattr(args, "memory", "flat"),
                 max_history=getattr(args, "max_history", None),
                 tracked_harness=tracked_harness,
                 enable_code_tool=getattr(args, "code_tool", True),
@@ -2242,11 +2250,21 @@ Examples:
     )
     parser.add_argument(
         "--object-prompt",
-        default="executor.yaml",
+        default=None,
         help=(
             "Object system-prompt template filename relative to config/prompts/lnl/. "
-            "Default: executor.yaml (the slim executor that pairs with --enable-planner "
-            "and --enable-evaluator). Pass object.yaml for the legacy self-planning agent."
+            "Default: chosen by --memory (executor.yaml for flat, executor_nested.yaml "
+            "for nested). Pass object.yaml for the legacy self-planning agent."
+        ),
+    )
+    parser.add_argument(
+        "--memory",
+        default="flat",
+        choices=["flat", "nested"],
+        help=(
+            "Memory backend used by LLM-objects. flat: {op, key, value} deltas at "
+            "top-level keys (current default). nested: Redux-style {op, path, value} "
+            "actions over a nested JSON tree (ops: set/merge/delete/append, dotted paths)."
         ),
     )
     parser.add_argument(

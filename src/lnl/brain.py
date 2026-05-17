@@ -15,6 +15,7 @@ from typing import Any, Optional, Sequence
 
 import yaml
 
+from .memory import FlatKeyValueMemory, MemoryBackend
 from .types import (
     InferenceMetrics,
     KnowledgeGap,
@@ -32,6 +33,11 @@ from .types import (
     ToolCall,
     ToolResult,
 )
+
+
+# Default backend used when a brain isn't configured with one. Construction
+# pattern mirrors `make_backend("flat")` to avoid a runtime import cycle.
+_DEFAULT_MEMORY_BACKEND: MemoryBackend = FlatKeyValueMemory()
 
 # JSON schema for the LLM response format (no tools)
 LLM_RESPONSE_SCHEMA: dict[str, Any] = {
@@ -842,6 +848,15 @@ WAIT_MATCHER_RESPONSE_SCHEMA: dict[str, Any] = {
 class LLMBrain(ABC):
     """Abstract interface for LLM processing backends."""
 
+    # Memory backend the runtime is using. Brains use it to (a) inject the
+    # right `state_update` schema fragment into ReAct requests and (b) parse
+    # the response back into typed deltas. Defaults to the flat backend so
+    # tests and ad-hoc usage Just Work.
+    memory_backend: MemoryBackend = _DEFAULT_MEMORY_BACKEND
+
+    def set_memory_backend(self, backend: MemoryBackend) -> None:
+        self.memory_backend = backend
+
     @abstractmethod
     def call(
         self,
@@ -994,7 +1009,7 @@ class OpenAIBrain(LLMBrain):
             "max_completion_tokens": 32000,
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": "react_step", "schema": LLM_REACT_SCHEMA},
+                "json_schema": {"name": "react_step", "schema": _build_react_schema(self.memory_backend)},
             },
         }
         if self._seed is not None:
@@ -1017,7 +1032,7 @@ class OpenAIBrain(LLMBrain):
                 "The output exceeded the model's max_tokens limit."
             )
         raw = _safe_json_loads(choice.message.content or "{}")
-        return _parse_react_step(raw), metrics
+        return _parse_react_step(raw, self.memory_backend), metrics
 
     def plan_call(
         self,
@@ -1218,7 +1233,7 @@ class AzureBrain(LLMBrain):
             "max_completion_tokens": 32000,
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": "react_step", "schema": LLM_REACT_SCHEMA},
+                "json_schema": {"name": "react_step", "schema": _build_react_schema(self.memory_backend)},
             },
         }
         if self._seed is not None:
@@ -1245,7 +1260,7 @@ class AzureBrain(LLMBrain):
                 "The output exceeded the model's max_tokens limit."
             )
         raw = _safe_json_loads(choice.message.content or "{}")
-        return _parse_react_step(raw), metrics
+        return _parse_react_step(raw, self.memory_backend), metrics
 
     def plan_call(
         self,
@@ -1482,15 +1497,22 @@ class AnthropicBrain(LLMBrain):
         sys_prompt = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
         user_messages = [m for m in messages if m["role"] != "system"]
 
-        strict_schema = json.loads(json.dumps(LLM_REACT_SCHEMA))
+        strict_schema = _build_react_schema(self.memory_backend)
         self._enforce_strict_schema(strict_schema)
-        # Patch AFTER enforce_strict: give `state_update.value` an explicit wildcard schema
-        # (empty schema = any value in JSON Schema) so Anthropic's validator accepts it.
-        # Done after enforce_strict so the wildcard isn't overridden.
+        # Patch AFTER enforce_strict: give `state_update[.items].value` an explicit
+        # wildcard schema (empty schema = any value in JSON Schema) so Anthropic's
+        # validator accepts it. Walks both shapes — flat (single object) and
+        # nested (array of items) — since enforce_strict may have overwritten the
+        # wildcard with a stricter form.
         try:
-            strict_schema["properties"]["state_update"]["properties"]["value"] = {
-                "description": "New value (set/append). Omit for delete.",
-            }
+            su = strict_schema["properties"]["state_update"]
+            target_props = (
+                su["items"]["properties"]
+                if su.get("type") == "array" and "items" in su
+                else su.get("properties")
+            )
+            if target_props and "value" in target_props:
+                target_props["value"] = {"description": "New value. Omit for delete."}
         except (KeyError, TypeError):
             pass
 
@@ -1553,7 +1575,7 @@ class AnthropicBrain(LLMBrain):
                 (content_str or "")[:200],
             )
             raw = {}
-        return _parse_react_step(raw), metrics
+        return _parse_react_step(raw, self.memory_backend), metrics
 
 
 class GeminiBrain(LLMBrain):
@@ -1641,9 +1663,9 @@ class GeminiBrain(LLMBrain):
         *,
         object_id: str | None = None,
     ) -> tuple[ReactStep, InferenceMetrics]:
-        text, metrics = self._generate_json(messages, LLM_REACT_SCHEMA)
+        text, metrics = self._generate_json(messages, _build_react_schema(self.memory_backend))
         raw = _safe_json_loads(text)
-        return _parse_react_step(raw), metrics
+        return _parse_react_step(raw, self.memory_backend), metrics
 
 
 @dataclass
@@ -1918,15 +1940,41 @@ def _parse_state(raw_state: Any) -> str:
     return ""
 
 
-def _parse_state_delta(raw: dict) -> Optional[StateDelta]:
-    """Parse an optional state_update dict into a StateDelta, or None if absent/invalid."""
-    if not isinstance(raw, dict):
-        return None
-    op = raw.get("op")
-    key = raw.get("key")
-    if not op or not key:
-        return None
-    return StateDelta(op=op, key=key, value=raw.get("value"))
+def _parse_state_delta(raw: dict, backend: Optional[MemoryBackend] = None) -> Optional[Any]:
+    """Parse an optional state_update dict into a delta object, or None if absent/invalid.
+
+    The backend supplies the concrete delta type — flat returns StateDelta;
+    nested returns NestedDelta.
+    """
+    b = backend or _DEFAULT_MEMORY_BACKEND
+    return b.parse_delta(raw)
+
+
+def _parse_state_deltas(raw: Any, backend: Optional[MemoryBackend] = None) -> list:
+    """Parse a state_update payload into a list of delta objects.
+
+    Accepts either a single dict (flat backend) or a list of dicts (nested
+    backend). Returns the flattened list with invalid entries dropped.
+    """
+    b = backend or _DEFAULT_MEMORY_BACKEND
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        parsed = [b.parse_delta(d) for d in raw if isinstance(d, dict)]
+        return [d for d in parsed if d is not None]
+    if isinstance(raw, dict):
+        d = b.parse_delta(raw)
+        return [d] if d is not None else []
+    return []
+
+
+def _build_react_schema(backend: Optional[MemoryBackend]) -> dict:
+    """Return a per-request copy of LLM_REACT_SCHEMA with the backend's
+    `state_update` fragment swapped in."""
+    schema = json.loads(json.dumps(LLM_REACT_SCHEMA))
+    if backend is not None:
+        schema["properties"]["state_update"] = backend.state_update_schema()
+    return schema
 
 
 def _parse_plan_update(raw: dict) -> Optional[PlanUpdate]:
@@ -1957,19 +2005,26 @@ def _parse_tool_call_dict(tc_data: dict) -> ToolCall:
     )
 
 
-def _parse_react_step(raw: dict) -> ReactStep:
+def _parse_react_step(raw: dict, backend: Optional[MemoryBackend] = None) -> ReactStep:
     """Parse a raw LLM dict into a ReactStep.
 
     Accepts both legacy singular `tool_call` and the new `tool_calls` list.
     A `finish` action may carry `tool_calls` to dispatch async alongside the
     commitment — those are read here and the runtime dispatches them on the
     per-object tool pool without blocking the turn.
+
+    The backend determines how `state_update` is parsed: flat → single
+    StateDelta; nested → list of NestedDelta. ReactStep stores the parsed
+    list on `state_updates` (and exposes the first entry as `state_update`
+    for backward compatibility).
     """
     thought = raw.get("thought", "")
     action = raw.get("action", "finish")
 
-    # state_update and plan_update are optional at any step
-    state_update = _parse_state_delta(raw.get("state_update") or {})
+    # state_update is either a single dict (flat backend) or a list (nested
+    # backend). plan_update is unchanged.
+    state_updates = _parse_state_deltas(raw.get("state_update"), backend)
+    state_update = state_updates[0] if state_updates else None
     plan_update = _parse_plan_update(raw.get("plan_update") or {})
 
     # Collect tool_calls from either the legacy singular form or the new list.
@@ -1989,7 +2044,8 @@ def _parse_react_step(raw: dict) -> ReactStep:
         first = tool_calls[0] if tool_calls else None
         return ReactStep(
             thought=thought, action="tool_call",
-            state_update=state_update, plan_update=plan_update,
+            state_update=state_update, state_updates=state_updates,
+            plan_update=plan_update,
             tool_call=first, tool_calls=tool_calls,
         )
 
@@ -2032,7 +2088,8 @@ def _parse_react_step(raw: dict) -> ReactStep:
     )
     return ReactStep(
         thought=thought, action="finish",
-        state_update=state_update, plan_update=plan_update,
+        state_update=state_update, state_updates=state_updates,
+        plan_update=plan_update,
         finish=finish, tool_calls=tool_calls,
     )
 
