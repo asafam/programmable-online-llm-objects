@@ -106,9 +106,16 @@ def _classify_event_source(descriptor: str) -> EventSourceBinding:
 # File content builders
 # ---------------------------------------------------------------------------
 
-def _agents_md(obj: ObjectDefinition, session_name: str = "main") -> str:
+def _agents_md(
+    obj: ObjectDefinition,
+    session_name: str = "main",
+    peer_message_timeout: float = 90.0,
+) -> str:
     name = _slug_to_name(obj.object_id)
     behavior = obj.behavior or "(No specific behavior defined.)"
+    # Render timeout as int when whole (0, 90) to keep the prompt clean.
+    _t = peer_message_timeout
+    timeout_str = str(int(_t)) if float(_t).is_integer() else str(_t)
     if obj.peers:
         peers_block = "\n".join(f"- **{p.object_id}**: {p.relationship}" for p in obj.peers)
         peer_ids = [p.object_id for p in obj.peers]
@@ -117,14 +124,25 @@ def _agents_md(obj: ObjectDefinition, session_name: str = "main") -> str:
         # sessions_send targets a peer. Custom session names (e.g. "eval-ma-6")
         # do NOT get auto-created and cause "pairing required" errors.
         peer_examples = "\n".join(
-            f'  - To message `{pid}`: `sessions_send(sessionKey="agent:{pid}:main", message="<your message>", timeoutSeconds=90)`'
+            f'  - To message `{pid}`: `sessions_send(sessionKey="agent:{pid}:main", message="<your message>", timeoutSeconds={timeout_str})`'
             for pid in peer_ids
         )
+        if peer_message_timeout == 0:
+            timeout_instruction = (
+                f"**ALWAYS include `timeoutSeconds=0`** — this is fire-and-forget: the message is "
+                f"enqueued and you return immediately without waiting for a reply. Do not wait for "
+                f"or expect a response from peers; continue with your remaining work.\n\n"
+            )
+        else:
+            timeout_instruction = (
+                f"**ALWAYS include `timeoutSeconds={timeout_str}`** — peers may need to make multiple "
+                f"tool calls before responding. Never omit this parameter.\n\n"
+            )
         comm_section = (
             f"## Communication\n\n"
             f"To send a message to a peer agent, use the `sessions_send` tool with the exact sessionKey below.\n"
             f"**Do NOT use the `message` tool** — that is for external channels (Slack, email, etc.).\n"
-            f"**ALWAYS include `timeoutSeconds=90`** — peers may need to make multiple tool calls before responding. Never omit this parameter.\n\n"
+            f"{timeout_instruction}"
             f"Exact calls for each peer:\n\n"
             f"{peer_examples}\n\n"
             f"**For actions YOUR behavior defines** (writing a record, sending a notification, etc.),\n"
@@ -556,6 +574,7 @@ def rewrite_agents_md(
     session_name: str,
     *,
     slot_suffix: str = "",
+    peer_message_timeout: float = 90.0,
 ) -> None:
     """Rewrite only AGENTS.md for each object workspace with the given session_name.
 
@@ -568,6 +587,8 @@ def rewrite_agents_md(
         session_name: Unique session name for this run (e.g. "eval-ma-42").
         slot_suffix: Appended to workspace dir name and peer agent IDs for concurrent
                      slots (e.g. "-c1"). Empty string for slot 0 (default workspaces).
+        peer_message_timeout: timeoutSeconds value embedded in the sessions_send peer
+                     examples. 0 = fire-and-forget (enqueue and return immediately).
     """
     from dataclasses import replace
     from pathlib import Path as _Path
@@ -593,7 +614,11 @@ def rewrite_agents_md(
             slotted_obj = replace(obj, peers=slotted_peers)
         else:
             slotted_obj = obj
-        target.write_text(_agents_md(slotted_obj, session_name=session_name))
+        target.write_text(_agents_md(
+            slotted_obj,
+            session_name=session_name,
+            peer_message_timeout=peer_message_timeout,
+        ))
 
 
 def _export_objects_to_dir(

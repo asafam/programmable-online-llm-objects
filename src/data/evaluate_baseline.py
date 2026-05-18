@@ -293,7 +293,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-18: nested memory becomes the LNL default — paired bump for cross-run comparability (baseline behavior unchanged)
+_VERSION: str = _build_version()  # bumped 2026-05-18: --peer-message-timeout runtime param (fire-and-forget for OC peer messages)
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
@@ -1245,6 +1245,7 @@ async def _execute_tc_async(
     tracked_harness=None,
     thinking: Optional[str] = None,
     sequential: bool = False,
+    peer_message_timeout: float = 90.0,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Async core: open persistent sessions for ALL agents simultaneously, then send messages.
 
@@ -1271,6 +1272,16 @@ async def _execute_tc_async(
     else:
         for obj in tc.objects:
             reset_agent_state(f"{obj.object_id}{slot_suffix}", obj.state_description, openclaw_home)
+        # Refresh AGENTS.md so the embedded sessions_send timeoutSeconds matches the
+        # runtime --peer-message-timeout value. Peer session keys stay as :main
+        # (unchanged from export time); only the prompt's timeoutSeconds literal
+        # and surrounding fire-and-forget wording are rewritten.
+        rewrite_agents_md(
+            tc.objects, openclaw_home,
+            session_name="main",
+            slot_suffix=slot_suffix,
+            peer_message_timeout=peer_message_timeout,
+        )
 
     # Multi-agent: session names are generated PER-EVENT (not per-run) so each
     # webhook trigger starts with a clean session.  State persists across events
@@ -1345,9 +1356,10 @@ async def _execute_tc_async(
         """
         OpenClawAgent._global_counter += 1
         sname = f"eval-ma-{OpenClawAgent._global_counter}"
-        # No rewrite_agents_md — peer session keys are hardcoded to "main" in
-        # AGENTS.md (set during export). Only the entry agent uses sname, and
-        # that's managed by our Python client handle, not AGENTS.md.
+        # AGENTS.md was already rewritten once at the top of this TC run to refresh
+        # the embedded sessions_send timeoutSeconds. Peer session keys are :main
+        # and don't change per-event; only the entry agent uses sname, managed by
+        # our Python client handle (not AGENTS.md).
 
         ev_handles: dict[str, Any] = {}
         ev_session_names: dict[str, str] = {}
@@ -1704,6 +1716,7 @@ def _execute_test_case_inner(
     tracked_harness=None,
     thinking: Optional[str] = None,
     sequential: bool = False,
+    peer_message_timeout: float = 90.0,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Sync wrapper: delegate to _execute_tc_async with persistent multi-agent sessions."""
     gateway_url = next(iter(agents.values()))._gateway_url if agents else None
@@ -1718,6 +1731,7 @@ def _execute_test_case_inner(
         tracked_harness=tracked_harness,
         thinking=thinking,
         sequential=sequential,
+        peer_message_timeout=peer_message_timeout,
     ))
 
 
@@ -1738,6 +1752,7 @@ def execute_test_case(
     tracked_harness=None,
     thinking: Optional[str] = None,
     sequential: bool = False,
+    peer_message_timeout: float = 90.0,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single TestCase with an optional wall-clock timeout."""
     if timeout_s is None:
@@ -1751,7 +1766,8 @@ def execute_test_case(
                                         concurrency_seed=concurrency_seed,
                                         tracked_harness=tracked_harness,
                                         thinking=thinking,
-                                        sequential=sequential)
+                                        sequential=sequential,
+                                        peer_message_timeout=peer_message_timeout)
 
     partial_events: list[EventResult] = []
     partial_mods: list[ModificationResult] = []
@@ -1762,7 +1778,7 @@ def execute_test_case(
             harness, mock_server, verbose, steps_only, single_agent_id,
             partial_events, partial_mods, slot_suffix, max_modifications,
             event_concurrency, concurrency_seed, tracked_harness, thinking,
-            sequential,
+            sequential, peer_message_timeout,
         )
         try:
             return future.result(timeout=timeout_s)
@@ -2250,6 +2266,7 @@ async def _run_all_tcs_concurrent(
                                     tracked_harness=tracked_harness,
                                     thinking=getattr(args, "thinking", None),
                                     sequential=bool(getattr(args, "sequential", None)),
+                                    peer_message_timeout=getattr(args, "peer_message_timeout", 90.0),
                                 )
                                 if tc_timeout:
                                     event_results, mod_results = await asyncio.wait_for(coro, timeout=tc_timeout)
@@ -2343,7 +2360,8 @@ async def _run_all_tcs_concurrent(
                                 rate_str = f"{pass_rate:.0%}" if pass_rate is not None else "N/A"
                                 _tc_s = tc_elapsed_ms / 1000
                                 _elapsed_str = f"{int(_tc_s) // 60:02d}:{int(_tc_s) % 60:02d}.{int((_tc_s % 1) * 1000):03d}"
-                                tqdm.write(f"\n  → pass={passed_n}/{total_n} ({rate_str})  elapsed={_elapsed_str}")
+                                _avg_evt_s = _tc_s / total_n if total_n else 0.0
+                                tqdm.write(f"\n  → pass={passed_n}/{total_n} ({rate_str})  elapsed={_elapsed_str}  avg/evt={_avg_evt_s:.1f}s")
                                 _pbar_postfix(pbar, all_tc_results)
                                 if pbar is not None:
                                     pbar.update(1)
@@ -2905,6 +2923,7 @@ def run(args: argparse.Namespace) -> Path:
                         concurrency_seed=getattr(args, "seed", None) or 42,
                         tracked_harness=tracked_harness,
                         thinking=getattr(args, "thinking", None),
+                        peer_message_timeout=getattr(args, "peer_message_timeout", 90.0),
                     )
                     pass_rate = (
                         sum(1 for e in event_results if e.passed) / len(event_results)
@@ -2951,6 +2970,7 @@ def run(args: argparse.Namespace) -> Path:
                                 concurrency_seed=getattr(args, "seed", None) or 42,
                                 tracked_harness=tracked_harness,
                                 thinking=getattr(args, "thinking", None),
+                                peer_message_timeout=getattr(args, "peer_message_timeout", 90.0),
                             )
                             pass_rate = (
                                 sum(1 for e in event_results if e.passed) / len(event_results)
@@ -3045,6 +3065,11 @@ Examples:
                         choices=["disabled", "enabled"],
                         default=None,
                         help="Set extended thinking mode for OpenClaw agent execute() calls (disabled/enabled). Default: not set (model default).")
+    parser.add_argument("--peer-message-timeout", type=float, default=90.0, metavar="SECONDS",
+                        help="timeoutSeconds for sessions_send peer messages in multi-agent runs. "
+                             "0 = fire-and-forget (enqueue and return immediately, no reply awaited). "
+                             "Default 90 preserves wait-for-reply behavior. "
+                             "See https://docs.openclaw.ai/concepts/session-tool. Multi-agent only.")
     parser.add_argument("--steps-only", action="store_true", default=False,
                         help="Run only the steps phase (no modifications/events). "
                              "Deduplicates by sample_id.")
