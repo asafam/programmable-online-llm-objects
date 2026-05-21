@@ -27,8 +27,11 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+from dotenv import load_dotenv
 
 from src.data.llm import create_llm
+
+load_dotenv()
 from src.data.schema import (
     StepJudgement,
     StepVerdict,
@@ -289,7 +292,7 @@ def main() -> None:
     parser.add_argument("--templates", type=Path,
                         default=Path("data/zapier/raw/templates.yaml"),
                         help="Path to templates.yaml.")
-    parser.add_argument("--provider", default=os.environ.get("LLM_PROVIDER", "openai"))
+    parser.add_argument("--provider", default=os.environ.get("LLM_PROVIDER", "azure"))
     parser.add_argument("--judge-model", default="gpt-5.4")
     parser.add_argument("--workers", type=int, default=4,
                         help="Parallel workflows judged at once.")

@@ -3,6 +3,7 @@ from typing import Optional
 
 from .base import AbstractLLM, ChatMessage, user_message, system_message, assistant_message
 from .openai_client import OpenAIChatLLM
+from .azure_client import AzureChatLLM
 from .anthropic_client import AnthropicChatLLM
 from .gemini_client import GeminiChatLLM
 
@@ -33,6 +34,12 @@ def create_llm(
             temperature=temperature,
             seed=seed,
         )
+    elif provider == "azure":
+        return AzureChatLLM(
+            model=model,
+            temperature=temperature,
+            seed=seed,
+        )
     elif provider == "anthropic":
         return AnthropicChatLLM(
             model=model,
@@ -45,7 +52,7 @@ def create_llm(
         )
     else:
         raise ValueError(
-            f"Unknown provider: {provider}. Use 'openai', 'anthropic', or 'google'."
+            f"Unknown provider: {provider}. Use 'openai', 'azure', 'anthropic', or 'google'."
         )
 
 

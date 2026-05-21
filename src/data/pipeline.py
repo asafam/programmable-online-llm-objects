@@ -862,8 +862,8 @@ Examples:
     )
     shared.add_argument(
         "--workflow-step-judge-provider",
-        default="openai",
-        help="Judge provider for Stage 1d (default: openai)",
+        default="azure",
+        help="Judge provider for Stage 1d (default: azure)",
     )
     shared.add_argument(
         "--no-patch-gaps",
