@@ -428,6 +428,49 @@ class WorkflowValidation(BaseModel):
     # Quality rollup: worst per-step quality.
     aggregate_quality: Literal["GOOD", "ADEQUATE", "POOR"] = "ADEQUATE"
 
+
+# ── Object graph validation schemas (Stage 1b) ────────────────────────────────
+
+
+class SingleObjectQuality(BaseModel):
+    """LLM judgement for one object inside a graph judgement."""
+    object_id: str
+    quality: Literal["GOOD", "ADEQUATE", "POOR"]
+    quality_issues: list[str] = Field(default_factory=list)
+
+
+class ObjectGraphJudgement(BaseModel):
+    """LLM judge output covering an entire object graph in one call."""
+    objects: list[SingleObjectQuality]
+    graph_quality: Literal["GOOD", "ADEQUATE", "POOR"]
+    graph_issues: list[str] = Field(default_factory=list)
+    reasoning: str
+
+
+class ObjectVerdict(BaseModel):
+    """Per-object verdict combining deterministic health + LLM quality."""
+    workflow_id: str
+    object_id: str
+    role: str = ""
+    is_entry_point: bool = False
+    health_issues: list[str] = Field(default_factory=list)
+    quality: Literal["GOOD", "ADEQUATE", "POOR"] = "ADEQUATE"
+    quality_issues: list[str] = Field(default_factory=list)
+
+
+class ObjectGraphValidation(BaseModel):
+    """Aggregate validation result for one workflow's object graph."""
+    workflow_id: str
+    n_objects: int
+    object_verdicts: list[ObjectVerdict] = Field(default_factory=list)
+    graph_quality: Literal["GOOD", "ADEQUATE", "POOR"] = "ADEQUATE"
+    graph_issues: list[str] = Field(default_factory=list)
+    graph_reasoning: str = ""
+    aggregate_health: Literal["OK", "ISSUES"] = "OK"
+    aggregate_quality: Literal["GOOD", "ADEQUATE", "POOR"] = "ADEQUATE"
+    judge_input_tokens: int = 0
+    judge_output_tokens: int = 0
+
 # Scenario generation schemas (LLM output before merging with instance metadata)
 class Scenario(BaseModel):
     id: str

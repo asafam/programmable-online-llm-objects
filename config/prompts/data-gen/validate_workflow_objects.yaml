@@ -1,0 +1,75 @@
+prompt: |
+  # Task: Validate Object Graph Quality
+
+  You are auditing the object graph that our pipeline generated for one
+  workflow. The graph is a distributed system of LLM-objects, each with a
+  role, behavior, peers, and (for entry-point objects) event_sources.
+
+  Your job is to grade each object's *quality* and the *graph as a whole*.
+  Structural / health checks are done separately and are NOT your concern —
+  focus entirely on whether the design is good.
+
+  ---
+
+  ## Source Template
+
+  ID: {WORKFLOW_ID}
+  Name: {WORKFLOW_NAME}
+
+  ## Workflow steps (the external triggers this graph must serve)
+
+  {STEPS}
+
+  ## Object graph
+
+  {OBJECTS}
+
+  ---
+
+  ## How to grade each object
+
+  - **GOOD** — clear single-responsibility role; behavior text describes
+    concrete runtime behavior (what it does on incoming messages, how it
+    decides, what it dispatches to peers); peer relationships are minimal
+    and motivated; skills make sense for the role.
+  - **ADEQUATE** — readable and functional but with one minor issue
+    (slightly vague behavior, one extra/unjustified peer, generic role).
+  - **POOR** — multiple problems such as: vague boilerplate behavior
+    ("processes data"), generic role ("handles things"), missing peer for
+    something behavior promises to dispatch, over-coupled (peers to too
+    many objects), under-coupled (lacks peer for a clearly-needed handoff),
+    skills don't match behavior, role overlap with another object.
+
+  In `quality_issues`, list each specific complaint as a short string.
+
+  ## How to grade the graph as a whole
+
+  - **GOOD** — could plausibly execute the workflow end to end; every
+    external trigger has a clear entry-point object; cascades through
+    peers complete the workflow's intent; no orphan/dead-end objects.
+  - **ADEQUATE** — covers the workflow but has one structural quirk
+    (an object that's never reached, or a missing peer that the workflow
+    needs).
+  - **POOR** — multiple structural problems: the workflow's described
+    outcome cannot be produced by this graph; entry points don't match
+    triggers; multiple orphan objects; peer graph contradicts step targets.
+
+  ## Output
+
+  Return strictly a JSON object matching the schema:
+    {{
+      "objects": [
+        {{
+          "object_id": "<id>",
+          "quality": "GOOD" | "ADEQUATE" | "POOR",
+          "quality_issues": ["<short specific complaint>", ...]
+        }},
+        ...
+      ],
+      "graph_quality": "GOOD" | "ADEQUATE" | "POOR",
+      "graph_issues": ["<short specific complaint>", ...],
+      "reasoning": "<1-2 sentences explaining the graph-level verdict>"
+    }}
+
+  Include one entry in `objects` for every object listed under "Object graph"
+  — same `object_id` strings, in the same order.
