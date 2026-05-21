@@ -31,11 +31,22 @@ prompt: |
   Replace them with concrete real-world equivalents. Pick a different system
   per workflow (don't always pick the same one) — diversity matters.
 
-  - "Zapier Tables" / "Zapier Table" / "the Zapier Tables" → a specific database
-    or table-store product: pick one of `Airtable`, `Snowflake`, `BigQuery`,
-    `Postgres`, `MySQL`, `MongoDB`, `Notion database`, `Google Sheets`,
-    `DynamoDB`. Use the same one consistently within ONE workflow's steps,
-    but vary across workflows.
+  - "Zapier Tables" / "Zapier Table" / "the Zapier Tables" → a specific named
+    table or file in a specific product. ALWAYS include both the product AND
+    the concrete artifact name (sheet name, table name, file name, base name).
+    Pick a different product per workflow — variety matters.
+    Examples (mix and match, vary the product across workflows):
+      - "the `Leads-Q4` Airtable base, `New Submissions` table"
+      - "the `crm.leads` table in Snowflake (schema `analytics`)"
+      - "the `customer_intake.xlsx` Excel spreadsheet on SharePoint"
+      - "the `Sales Pipeline` Google Sheet, tab `Active Deals`"
+      - "the `support_tickets` Postgres table"
+      - "the `inventory.csv` file on Google Drive"
+      - "the `Orders 2026` Notion database"
+      - "the `events` MongoDB collection in the `analytics` database"
+      - "the `customer_events` BigQuery table in dataset `prod_warehouse`"
+      - "the `audit_log` DynamoDB table"
+    Use the same product+artifact consistently within ONE workflow's steps.
   - "Zapier Interfaces" / "Zapier Interface" → a specific form/portal product:
     pick one of `Typeform`, `Tally`, `Jotform`, `Webflow form`, `Google Forms`,
     `a custom React form`, `a Retool app`. Consistent within a workflow.
