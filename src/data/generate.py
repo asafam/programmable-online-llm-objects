@@ -7,10 +7,10 @@ examples using LLM-based generation.
 Usage:
     python -m src.data.generate \\
         --input data/zapier/raw/examples.yaml \\
-        --output outputs/data/zapier/generated/test_cases.jsonl \\
+        --output outputs/data/zapier/generated/samples.jsonl \\
         --model claude-sonnet-4-5-20250929 \\
         --seed 42 \\
-        --test-cases 5-10 \\
+        --samples 5-10 \\
         --events-per-test-case 2-5
 """
 from __future__ import annotations
@@ -179,7 +179,7 @@ Examples:
   python -m src.data.generate -i data/zapier/raw/examples.yaml --model claude-opus-4-5-20251101
 
   # Custom ranges and seed
-  python -m src.data.generate -i data/zapier/raw/examples.yaml --seed 42 --test-cases 8-12 --events-per-test-case 3-5
+  python -m src.data.generate -i data/zapier/raw/examples.yaml --seed 42 --samples 8-12 --events-per-test-case 3-5
 """,
     )
 
@@ -194,8 +194,8 @@ Examples:
         "--output",
         "-o",
         type=Path,
-        default=Path("outputs/data/zapier/generated/test_cases.jsonl"),
-        help="Output JSONL path (default: outputs/data/zapier/generated/test_cases.jsonl)",
+        default=Path("outputs/data/zapier/generated/samples.jsonl"),
+        help="Output JSONL path (default: outputs/data/zapier/generated/samples.jsonl)",
     )
     parser.add_argument(
         "--prompt-template",
@@ -224,7 +224,7 @@ Examples:
         help="Random seed for reproducibility",
     )
     parser.add_argument(
-        "--test-cases",
+        "--samples",
         "-t",
         default="5",
         help="Number of test cases per example (single value or range like '5-10')",
@@ -270,7 +270,7 @@ Examples:
         random.seed(args.seed)
 
     # Parse ranges
-    tc_min, tc_max = parse_range(args.test_cases)
+    tc_min, tc_max = parse_range(args.samples)
     events_min, events_max = parse_range(args.events_per_test_case)
 
     # Load inputs

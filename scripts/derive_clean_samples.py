@@ -1,11 +1,11 @@
-"""Derive a clean samples.jsonl from test_cases.jsonl.
+"""Derive a clean workflows.jsonl from samples.jsonl.
 
 For each sample_id, pick the test_case variant with the fewest peer-behavior
 mismatches, reduce it to a Workflow-shaped record (strip modifications/events,
 restore sample_id as id), then fix remaining mismatches by adding missing
 peers with a generic relationship description.
 
-Output: <out_dir>/samples.jsonl and <out_dir>/derive_log.md
+Output: <out_dir>/workflows.jsonl and <out_dir>/derive_log.md
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ def to_sample(tc: dict) -> dict:
 
     sample_id becomes id; modifications and events are dropped. raw_steps is
     empty (the source markdown that produced steps is not recoverable from
-    test_cases.jsonl). flagged/flag_reasons default to False/[].
+    samples.jsonl). flagged/flag_reasons default to False/[].
     """
     return {
         "id": tc.get("sample_id") or tc.get("id"),
@@ -97,17 +97,17 @@ def fix_peers_in_place(sample: dict) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--input", "-i", type=Path, required=True,
-                   help="test_cases.jsonl")
+                   help="samples.jsonl")
     p.add_argument("--out-dir", "-o", type=Path, required=True,
-                   help="Output directory; samples.jsonl and derive_log.md are written here.")
+                   help="Output directory; workflows.jsonl and derive_log.md are written here.")
     args = p.parse_args(argv)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     # Match the eval's selection logic (evaluate.py:1106-1113 — steps-only mode):
     # for each sample_id, take the FIRST occurrence in file order. This makes
-    # the derived samples.jsonl evaluate-equivalent to running the eval on
-    # test_cases.jsonl with --steps-only, so peer-fix results are directly
+    # the derived workflows.jsonl evaluate-equivalent to running the eval on
+    # samples.jsonl with --steps-only, so peer-fix results are directly
     # comparable to prior eval runs.
     seen: set[str] = set()
     chosen: list[dict] = []
@@ -140,8 +140,8 @@ def main(argv: list[str] | None = None) -> int:
             f"Workflow {s['id']} still has mismatches after fix: {after}"
         )
 
-    # Write samples.jsonl
-    out_samples = args.out_dir / "samples.jsonl"
+    # Write workflows.jsonl
+    out_samples = args.out_dir / "workflows.jsonl"
     with out_samples.open("w") as fo:
         for s in fixed_samples:
             fo.write(json.dumps(s) + "\n")
@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     total_added = sum(added for _, added, _ in fix_records)
     log = args.out_dir / "derive_log.md"
     with log.open("w") as fo:
-        fo.write("# samples.jsonl derivation log\n\n")
+        fo.write("# workflows.jsonl derivation log\n\n")
         fo.write(f"**Input:** `{args.input}`\n")
         fo.write(f"**Output:** `{out_samples}`\n\n")
         fo.write(f"**Total samples:** {len(fixed_samples)}\n")

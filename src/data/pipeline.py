@@ -5,15 +5,15 @@ Usage:
     # Full pipeline into a target folder
     python -m src.data.pipeline -i data/zapier/raw/templates.yaml --target-dir outputs/my-run
 
-    # Continue an existing run (skips stage 1 if samples.jsonl already exists)
+    # Continue an existing run (skips stage 1 if workflows.jsonl already exists)
     python -m src.data.pipeline -i data/zapier/raw/templates.yaml --target-dir outputs/my-run
 
     # Skip stage 1 explicitly with a specific samples file
-    python -m src.data.pipeline --samples outputs/data/zapier/templates_samples_object.jsonl
+    python -m src.data.pipeline --workflows outputs/data/zapier/templates_samples_object.jsonl
 
     # With options
     python -m src.data.pipeline -i data/zapier/raw/templates.yaml --target-dir outputs/my-run \\
-        --samples-per-template 3 --scenario-count 2 --mod-type temporal
+        --workflows-per-template 3 --scenario-count 2 --mod-type temporal
 """
 from __future__ import annotations
 
@@ -34,8 +34,8 @@ from src.data.validate_test_cases import (
 )
 from src.data.utils import load_jsonl
 
+WORKFLOWS_FILENAME = "workflows.jsonl"
 SAMPLES_FILENAME = "samples.jsonl"
-TEST_CASES_FILENAME = "test_cases.jsonl"
 
 
 def _blocking_issues(issues_by_validator: dict) -> dict:
@@ -54,19 +54,19 @@ def _save_samples(path: Path, samples: list) -> None:
             f.write(s.model_dump_json() + "\n")
 
 
-def _invalidate_test_cases(test_cases_path: Path, sample_ids: set[str]) -> int:
+def _invalidate_test_cases(samples_path: Path, sample_ids: set[str]) -> int:
     """
-    Remove test cases whose sample_id is in sample_ids from test_cases_path.
+    Remove test cases whose sample_id is in sample_ids from samples_path.
     Returns number of test cases removed.  No-op if the file doesn't exist.
     """
-    if not test_cases_path or not test_cases_path.exists() or not sample_ids:
+    if not samples_path or not samples_path.exists() or not sample_ids:
         return 0
     from src.data.schema import Sample
-    tcs = load_jsonl(test_cases_path, Sample)
+    tcs = load_jsonl(samples_path, Sample)
     kept = [tc for tc in tcs if tc.sample_id not in sample_ids]
     removed = len(tcs) - len(kept)
     if removed:
-        with open(test_cases_path, "w") as f:
+        with open(samples_path, "w") as f:
             for tc in kept:
                 f.write(tc.model_dump_json() + "\n")
         print(f"  [validate] Invalidated {removed} stale test case(s) for {len(sample_ids)} repaired sample(s).")
@@ -336,7 +336,7 @@ def _autopatch_sample(sample, blocking: dict) -> tuple[bool, dict]:
     return changed, remaining
 
 
-def _edit_sample_interactive(sample, samples_path: Path, sample_map: dict) -> dict:
+def _edit_sample_interactive(sample, workflows_path: Path, sample_map: dict) -> dict:
     """
     Open the sample JSON in $EDITOR, reload on save, re-validate.
     Returns the (possibly empty) blocking issues dict after the edit.
@@ -369,14 +369,14 @@ def _edit_sample_interactive(sample, samples_path: Path, sample_map: dict) -> di
 
     # Persist the edit and reload
     sample_map[updated.id] = updated
-    all_samples = [sample_map.get(s.id, s) for s in load_jsonl(samples_path, Workflow)]
-    _save_samples(samples_path, all_samples)
+    all_samples = [sample_map.get(s.id, s) for s in load_jsonl(workflows_path, Workflow)]
+    _save_samples(workflows_path, all_samples)
 
     return _blocking_issues(validate_sample(updated))
 
 
 def _validate_and_repair_samples(
-    samples_path: Path,
+    workflows_path: Path,
     stage1_args: argparse.Namespace,
     max_fix_attempts: int,
 ) -> tuple[Path, set[str]]:
@@ -391,7 +391,7 @@ def _validate_and_repair_samples(
        Flagged samples proceed to Stage 2 but are marked for follow-up.
        Nothing is dropped without explicit human [s]kip.
 
-    Returns (samples_path, modified_sample_ids).
+    Returns (workflows_path, modified_sample_ids).
     modified_sample_ids: IDs of samples that were changed — their existing test
     cases must be invalidated so Stage 2 regenerates them from the fixed data.
     """
@@ -403,10 +403,10 @@ def _validate_and_repair_samples(
     modified_ids: set[str] = set()  # samples changed by any repair — their TCs must be regenerated
 
     try:
-        samples = load_jsonl(samples_path, Workflow)
+        samples = load_jsonl(workflows_path, Workflow)
     except Exception as e:
         print(f"  [validation skipped] Could not load samples: {e}")
-        return samples_path, modified_ids
+        return workflows_path, modified_ids
 
     all_issues = {s.id: validate_sample(s) for s in samples}
     blocking = {sid: _blocking_issues(v) for sid, v in all_issues.items() if _blocking_issues(v)}
@@ -414,7 +414,7 @@ def _validate_and_repair_samples(
 
     if not blocking and not warnings:
         print(f"  [validate] All {len(samples)} sample(s) passed.")
-        return samples_path, modified_ids
+        return workflows_path, modified_ids
 
     if warnings:
         w_total = sum(len(msgs) for vd in warnings.values() for msgs in vd.values())
@@ -441,12 +441,12 @@ def _validate_and_repair_samples(
             if changed:
                 warn_patched.add(sid)
         if warn_patched:
-            _save_samples(samples_path, samples)
+            _save_samples(workflows_path, samples)
             modified_ids |= warn_patched
             print(f"  [auto-patch] Fixed warning (sequential_confirmation_chains) in {len(warn_patched)}: {', '.join(sorted(warn_patched))}")
 
     if not blocking:
-        return samples_path, modified_ids
+        return workflows_path, modified_ids
 
     print(f"  [validate] {len(blocking)} sample(s) have blocking issues.")
 
@@ -461,9 +461,9 @@ def _validate_and_repair_samples(
             patched_ids.add(sid)
 
     if patched_ids:
-        _save_samples(samples_path, samples)
+        _save_samples(workflows_path, samples)
         # Re-validate patched samples
-        samples = load_jsonl(samples_path, Workflow)
+        samples = load_jsonl(workflows_path, Workflow)
         sample_map = {s.id: s for s in samples}
         repaired = {sid: _blocking_issues(validate_sample(sample_map[sid])) for sid in patched_ids}
         fixed = {sid for sid, b in repaired.items() if not b}
@@ -480,7 +480,7 @@ def _validate_and_repair_samples(
 
     if not blocking:
         print(f"  [validate] All blocking issues resolved via auto-patch.")
-        return samples_path, modified_ids
+        return workflows_path, modified_ids
 
     # ── Tier 2+3: Per-sample human decision ──────────────────────────────────
     print(f"\n  {len(blocking)} sample(s) still have blocking issues after auto-patch.")
@@ -523,7 +523,7 @@ def _validate_and_repair_samples(
             i += 1
             continue
         if choice == "e":
-            current_issues = _edit_sample_interactive(sample_map[sid], samples_path, sample_map)
+            current_issues = _edit_sample_interactive(sample_map[sid], workflows_path, sample_map)
             modified_ids.add(sid)  # edited regardless of outcome
             if not current_issues:
                 print(f"  [edit] Fixed — no more blocking issues.")
@@ -572,7 +572,7 @@ def _validate_and_repair_samples(
             break
 
         modified_ids |= set(ids)  # retried samples always need TC regeneration
-        samples = load_jsonl(samples_path, Workflow)
+        samples = load_jsonl(workflows_path, Workflow)
         sample_map = {s.id: s for s in samples}
         still = {sid: _blocking_issues(validate_sample(sample_map[sid])) for sid in ids}
         fixed = {sid for sid, b in still.items() if not b}
@@ -589,7 +589,7 @@ def _validate_and_repair_samples(
                     print(f"    {vname.replace('find_', '')}: {msgs[0]}")
                 choice = _ask("Action?", ("e", "k", "s"), default="k")
                 if choice == "e":
-                    current_issues = _edit_sample_interactive(sample_map[sid], samples_path, sample_map)
+                    current_issues = _edit_sample_interactive(sample_map[sid], workflows_path, sample_map)
                     modified_ids.add(sid)
                     if not current_issues:
                         print(f"  [edit] Fixed.")
@@ -606,7 +606,7 @@ def _validate_and_repair_samples(
 
     # ── Mark flagged samples ──────────────────────────────────────────────────
     if keep_flagged:
-        samples = load_jsonl(samples_path, Workflow)
+        samples = load_jsonl(workflows_path, Workflow)
         sample_map = {s.id: s for s in samples}
         for sid, issues in keep_flagged.items():
             if sid in sample_map:
@@ -615,22 +615,22 @@ def _validate_and_repair_samples(
                     f"{vname.replace('find_', '')}: {msgs[0]}"
                     for vname, msgs in issues.items()
                 ]
-        _save_samples(samples_path, list(sample_map.values()))
+        _save_samples(workflows_path, list(sample_map.values()))
         print(f"\n  [validate] {len(keep_flagged)} sample(s) kept as flagged: {', '.join(sorted(keep_flagged))}")
 
     # ── Drop skipped samples ──────────────────────────────────────────────────
     if skip_ids:
-        samples = load_jsonl(samples_path, Workflow)
+        samples = load_jsonl(workflows_path, Workflow)
         kept = [s for s in samples if s.id not in skip_ids]
-        _save_samples(samples_path, kept)
+        _save_samples(workflows_path, kept)
         print(f"  [validate] Dropped {len(skip_ids)} sample(s): {', '.join(sorted(skip_ids))}")
 
-    total = len(load_jsonl(samples_path, Workflow))
+    total = len(load_jsonl(workflows_path, Workflow))
     print(f"  [validate] {total} sample(s) proceeding to Stage 2.")
-    return samples_path, modified_ids
+    return workflows_path, modified_ids
 
 
-def _validate_test_cases_final(test_cases_path: Path) -> None:
+def _validate_test_cases_final(samples_path: Path) -> None:
     """
     Validate fully-formed test cases after Stage 3.
     Blocking issues drop the test case from the file (logged).
@@ -642,7 +642,7 @@ def _validate_test_cases_final(test_cases_path: Path) -> None:
     print("  [validate] Checking Stage 3 test cases...")
 
     try:
-        test_cases = load_jsonl(test_cases_path, Sample)
+        test_cases = load_jsonl(samples_path, Sample)
     except Exception as e:
         print(f"  [validation skipped] Could not load test cases: {e}")
         return
@@ -668,7 +668,7 @@ def _validate_test_cases_final(test_cases_path: Path) -> None:
             for vname, msgs in vd.items():
                 print(f"    [DROPPED] [{tid}] {vname.replace('find_', '')}: {msgs[0]}")
         kept = [tc for tc in test_cases if tc.id not in blocking_tcs]
-        with open(test_cases_path, "w") as f:
+        with open(samples_path, "w") as f:
             for tc in kept:
                 f.write(tc.model_dump_json() + "\n")
         print(f"  [validate] {len(kept)}/{len(test_cases)} test case(s) kept.")
@@ -683,15 +683,15 @@ Examples:
   # Full pipeline into a target folder
   python -m src.data.pipeline -i data/zapier/raw/templates.yaml --target-dir outputs/my-run
 
-  # Continue an existing run (stage 1 is skipped if samples.jsonl already exists)
+  # Continue an existing run (stage 1 is skipped if workflows.jsonl already exists)
   python -m src.data.pipeline -i data/zapier/raw/templates.yaml --target-dir outputs/my-run
 
   # Skip stage 1 with a specific samples file (no target-dir)
-  python -m src.data.pipeline --samples outputs/data/zapier/templates_samples_object.jsonl
+  python -m src.data.pipeline --workflows outputs/data/zapier/templates_samples_object.jsonl
 
   # Full pipeline with custom options
   python -m src.data.pipeline -i data/zapier/raw/templates.yaml --target-dir outputs/my-run \\
-      --samples-per-template 3 --scenario-count 2 --mod-type temporal --ambiguity precise
+      --workflows-per-template 3 --scenario-count 2 --mod-type temporal --ambiguity precise
 """,
     )
 
@@ -701,15 +701,15 @@ Examples:
         type=Path,
         default=None,
         help=(
-            "Directory for all pipeline outputs. Stage 1 writes samples.jsonl here; "
-            "stage 2 writes test_cases.jsonl here. If samples.jsonl already exists, "
+            "Directory for all pipeline outputs. Stage 1 writes workflows.jsonl here; "
+            "stage 2 writes samples.jsonl here. If workflows.jsonl already exists, "
             "stage 1 is skipped automatically (continuation)."
         ),
     )
 
     # --- Stage selection ---
     parser.add_argument(
-        "--samples",
+        "--workflows",
         type=Path,
         default=None,
         help="Skip stage 1 and use this specific samples JSONL file as input to stage 2",
@@ -724,7 +724,7 @@ Examples:
         help="Path to raw templates YAML file (required for stage 1)",
     )
     stage1.add_argument(
-        "--samples-per-template",
+        "--workflows-per-template",
         type=int,
         default=1,
         help="Number of samples per template (default: 1)",
@@ -791,7 +791,7 @@ Examples:
         help="Ambiguity level (default: random)",
     )
     stage2.add_argument(
-        "--test-cases-prompt-template",
+        "--samples-prompt-template",
         type=Path,
         default=Path("config/prompts/data-gen/generate_test_cases.yaml"),
         help="Prompt template for stage 2",
@@ -874,35 +874,35 @@ Examples:
     args = parser.parse_args()
 
     # --- Resolve target dir (auto-timestamp if not specified) ---
-    if args.target_dir is None and args.samples is None:
+    if args.target_dir is None and args.workflows is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         args.target_dir = Path("outputs/data/zapier") / timestamp
         print(f"Target directory: {args.target_dir}")
 
     # --- Resolve samples path and stage 1 continuation ---
-    samples_path: Path | None = None
+    workflows_path: Path | None = None
     skip_stage1 = False
 
-    if args.samples is not None:
+    if args.workflows is not None:
         # Explicit samples file provided — always skip stage 1
-        samples_path = args.samples
+        workflows_path = args.workflows
         skip_stage1 = True
-        if not samples_path.exists():
-            print(f"Error: Workflows file not found: {samples_path}", file=sys.stderr)
+        if not workflows_path.exists():
+            print(f"Error: Workflows file not found: {workflows_path}", file=sys.stderr)
             sys.exit(1)
     elif args.target_dir is not None:
         # Target dir provided — check for existing samples (continuation)
-        samples_path = args.target_dir / SAMPLES_FILENAME
-        if samples_path.exists() and not args.force and not args.ids:
+        workflows_path = args.target_dir / WORKFLOWS_FILENAME
+        if workflows_path.exists() and not args.force and not args.ids:
             skip_stage1 = True
-            print(f"Found existing samples: {samples_path} (skipping stage 1)")
+            print(f"Found existing samples: {workflows_path} (skipping stage 1)")
         else:
             skip_stage1 = False
     else:
         # No target dir, no explicit samples — derive path from input (original behaviour)
         if args.input is None:
             parser.error(
-                "Either --input (for stage 1) or --samples / --target-dir (to skip stage 1) is required"
+                "Either --input (for stage 1) or --workflows / --target-dir (to skip stage 1) is required"
             )
 
     # Validate stage 1 inputs when stage 1 will run
@@ -910,9 +910,9 @@ Examples:
         parser.error("--input is required to run stage 1")
 
     # Resolve stage 2 output path
-    test_cases_output: Path | None = args.output
-    if test_cases_output is None and args.target_dir is not None:
-        test_cases_output = args.target_dir / TEST_CASES_FILENAME
+    samples_output: Path | None = args.output
+    if samples_output is None and args.target_dir is not None:
+        samples_output = args.target_dir / SAMPLES_FILENAME
 
     # --- Stage 1 ---
     print("=" * 60)
@@ -924,8 +924,8 @@ Examples:
 
     stage1_args = argparse.Namespace(
         input=args.input,
-        output=samples_path,
-        samples_per_template=args.samples_per_template,
+        output=workflows_path,
+        workflows_per_template=args.workflows_per_template,
         ids=args.ids,
         provider=args.provider,
         model=args.model,
@@ -937,11 +937,11 @@ Examples:
     )
 
     if not skip_stage1:
-        samples_path = generate_samples.run(stage1_args)
+        workflows_path = generate_samples.run(stage1_args)
 
     if not args.no_validate:
-        samples_path, modified_ids = _validate_and_repair_samples(
-            samples_path=samples_path,
+        workflows_path, modified_ids = _validate_and_repair_samples(
+            workflows_path=workflows_path,
             stage1_args=stage1_args,
             max_fix_attempts=args.max_fix_attempts,
         )
@@ -956,7 +956,7 @@ Examples:
         print("=" * 60)
         from src.data import validate_workflow_steps as _vws
         vws_args = argparse.Namespace(
-            workflows=samples_path,
+            workflows=workflows_path,
             templates=args.input,
             provider=args.workflow_step_judge_provider,
             judge_model=args.workflow_step_judge_model,
@@ -974,8 +974,8 @@ Examples:
     if args.ids and not skip_stage1:
         modified_ids |= set(args.ids)
 
-    if modified_ids and test_cases_output:
-        _invalidate_test_cases(test_cases_output, modified_ids)
+    if modified_ids and samples_output:
+        _invalidate_test_cases(samples_output, modified_ids)
 
     # --- Stage 2 ---
     print()
@@ -984,8 +984,8 @@ Examples:
     print("=" * 60)
 
     stage2_args = argparse.Namespace(
-        input=samples_path,
-        output=test_cases_output,  # None → derived by generate_test_cases.run()
+        input=workflows_path,
+        output=samples_output,  # None → derived by generate_test_cases.run()
         prompt_template=args.test_cases_prompt_template,
         scenario_count=args.scenario_count,
         events_before=args.events_before,
@@ -1005,7 +1005,7 @@ Examples:
         limit=args.limit,
         workers=args.workers,
     )
-    test_cases_path = generate_test_cases.run(stage2_args)
+    samples_path = generate_test_cases.run(stage2_args)
 
     # --- Stage 3 ---
     print()
@@ -1014,8 +1014,8 @@ Examples:
     print("=" * 60)
 
     stage3_args = argparse.Namespace(
-        input=test_cases_path,
-        samples=samples_path,
+        input=samples_path,
+        samples=workflows_path,
         output=None,  # in-place by default
         provider=args.provider,
         model=args.model,

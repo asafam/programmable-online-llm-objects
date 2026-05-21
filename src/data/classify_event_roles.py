@@ -1,25 +1,25 @@
 """
 LLM-based event role classifier for existing test cases.
 
-For each non-step event in test_cases.jsonl:
+For each non-step event in samples.jsonl:
   - Events that fire BEFORE the first modification → "pre_mod" (no LLM needed)
   - Events that fire AFTER the first modification → ask LLM: "post_mod" or "irrelevant"
 
 "irrelevant" means the event tests automation logic that is NOT affected by the modification.
 "post_mod" means the event directly exercises the behavior that the modification changes.
 
-After classifying, writes updated roles back into test_cases.jsonl and (optionally)
+After classifying, writes updated roles back into samples.jsonl and (optionally)
 re-runs retroactive_classify.py on the specified eval files.
 
 Usage:
     python -m src.data.classify_event_roles \\
-        --test-cases outputs/.../test_cases.jsonl \\
+        --samples outputs/.../samples.jsonl \\
         --model gpt-4o-mini \\
         --workers 8
 
     # Also update eval files in-place:
     python -m src.data.classify_event_roles \\
-        --test-cases outputs/.../test_cases.jsonl \\
+        --samples outputs/.../samples.jsonl \\
         --eval outputs/.../test_cases_eval_*.jsonl \\
         --model gpt-4o-mini --workers 8
 """
@@ -176,7 +176,7 @@ class _WorkItem:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def run(args: argparse.Namespace) -> None:
-    tc_path: Path = args.test_cases
+    tc_path: Path = args.samples
     if not tc_path.exists():
         print(f"Error: {tc_path} not found", file=sys.stderr)
         sys.exit(1)
@@ -319,7 +319,7 @@ def _apply_to_evals(args: argparse.Namespace, tc_path: Path) -> None:
         print(f"\nRetroactively classifying {ep} ...")
         retro_args = retro_base.parse_args([
             "--eval", str(ep),
-            "--test-cases", str(tc_path),
+            "--samples", str(tc_path),
         ])
         retro_run(retro_args)
 
@@ -328,23 +328,23 @@ def _apply_to_evals(args: argparse.Namespace, tc_path: Path) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="LLM-classify event roles (post_mod vs irrelevant) in test_cases.jsonl",
+        description="LLM-classify event roles (post_mod vs irrelevant) in samples.jsonl",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python -m src.data.classify_event_roles \\
-      --test-cases outputs/data/zapier/20260407_zapier_clean/test_cases.jsonl \\
+      --samples outputs/data/zapier/20260407_zapier_clean/samples.jsonl \\
       --model gpt-4o-mini --workers 8
 
   # Also update eval files after classification:
   python -m src.data.classify_event_roles \\
-      --test-cases outputs/data/zapier/20260407_zapier_clean/test_cases.jsonl \\
+      --samples outputs/data/zapier/20260407_zapier_clean/samples.jsonl \\
       --eval outputs/data/zapier/20260407_zapier_clean/runs/test_cases_eval_20260410_113327.jsonl \\
       --model gpt-4o-mini --workers 8
 """,
     )
-    parser.add_argument("--test-cases", type=Path, required=True, metavar="JSONL",
-                        help="test_cases.jsonl to classify and update in-place")
+    parser.add_argument("--samples", type=Path, required=True, metavar="JSONL",
+                        help="samples.jsonl to classify and update in-place")
     parser.add_argument("--eval", type=Path, action="append", default=None, metavar="JSONL",
                         help="Eval file(s) to update after classification (repeatable)")
     parser.add_argument("--model", default="gpt-4o-mini",

@@ -13,10 +13,10 @@ all three tasks in a single prompt.
 Usage:
     python -m src.data.generate_samples \\
         --input data/zapier/raw/examples.yaml \\
-        --output outputs/data/zapier/generated/samples.jsonl \\
+        --output outputs/data/zapier/generated/workflows.jsonl \\
         --model claude-sonnet-4-6 \\
         --seed 42 \\
-        --samples-per-template 3
+        --workflows-per-template 3
 """
 from __future__ import annotations
 
@@ -347,14 +347,14 @@ def build_parser() -> argparse.ArgumentParser:
 Examples:
   python -m src.data.generate_samples -i data/zapier/raw/examples.yaml
   python -m src.data.generate_samples -i data/zapier/raw/examples.yaml --model gpt-4o
-  python -m src.data.generate_samples -i data/zapier/raw/examples.yaml --samples-per-template 5
+  python -m src.data.generate_samples -i data/zapier/raw/examples.yaml --workflows-per-template 5
 """,
     )
     parser.add_argument("--input", "-i", type=Path, required=True,
                         help="Path to raw templates YAML file")
     parser.add_argument("--output", "-o", type=Path, default=None,
                         help="Output JSONL path (default: derived from input filename)")
-    parser.add_argument("--samples-per-template", type=int, default=1,
+    parser.add_argument("--workflows-per-template", type=int, default=1,
                         help="Number of samples to generate per template (default: 1)")
     parser.add_argument("--id", dest="ids", metavar="ID", action="append", default=None,
                         help="Only process template(s) with this ID (repeatable)")
@@ -417,7 +417,7 @@ def run(args: argparse.Namespace) -> Path:
 
     workers = getattr(args, "workers", 1)
     print_run_info(args.provider, args.model, args.seed,
-                   {"Workflows per template": str(args.samples_per_template),
+                   {"Workflows per template": str(args.workflows_per_template),
                     "Workers": str(workers)})
 
     llm = create_llm(provider=args.provider, model=args.model,
@@ -432,7 +432,7 @@ def run(args: argparse.Namespace) -> Path:
         """Run all attempts for one template; return (samples, fail_count)."""
         results = []
         fails = 0
-        for _ in range(args.samples_per_template):
+        for _ in range(args.workflows_per_template):
             grounded = _ground_template(llm, template, ground_cfg)
             if not grounded:
                 fails += 1

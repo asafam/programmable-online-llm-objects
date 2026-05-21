@@ -173,17 +173,17 @@ class ExpectedComplexity:
     expected_unique_peers: int
 
 
-def _compute_expected_complexity_index(test_cases_path: Optional[Path]) -> dict[tuple[str, str], ExpectedComplexity]:
-    """Build {(tc_id, event_id) → ExpectedComplexity} from a test_cases.jsonl file.
+def _compute_expected_complexity_index(samples_path: Optional[Path]) -> dict[tuple[str, str], ExpectedComplexity]:
+    """Build {(tc_id, event_id) → ExpectedComplexity} from a samples.jsonl file.
 
     expected_peer_hops: longest peer chain reachable from the event recipient.
     expected_unique_peers: total unique peers reachable transitively.
     """
     index: dict[tuple[str, str], ExpectedComplexity] = {}
-    if not test_cases_path or not test_cases_path.exists():
+    if not samples_path or not samples_path.exists():
         return index
     try:
-        with open(test_cases_path) as f:
+        with open(samples_path) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -359,7 +359,7 @@ def _detect_format(first_record: dict) -> str:
 
 
 def _resolve_test_cases_path(first_record: dict, eval_path: Path) -> Optional[Path]:
-    """Try to find the source test_cases.jsonl that produced this results file."""
+    """Try to find the source samples.jsonl that produced this results file."""
     fmt = _detect_format(first_record)
     candidate: Optional[str] = None
     if fmt == "default":
@@ -479,7 +479,7 @@ def analyze_file(
     report = agg.to_report()
     report["source"] = str(input_path)
     report["format"] = fmt
-    report["test_cases_path"] = str(tc_path) if tc_path else None
+    report["samples_path"] = str(tc_path) if tc_path else None
 
     with open(output_jsonl, "w") as f:
         for r in out_records:
@@ -494,7 +494,7 @@ def format_report_stdout(report: dict) -> str:
     """Render the report as a short, human-readable table."""
     lines: list[str] = []
     lines.append(f"Source: {report.get('source', '?')}  ({report.get('format', '?')})")
-    tcs = report.get("test_cases_path")
+    tcs = report.get("samples_path")
     if tcs:
         lines.append(f"Test cases: {tcs}")
     lines.append(

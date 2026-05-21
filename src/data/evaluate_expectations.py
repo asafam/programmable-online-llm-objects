@@ -7,14 +7,14 @@ then compares it to the stored expectation.  Flags: wrong, uncertain, correct.
 
 Usage:
     python -m src.data.evaluate_expectations \\
-        --input outputs/data/zapier/ITER4/test_cases.jsonl \\
+        --input outputs/data/zapier/ITER4/samples.jsonl \\
         --output outputs/data/zapier/ITER4/expectation_audit.jsonl \\
         --model claude-sonnet-4-6 \\
         --workers 8
 
     # Repair wrong expectations in-place after auditing:
     python -m src.data.evaluate_expectations \\
-        --input outputs/data/zapier/ITER4/test_cases.jsonl \\
+        --input outputs/data/zapier/ITER4/samples.jsonl \\
         --repair \\
         --model claude-sonnet-4-6
 """
@@ -749,15 +749,15 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--input", required=True, type=Path,
-                   help="Path to test_cases.jsonl")
+                   help="Path to samples.jsonl")
     p.add_argument("--output", default=None, type=Path,
                    help="Audit output JSONL (default: <input_dir>/expectation_audit.jsonl or event_expectation_audit.jsonl)")
     p.add_argument("--audit-events", action="store_true",
                    help="Audit event expectations (E001, E002, ...) instead of step expectations")
     p.add_argument("--repair", action="store_true",
-                   help="Apply corrected actions for 'wrong' verdicts back to test_cases.jsonl")
+                   help="Apply corrected actions for 'wrong' verdicts back to samples.jsonl")
     p.add_argument("--resolve-uncertain", action="store_true",
-                   help="Use LLM to resolve 'uncertain' verdicts and write strong expectations into test_cases.jsonl")
+                   help="Use LLM to resolve 'uncertain' verdicts and write strong expectations into samples.jsonl")
     p.add_argument("--workers", type=int, default=4)
     add_common_args(p)
     return p

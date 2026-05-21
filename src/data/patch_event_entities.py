@@ -16,15 +16,15 @@ by the validator) and calls an LLM to add the missing records to each tool's
 Usage:
     # Dry-run: report gaps without patching
     python -m src.data.patch_event_entities \\
-        -i outputs/data/zapier/my-run/test_cases.jsonl --dry-run
+        -i outputs/data/zapier/my-run/samples.jsonl --dry-run
 
     # Patch in-place
     python -m src.data.patch_event_entities \\
-        -i outputs/data/zapier/my-run/test_cases.jsonl --model gpt-4o
+        -i outputs/data/zapier/my-run/samples.jsonl --model gpt-4o
 
     # Write to separate file
     python -m src.data.patch_event_entities \\
-        -i outputs/data/zapier/my-run/test_cases.jsonl \\
+        -i outputs/data/zapier/my-run/samples.jsonl \\
         -o outputs/data/zapier/my-run/test_cases_patched.jsonl \\
         --model gpt-4o --workers 4
 """
@@ -379,20 +379,20 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""
 Examples:
   # Dry-run: report gaps without patching
-  python -m src.data.patch_event_entities -i outputs/.../test_cases.jsonl --dry-run
+  python -m src.data.patch_event_entities -i outputs/.../samples.jsonl --dry-run
 
   # Patch in-place (overwrites input)
-  python -m src.data.patch_event_entities -i outputs/.../test_cases.jsonl --model gpt-4o
+  python -m src.data.patch_event_entities -i outputs/.../samples.jsonl --model gpt-4o
 
   # Patch to separate output file
   python -m src.data.patch_event_entities \\
-      -i outputs/.../test_cases.jsonl \\
+      -i outputs/.../samples.jsonl \\
       -o outputs/.../test_cases_patched.jsonl \\
       --model gpt-4o --workers 4
 """,
     )
     parser.add_argument("--input", "-i", type=Path, required=True,
-                        help="Path to test_cases.jsonl")
+                        help="Path to samples.jsonl")
     parser.add_argument("--output", "-o", type=Path, default=None,
                         help="Output path (default: overwrites input)")
     parser.add_argument("--dry-run", action="store_true", default=False,

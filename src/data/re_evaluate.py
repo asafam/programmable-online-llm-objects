@@ -7,7 +7,7 @@ only the LLM-as-judge step without re-executing the LNL runtime.
 
 Use cases:
   - Re-judge with a different model or judge panel
-  - Re-judge after correcting event expectations in test_cases.jsonl
+  - Re-judge after correcting event expectations in samples.jsonl
   - Add a second opinion judge to an existing evaluation run
 
 Usage:
@@ -19,7 +19,7 @@ Usage:
     # Re-judge with updated expectations
     python -m src.data.re_evaluate \\
         --from-eval outputs/.../test_cases_eval_20260410_113327.jsonl \\
-        --test-cases outputs/.../test_cases.jsonl \\
+        --samples outputs/.../samples.jsonl \\
         --judge-model claude-opus-4-6
 
     # Panel judge (multiple judges, majority vote)
@@ -251,8 +251,8 @@ def run(args: argparse.Namespace) -> Path:
     # Expectation overrides from updated test cases
     expect_map: dict[str, dict[str, str]] = {}
     if getattr(args, "test_cases", None):
-        expect_map = _build_expectation_map(args.test_cases)
-        print(f"Loaded expectation overrides for {len(expect_map)} test cases from {args.test_cases}")
+        expect_map = _build_expectation_map(args.samples)
+        print(f"Loaded expectation overrides for {len(expect_map)} test cases from {args.samples}")
 
     if len(parsed_judges) == 1:
         judge_label = f"{parsed_judges[0][0]}/{parsed_judges[0][1]}"
@@ -399,7 +399,7 @@ Examples:
   # Re-judge with updated expectations
   python -m src.data.re_evaluate \\
       --from-eval outputs/.../test_cases_eval_20260410_113327.jsonl \\
-      --test-cases outputs/.../test_cases.jsonl --judge-model claude-opus-4-6
+      --samples outputs/.../samples.jsonl --judge-model claude-opus-4-6
 
   # Panel judge (majority vote across multiple models)
   python -m src.data.re_evaluate \\
@@ -416,11 +416,11 @@ Examples:
         help="Path to a _eval.jsonl file produced by evaluate.py",
     )
     parser.add_argument(
-        "--test-cases",
+        "--samples",
         type=Path,
         default=None,
         metavar="JSONL",
-        help="Optional updated test_cases.jsonl — event expectations override the stored values",
+        help="Optional updated samples.jsonl — event expectations override the stored values",
     )
     parser.add_argument(
         "--output", "-o",

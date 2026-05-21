@@ -1,5 +1,5 @@
 """
-Repair test case issues in an existing test_cases.jsonl file.
+Repair test case issues in an existing samples.jsonl file.
 
 Fixes:
   1. triggered_by=<modification_id>  →  triggered_by=None
@@ -11,7 +11,7 @@ Fixes:
 
 Usage:
     python -m src.data.repair_test_cases \\
-        --input outputs/data/zapier/ITER4/test_cases.jsonl \\
+        --input outputs/data/zapier/ITER4/samples.jsonl \\
         --model claude-sonnet-4-6 \\
         --workers 4
 """
@@ -58,11 +58,11 @@ def _needs_expectation_rewrite(tc: Sample) -> bool:
 
 # ── Workflow loader ─────────────────────────────────────────────────────────────
 
-def _load_samples(samples_path: Path) -> dict[str, Workflow]:
+def _load_samples(workflows_path: Path) -> dict[str, Workflow]:
     samples: dict[str, Workflow] = {}
-    if not samples_path.exists():
+    if not workflows_path.exists():
         return samples
-    with open(samples_path) as f:
+    with open(workflows_path) as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -79,7 +79,7 @@ def _load_samples(samples_path: Path) -> dict[str, Workflow]:
 
 def repair(
     input_path: Path,
-    samples_path: Path | None,
+    workflows_path: Path | None,
     model: str,
     provider: str,
     workers: int,
@@ -108,9 +108,9 @@ def repair(
 
     # Load samples for expectations rewrite
     samples: dict[str, Workflow] = {}
-    if samples_path:
-        samples = _load_samples(samples_path)
-        print(f"Loaded {len(samples)} samples from {samples_path}")
+    if workflows_path:
+        samples = _load_samples(workflows_path)
+        print(f"Loaded {len(samples)} samples from {workflows_path}")
 
     # Phase 1: deterministic triggered_by fix
     triggered_fixed = 0
@@ -213,8 +213,8 @@ def repair(
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--input", required=True, help="Path to test_cases.jsonl")
-    p.add_argument("--samples", default=None, help="Path to samples.jsonl (used to build full context for expectations rewrite)")
+    p.add_argument("--input", required=True, help="Path to samples.jsonl")
+    p.add_argument("--workflows", default=None, help="Path to workflows.jsonl (used to build full context for expectations rewrite)")
     p.add_argument("--model", default="claude-sonnet-4-6")
     p.add_argument("--provider", default=None)
     p.add_argument("--workers", type=int, default=4)
@@ -227,7 +227,7 @@ def main(argv: list[str] | None = None) -> None:
     provider = args.provider or infer_provider(args.model)
     repair(
         input_path=Path(args.input),
-        samples_path=Path(args.samples) if args.samples else None,
+        workflows_path=Path(args.workflows) if args.workflows else None,
         model=args.model,
         provider=provider,
         workers=args.workers,

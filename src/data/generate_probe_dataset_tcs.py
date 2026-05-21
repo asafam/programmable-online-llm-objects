@@ -23,7 +23,7 @@ Run through both evaluate.py (LNL) and evaluate_baseline.py (OpenClaw):
 
 Usage:
     python -m src.data.generate_probe_dataset_tcs \\
-        -i outputs/data/zapier/20260411_zapier_clean/samples.jsonl \\
+        -i outputs/data/zapier/20260411_zapier_clean/workflows.jsonl \\
         --depths 10 20 30 50 \\
         --seeds 3 \\
         --model gpt-5.4-mini
@@ -598,7 +598,7 @@ def _fmt_background_events(
 # ── Workflow loader (shared with generate_state_probe_tcs.py) ──────────────────
 
 def _load_samples(input_path: Path) -> list[Workflow]:
-    """Load samples from JSONL — accepts both samples.jsonl and test_cases.jsonl."""
+    """Load samples from JSONL — accepts both workflows.jsonl and samples.jsonl."""
     raw = load_jsonl(input_path)
     if not raw:
         return []
@@ -833,7 +833,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input", "-i",
         type=Path,
         required=True,
-        help="Input JSONL: samples.jsonl (preferred) or test_cases.jsonl",
+        help="Input JSONL: workflows.jsonl (preferred) or samples.jsonl",
     )
     parser.add_argument(
         "--output", "-o",

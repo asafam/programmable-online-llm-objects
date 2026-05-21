@@ -16,18 +16,18 @@ are skipped).
 
 Usage:
     python -m src.data.generate_seed \\
-        --input outputs/my-run/test_cases.jsonl \\
-        --samples outputs/my-run/samples.jsonl
+        --input outputs/my-run/samples.jsonl \\
+        --workflows outputs/my-run/workflows.jsonl
 
     # Force regeneration of all samples
     python -m src.data.generate_seed \\
-        --input outputs/my-run/test_cases.jsonl \\
-        --samples outputs/my-run/samples.jsonl --force
+        --input outputs/my-run/samples.jsonl \\
+        --workflows outputs/my-run/workflows.jsonl --force
 
     # Write to a separate output file (non-destructive)
     python -m src.data.generate_seed \\
-        --input outputs/my-run/test_cases.jsonl \\
-        --samples outputs/my-run/samples.jsonl \\
+        --input outputs/my-run/samples.jsonl \\
+        --workflows outputs/my-run/workflows.jsonl \\
         -o outputs/my-run/test_cases_seeded.jsonl
 """
 from __future__ import annotations
@@ -109,12 +109,12 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""
 Examples:
   python -m src.data.generate_seed \\
-      --input outputs/my-run/test_cases.jsonl \\
-      --samples outputs/my-run/samples.jsonl
+      --input outputs/my-run/samples.jsonl \\
+      --workflows outputs/my-run/workflows.jsonl
 
   python -m src.data.generate_seed \\
-      --input outputs/my-run/test_cases.jsonl \\
-      --samples outputs/my-run/samples.jsonl --force
+      --input outputs/my-run/samples.jsonl \\
+      --workflows outputs/my-run/workflows.jsonl --force
 """,
     )
     parser.add_argument(
@@ -124,7 +124,7 @@ Examples:
         help="Path to test cases JSONL file (output from Stage 2)",
     )
     parser.add_argument(
-        "--samples",
+        "--workflows",
         type=Path,
         required=True,
         help="Path to samples JSONL file (output from Stage 1)",
@@ -154,13 +154,13 @@ def run(args: argparse.Namespace) -> Path:
     if not args.input.exists():
         print(f"Error: Input file not found: {args.input}", file=sys.stderr)
         sys.exit(1)
-    if not args.samples.exists():
-        print(f"Error: samples file not found: {args.samples}", file=sys.stderr)
+    if not args.workflows.exists():
+        print(f"Error: samples file not found: {args.workflows}", file=sys.stderr)
         sys.exit(1)
 
     # Load samples indexed by id
     samples_by_id: dict[str, Workflow] = {}
-    with open(args.samples) as f:
+    with open(args.workflows) as f:
         for line in f:
             line = line.strip()
             if not line:

@@ -8,7 +8,7 @@ WRONG. Per-workflow aggregate rolls up to CLEAN / MILD_DRIFT / NOTABLE_DRIFT
 
 Usage:
     python -m src.data.validate_workflow_steps \\
-        --workflows outputs/data/zapier/20260521_multistep/samples.jsonl \\
+        --workflows outputs/data/zapier/20260521_multistep/workflows.jsonl \\
         --templates data/zapier/raw/templates.yaml \\
         --provider openai --judge-model gpt-5.4 \\
         --workers 4 \\

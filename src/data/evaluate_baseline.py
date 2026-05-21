@@ -11,12 +11,12 @@ Requires:
 
 Usage:
     python -m src.data.evaluate_baseline \\
-        -i outputs/data/zapier/20260322_010211/test_cases.jsonl \\
+        -i outputs/data/zapier/20260322_010211/samples.jsonl \\
         --runs 3
 
     # Multi-agent mode (one agent per object):
     python -m src.data.evaluate_baseline \\
-        -i outputs/data/zapier/20260322_010211/test_cases.jsonl \\
+        -i outputs/data/zapier/20260322_010211/samples.jsonl \\
         --multi-agent --runs 3
 """
 from __future__ import annotations
@@ -3328,8 +3328,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m src.data.evaluate_baseline -i outputs/data/zapier/20260322_010211/test_cases.jsonl
-  python -m src.data.evaluate_baseline -i test_cases.jsonl --runs 3 --model gpt-4o
+  python -m src.data.evaluate_baseline -i outputs/data/zapier/20260322_010211/samples.jsonl
+  python -m src.data.evaluate_baseline -i samples.jsonl --runs 3 --model gpt-4o
 """,
     )
     parser.add_argument("--input", "-i", type=Path, default=None,

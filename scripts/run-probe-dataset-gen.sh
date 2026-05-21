@@ -3,7 +3,7 @@
 # Activates the project venv and runs generate_probe_dataset_tcs.py.
 #
 # Usage:
-#   ./scripts/run-probe-dataset-gen.sh -i outputs/data/zapier/<run>/samples.jsonl [options]
+#   ./scripts/run-probe-dataset-gen.sh -i outputs/data/zapier/<run>/workflows.jsonl [options]
 #
 # Common options (passed through to the generator):
 #   --depths 10 20 30 50    event depths (default: 10 20 30 50)
@@ -15,7 +15,7 @@
 #
 # Example:
 #   ./scripts/run-probe-dataset-gen.sh \
-#       -i outputs/data/zapier/20260411_zapier_clean/samples.jsonl \
+#       -i outputs/data/zapier/20260411_zapier_clean/workflows.jsonl \
 #       --depths 10 20 --seeds 3 --model gpt-5.4-mini --workers 4
 
 set -e

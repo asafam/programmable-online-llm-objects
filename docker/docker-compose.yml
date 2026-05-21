@@ -33,13 +33,13 @@
 # Pool usage (recommended):
 #   docker compose up -d
 #   python -m src.data.evaluate_baseline \
-#     -i outputs/.../test_cases.jsonl \
+#     -i outputs/.../samples.jsonl \
 #     --pool docker/worker-pool.yaml
 #
 # Single-worker usage:
 #   docker compose up worker-1
 #   python -m src.data.evaluate_baseline \
-#     -i outputs/.../test_cases.jsonl \
+#     -i outputs/.../samples.jsonl \
 #     --gateway-url ws://localhost:19789 \
 #     --mock-server-url http://localhost:19888
 #

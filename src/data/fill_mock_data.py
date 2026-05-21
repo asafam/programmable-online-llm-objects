@@ -9,13 +9,13 @@ pipeline (pass --pipeline to do this automatically).
 
 Usage:
     python -m src.data.fill_mock_data \\
-        --samples outputs/data/zapier/ITER4/samples.jsonl \\
+        --workflows outputs/data/zapier/ITER4/workflows.jsonl \\
         --model claude-sonnet-4-6 \\
         --workers 8
 
     # Also trigger pipeline to regenerate affected TCs:
     python -m src.data.fill_mock_data \\
-        --samples outputs/data/zapier/ITER4/samples.jsonl \\
+        --workflows outputs/data/zapier/ITER4/workflows.jsonl \\
         --pipeline \\
         --templates data/zapier/raw/templates.yaml \\
         --target-dir outputs/data/zapier/ITER4
@@ -133,14 +133,14 @@ def _save_samples(path: Path, rows: list[tuple[int, str, Workflow | None]]) -> N
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def fill(
-    samples_path: Path,
+    workflows_path: Path,
     model: str,
     provider: str,
     workers: int,
     dry_run: bool,
 ) -> set[str]:
     """Fill empty mock data tools. Returns set of patched sample IDs."""
-    rows = _load_samples(samples_path)
+    rows = _load_samples(workflows_path)
     samples_to_fix = [
         (i, s) for i, _, s in rows
         if s is not None and _find_empty_data_tools(s)
@@ -188,8 +188,8 @@ def fill(
                 orig_sample = futures[fut][1]
                 print(f"  WARN: {orig_sample.id} failed: {e}", file=sys.stderr)
 
-    _save_samples(samples_path, rows)
-    print(f"\nPatched {len(patched_ids)} sample(s) → {samples_path}")
+    _save_samples(workflows_path, rows)
+    print(f"\nPatched {len(patched_ids)} sample(s) → {workflows_path}")
     return patched_ids
 
 
@@ -200,8 +200,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("--samples", required=True, type=Path,
-                   help="Path to samples.jsonl")
+    p.add_argument("--workflows", required=True, type=Path,
+                   help="Path to workflows.jsonl")
     p.add_argument("--model", default="claude-sonnet-4-6")
     p.add_argument("--provider", default=None)
     p.add_argument("--workers", type=int, default=4)
@@ -222,7 +222,7 @@ def main(argv: list[str] | None = None) -> None:
     provider = args.provider or infer_provider(args.model)
 
     patched = fill(
-        samples_path=args.samples,
+        workflows_path=args.workflows,
         model=args.model,
         provider=provider,
         workers=args.workers,

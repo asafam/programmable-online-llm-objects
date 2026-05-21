@@ -57,7 +57,7 @@ The script reads the operator token from `~/.openclaw/identity/device-auth.json`
 
 ```bash
 python -m src.data.evaluate_baseline \
-  -i outputs/.../test_cases.jsonl \
+  -i outputs/.../samples.jsonl \
   --pool docker/worker-pool.yaml \
   --model gpt-4o \
   --runs 3
@@ -69,7 +69,7 @@ Run a single test case for debugging:
 
 ```bash
 python -m src.data.evaluate_baseline \
-  -i outputs/.../test_cases.jsonl \
+  -i outputs/.../samples.jsonl \
   --pool docker/worker-pool.yaml \
   --model gpt-4o --tc 1 --verbose
 ```

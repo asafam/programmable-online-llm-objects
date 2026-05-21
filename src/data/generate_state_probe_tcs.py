@@ -15,7 +15,7 @@ compare per-probe conditioned accuracy across depths.
 
 Usage:
     python -m src.data.generate_state_probe_tcs \\
-        -i outputs/data/zapier/20260421_zapier_fixed/test_cases.jsonl \\
+        -i outputs/data/zapier/20260421_zapier_fixed/samples.jsonl \\
         --depths 5 10 20 \\
         --k-probes 5 \\
         --model gpt-5.4-mini
@@ -200,9 +200,9 @@ def _format_probe_question_prompt(
 
 
 def _load_samples(input_path: Path) -> list[Workflow]:
-    """Load samples from JSONL — accepts both samples.jsonl and test_cases.jsonl.
+    """Load samples from JSONL — accepts both workflows.jsonl and samples.jsonl.
 
-    When test_cases.jsonl is provided (detected by presence of 'modifications' and
+    When samples.jsonl is provided (detected by presence of 'modifications' and
     'events' fields), deduplicates by sample_id to reconstruct unique samples.
     """
     raw = load_jsonl(input_path)
@@ -321,7 +321,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input", "-i",
         type=Path,
         required=True,
-        help="Input JSONL: samples.jsonl or test_cases.jsonl",
+        help="Input JSONL: workflows.jsonl or samples.jsonl",
     )
     parser.add_argument(
         "--output", "-o",

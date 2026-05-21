@@ -1,7 +1,7 @@
 """
 Retroactive event role classifier.
 
-Reads an _eval.jsonl file and a test_cases.jsonl file, then populates
+Reads an _eval.jsonl file and a samples.jsonl file, then populates
 EventResult.role for all non-step events based on:
 
   1. Explicit role from the test case Event.role (if set).
@@ -16,7 +16,7 @@ baseline setup events and are handled separately in summary metrics.
 Usage:
     python -m src.data.retroactive_classify \\
         --eval outputs/.../test_cases_eval_20260410_113327.jsonl \\
-        --test-cases outputs/.../test_cases.jsonl
+        --samples outputs/.../samples.jsonl
 
 The input file is updated in-place (a .orig backup is written first).
 """
@@ -176,7 +176,7 @@ def _recompute_summary(results: list[dict]) -> dict:
 
 def run(args: argparse.Namespace) -> None:
     eval_path: Path = args.eval
-    tc_path: Path = args.test_cases
+    tc_path: Path = args.samples
 
     if not eval_path.exists():
         print(f"Error: eval file not found: {eval_path}", file=sys.stderr)
@@ -281,13 +281,13 @@ def build_parser() -> argparse.ArgumentParser:
 Examples:
   python -m src.data.retroactive_classify \\
       --eval outputs/data/zapier/20260407_zapier_clean/runs/test_cases_eval_20260410_113327.jsonl \\
-      --test-cases outputs/data/zapier/20260407_zapier_clean/test_cases.jsonl
+      --samples outputs/data/zapier/20260407_zapier_clean/samples.jsonl
 """,
     )
     parser.add_argument("--eval", type=Path, required=True, metavar="JSONL",
                         help="Path to _eval.jsonl file to update in-place")
-    parser.add_argument("--test-cases", type=Path, required=True, metavar="JSONL",
-                        help="Path to test_cases.jsonl with event timing and role data")
+    parser.add_argument("--samples", type=Path, required=True, metavar="JSONL",
+                        help="Path to samples.jsonl with event timing and role data")
     return parser
 
 

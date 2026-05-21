@@ -23,7 +23,7 @@ analyze with scripts/analyze_state_probes.py --mode fidelity.
 
 Usage:
     python -m src.data.generate_state_fidelity_tcs \\
-        -i data/zapier/samples.jsonl \\
+        -i data/zapier/workflows.jsonl \\
         -o outputs/state_fidelity/pilot_tcs.jsonl \\
         --depths 5 10 20 30 \\
         --n-corrections 0 1 3 5 \\
@@ -286,7 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Generate state-fidelity test cases from samples or test_cases JSONL."
     )
     parser.add_argument("--input", "-i", type=Path, required=True,
-                        help="Input JSONL: samples.jsonl or test_cases.jsonl")
+                        help="Input JSONL: workflows.jsonl or samples.jsonl")
     parser.add_argument("--output", "-o", type=Path, default=None,
                         help="Output JSONL path (default: {input_stem}_state_fidelity.jsonl)")
     parser.add_argument("--depths", type=int, nargs="+", default=[5, 10, 20, 30], metavar="N",

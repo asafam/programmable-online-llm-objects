@@ -2,13 +2,13 @@
 # Run the OpenClaw Baseline evaluation (evaluate_baseline.py).
 #
 # Usage:
-#   ./scripts/run-eval-baseline.sh -i <test_cases.jsonl> [options]
+#   ./scripts/run-eval-baseline.sh -i <samples.jsonl> [options]
 #
 # Examples:
-#   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../test_cases.jsonl
-#   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../test_cases.jsonl --model gpt-4o --runs 3
-#   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../test_cases.jsonl --pool docker/worker-pool.yaml --model gpt-4o
-#   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../test_cases.jsonl --tc 11 --verbose
+#   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../samples.jsonl
+#   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../samples.jsonl --model gpt-4o --runs 3
+#   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../samples.jsonl --pool docker/worker-pool.yaml --model gpt-4o
+#   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../samples.jsonl --tc 11 --verbose
 #
 # All extra arguments are passed through to evaluate_baseline.py unchanged.
 # Log is written to logs/evaluate/<output_basename>.log (same name as the results file).

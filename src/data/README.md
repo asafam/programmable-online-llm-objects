@@ -17,11 +17,11 @@ Templates (YAML) → [generate_samples] → Samples (JSONL) → [generate_test_c
 # Full pipeline into a target folder
 python -m src.data.pipeline -i data/zapier/raw/templates.yaml --target-dir outputs/my-run
 
-# Re-run (continues automatically: stage 1 skipped if samples.jsonl exists)
+# Re-run (continues automatically: stage 1 skipped if workflows.jsonl exists)
 python -m src.data.pipeline -i data/zapier/raw/templates.yaml --target-dir outputs/my-run
 
 # Skip stage 1 with a specific samples file
-python -m src.data.pipeline --samples outputs/data/zapier/templates_samples_object.jsonl
+python -m src.data.pipeline --workflows outputs/data/zapier/templates_samples_object.jsonl
 
 # Stages can also be run individually
 python -m src.data.generate_samples -i data/zapier/raw/templates.yaml --step-style object
@@ -40,7 +40,7 @@ Instantiates raw templates with specific, realistic values.
 python -m src.data.generate_samples \
     --input data/zapier/raw/examples.yaml \
     --model claude-sonnet-4-5-20250929 \
-    --samples-per-template 3
+    --workflows-per-template 3
 ```
 
 ### Parameters
@@ -52,7 +52,7 @@ python -m src.data.generate_samples \
 | `--prompt-template` | `config/prompts/data-gen/generate_samples.yaml` | Prompt template path |
 | `--model`, `-m` | `claude-sonnet-4-5-20250929` | Model name (provider auto-detected) |
 | `--seed`, `-s` | None | Random seed for reproducibility |
-| `--samples-per-template` | `1` | Samples to generate per template |
+| `--workflows-per-template` | `1` | Samples to generate per template |
 | `--step-style` | `plain` | `plain` (rewrite steps only) or `object` (identify LLM-objects and rewrite steps using them) |
 | `--temperature` | `0.7` | LLM temperature |
 | `--force` | False | Regenerate all templates |
@@ -87,7 +87,7 @@ Creates test scenarios with modifications and events from samples.
 
 ```bash
 python -m src.data.generate_test_cases \
-    --input outputs/data/zapier/generated/samples.jsonl \
+    --input outputs/data/zapier/generated/workflows.jsonl \
     --model claude-sonnet-4-5-20250929 \
     --scenario-count 1
 ```
@@ -127,7 +127,7 @@ product catalogs, etc.) that an LLM-object performs at evaluation time. The pipe
 these during Stage 1, but may miss lookups that are embedded in business logic objects rather
 than in explicit read-service objects.
 
-Two complementary scripts close this gap on an existing `test_cases.jsonl`:
+Two complementary scripts close this gap on an existing `samples.jsonl`:
 
 ### retrofit_mock_tools — static analysis
 
@@ -138,13 +138,13 @@ Runs once per sample (80 LLM calls for 80 samples), no LNL runtime required.
 ```bash
 # Preview what tools would be added (no writes)
 python -m src.data.retrofit_mock_tools \
-    -i outputs/my-run/test_cases.jsonl \
+    -i outputs/my-run/samples.jsonl \
     --dry-run --model gpt-4o
 
-# Patch test_cases.jsonl and samples.jsonl in-place
+# Patch samples.jsonl and workflows.jsonl in-place
 python -m src.data.retrofit_mock_tools \
-    -i outputs/my-run/test_cases.jsonl \
-    --samples outputs/my-run/samples.jsonl \
+    -i outputs/my-run/samples.jsonl \
+    --workflows outputs/my-run/workflows.jsonl \
     --model gpt-4o
 ```
 
@@ -159,13 +159,13 @@ Run **after** `retrofit_mock_tools` to catch tools that static analysis missed.
 ```bash
 # Preview discovered tools (no writes)
 python -m src.data.discover_mock_tools \
-    -i outputs/my-run/test_cases.jsonl \
+    -i outputs/my-run/samples.jsonl \
     --dry-run --model gpt-4o
 
-# Patch test_cases.jsonl and samples.jsonl in-place
+# Patch samples.jsonl and workflows.jsonl in-place
 python -m src.data.discover_mock_tools \
-    -i outputs/my-run/test_cases.jsonl \
-    --samples outputs/my-run/samples.jsonl \
+    -i outputs/my-run/samples.jsonl \
+    --workflows outputs/my-run/workflows.jsonl \
     --model gpt-4o
 ```
 
@@ -177,19 +177,19 @@ python -m src.data.pipeline -i data/zapier/raw/templates.yaml --target-dir outpu
 
 # 2. Fill mock tool gaps (static pass)
 python -m src.data.retrofit_mock_tools \
-    -i outputs/my-run/test_cases.jsonl \
-    --samples outputs/my-run/samples.jsonl \
+    -i outputs/my-run/samples.jsonl \
+    --workflows outputs/my-run/workflows.jsonl \
     --model gpt-4o
 
 # 3. Fill remaining gaps (dynamic pass)
 python -m src.data.discover_mock_tools \
-    -i outputs/my-run/test_cases.jsonl \
-    --samples outputs/my-run/samples.jsonl \
+    -i outputs/my-run/samples.jsonl \
+    --workflows outputs/my-run/workflows.jsonl \
     --model gpt-4o
 
 # 4. Evaluate
 python -m src.data.evaluate \
-    -i outputs/my-run/test_cases.jsonl \
+    -i outputs/my-run/samples.jsonl \
     --model gpt-4o --judge-model gpt-4o
 ```
 
@@ -209,38 +209,38 @@ Non-data tool calls (action tools like `email.send`, `slack.post`) return
 # Full pipeline with target folder
 python -m src.data.pipeline -i data/zapier/raw/examples.yaml --target-dir outputs/my-run
 
-# Continue existing run (stage 1 auto-skipped when samples.jsonl exists)
+# Continue existing run (stage 1 auto-skipped when workflows.jsonl exists)
 python -m src.data.pipeline -i data/zapier/raw/examples.yaml --target-dir outputs/my-run
 
 # Full pipeline without target folder (paths derived from input filename)
-python -m src.data.generate_samples -i data/zapier/raw/examples.yaml --step-style object --samples-per-template 3
+python -m src.data.generate_samples -i data/zapier/raw/examples.yaml --step-style object --workflows-per-template 3
 python -m src.data.generate_test_cases -i outputs/data/zapier/examples_samples_object.jsonl
 
 # Generate only temporal modification scenarios
-python -m src.data.generate_test_cases -i outputs/data/zapier/generated/samples.jsonl --mod-type temporal
+python -m src.data.generate_test_cases -i outputs/data/zapier/generated/workflows.jsonl --mod-type temporal
 
 # Generate 3 scenarios per modification type
-python -m src.data.generate_test_cases -i outputs/data/zapier/generated/samples.jsonl --scenario-count 3
+python -m src.data.generate_test_cases -i outputs/data/zapier/generated/workflows.jsonl --scenario-count 3
 
 # Generate scenarios with 2 modifications each (same type)
-python -m src.data.generate_test_cases -i outputs/data/zapier/generated/samples.jsonl --mod-type temporal --mods-per-scenario 2
+python -m src.data.generate_test_cases -i outputs/data/zapier/generated/workflows.jsonl --mod-type temporal --mods-per-scenario 2
 
 # Generate scenarios with 3 random/mixed modification types
-python -m src.data.generate_test_cases -i outputs/data/zapier/generated/samples.jsonl --mod-type mixed --mods-per-scenario 3
+python -m src.data.generate_test_cases -i outputs/data/zapier/generated/workflows.jsonl --mod-type mixed --mods-per-scenario 3
 
 # Force all modifications to be vague
-python -m src.data.generate_test_cases -i outputs/data/zapier/generated/samples.jsonl --ambiguity vague
+python -m src.data.generate_test_cases -i outputs/data/zapier/generated/workflows.jsonl --ambiguity vague
 
 # Random ambiguity (default behavior)
-python -m src.data.generate_test_cases -i outputs/data/zapier/generated/samples.jsonl --ambiguity random
+python -m src.data.generate_test_cases -i outputs/data/zapier/generated/workflows.jsonl --ambiguity random
 
 # With Anthropic Sonnet
 python -m src.data.generate_samples -i data/zapier/raw/examples.yaml --model claude-sonnet-4-5-20250929
-python -m src.data.generate_test_cases -i outputs/data/zapier/generated/samples.jsonl --model claude-sonnet-4-5-20250929
+python -m src.data.generate_test_cases -i outputs/data/zapier/generated/workflows.jsonl --model claude-sonnet-4-5-20250929
 
 # Resume after interruption (skips completed items)
 python -m src.data.generate_samples -i data/zapier/raw/examples.yaml
-python -m src.data.generate_test_cases -i outputs/data/zapier/generated/samples.jsonl
+python -m src.data.generate_test_cases -i outputs/data/zapier/generated/workflows.jsonl
 
 # Force regeneration
 python -m src.data.generate_samples -i data/zapier/raw/examples.yaml --force

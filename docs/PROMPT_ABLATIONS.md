@@ -1,7 +1,7 @@
 # object.yaml Prompt Ablation Log
 
 Model: `gpt-5.4-mini` via Azure  
-Dataset: `data/zapier/test_cases.jsonl`  
+Dataset: `data/zapier/samples.jsonl`  
 Flags: `--runs 1 --steps-only`  
 Date: 2026-05-09
 
@@ -359,7 +359,7 @@ stripped away v1's wins.
 
 Reverted `_chain_trace_id` / `_messaged_peers_this_chain` / `owed_peers`
 plumbing in `src/lnl/object.py` + `src/lnl/brain.py`. Data peer-fix kept
-in `data/zapier/test_cases.jsonl` and `data/zapier/samples.jsonl` (227
+in `data/zapier/samples.jsonl` and `data/zapier/workflows.jsonl` (227
 records modified, 364 peers added; aggregate-neutral but data hygiene).
 
 Clean peer-fix-only baseline (no runtime changes): **0.655 std 0.110**
@@ -506,7 +506,7 @@ dispatch chain because there's a write-service peer downstream".
 - Production prompt: **`object_v20260512_1206`** (= drop "Secondary effects"
   rule). Accepted lift: ~+3.6pt over original baseline (single-run
   0.623 → 2-run 0.659).
-- Data: peer-fix applied to `samples.jsonl` and `test_cases.jsonl`
+- Data: peer-fix applied to `workflows.jsonl` and `samples.jsonl`
   (227 records, 364 peers added). Aggregate-neutral; correctness only.
 - Runtime: clean (no Lever A, no Lever C).
 - Ceiling at gpt-5.4-mini: ~0.659 on full set, ~0.41 on hard subset.
@@ -663,7 +663,7 @@ Subset target hard-fails (currently 0/0 mean — both runs hard fail):
 
 Step 2 (full dataset) — only if step 1 lifts hard-fails without breaking controls:
 ```
-./scripts/run-eval.sh -i data/zapier/test_cases.jsonl --judge-model gpt-5.4 --runs 2
+./scripts/run-eval.sh -i data/zapier/samples.jsonl --judge-model gpt-5.4 --runs 2
 ```
 
 ---
@@ -755,7 +755,7 @@ Commands:
 
 ### Full-set confirmation (2-run, 2026-05-13 11:24)
 
-Ran `data/zapier/test_cases.jsonl` (full 83-TC set) with `--enable-planner`,
+Ran `data/zapier/samples.jsonl` (full 83-TC set) with `--enable-planner`,
 **old judge strictness** (judge changes from later this date NOT yet applied):
 
 | Metric | 2-run baseline (no planner) | 2-run + planner | Δ |

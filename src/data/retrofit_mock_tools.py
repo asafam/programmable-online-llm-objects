@@ -10,18 +10,18 @@ and trigger steps), so the LLM is only called once per sample group.
 
 Usage:
     python -m src.data.retrofit_mock_tools \\
-        -i outputs/data/zapier/20260405_002306/test_cases.jsonl \\
+        -i outputs/data/zapier/20260405_002306/samples.jsonl \\
         --model gpt-4o
 
     # Preview identified tools without generating data or writing:
     python -m src.data.retrofit_mock_tools \\
-        -i outputs/data/zapier/20260405_002306/test_cases.jsonl \\
+        -i outputs/data/zapier/20260405_002306/samples.jsonl \\
         --model gpt-4o --dry-run
 
-    # Also patch samples.jsonl alongside test_cases.jsonl:
+    # Also patch workflows.jsonl alongside samples.jsonl:
     python -m src.data.retrofit_mock_tools \\
-        -i outputs/data/zapier/20260405_002306/test_cases.jsonl \\
-        --samples outputs/data/zapier/20260405_002306/samples.jsonl \\
+        -i outputs/data/zapier/20260405_002306/samples.jsonl \\
+        --workflows outputs/data/zapier/20260405_002306/workflows.jsonl \\
         --model gpt-4o
 """
 from __future__ import annotations
@@ -211,7 +211,7 @@ def run(args: argparse.Namespace) -> None:
             test_cases[i] = test_cases[i].model_copy(update={"mock_tools": tools})
             patched += 1
 
-    # Write updated test_cases.jsonl (in-place, same file)
+    # Write updated samples.jsonl (in-place, same file)
     out_path = args.output or args.input
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
@@ -219,10 +219,10 @@ def run(args: argparse.Namespace) -> None:
             f.write(tc.model_dump_json() + "\n")
     print(f"Patched {patched} test cases → {out_path}")
 
-    # Optionally patch samples.jsonl too
-    if args.samples and args.samples.exists():
+    # Optionally patch workflows.jsonl too
+    if args.workflows and args.workflows.exists():
         from src.data.schema import Workflow
-        samples: list[Workflow] = load_jsonl(args.samples, Workflow)
+        samples: list[Workflow] = load_jsonl(args.workflows, Workflow)
         sample_map = {s.id: i for i, s in enumerate(samples)}
         s_patched = 0
         for sid, tools in new_tools_by_sample.items():
@@ -232,7 +232,7 @@ def run(args: argparse.Namespace) -> None:
                 samples[idx] = samples[idx].model_copy(update={"mock_tools": tools})
                 s_patched += 1
         if s_patched:
-            samples_out = args.samples_output or args.samples
+            samples_out = args.workflows_output or args.workflows
             with open(samples_out, "w") as f:
                 for s in samples:
                     f.write(s.model_dump_json() + "\n")
@@ -245,20 +245,20 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m src.data.retrofit_mock_tools -i outputs/.../test_cases.jsonl --model gpt-4o
-  python -m src.data.retrofit_mock_tools -i outputs/.../test_cases.jsonl --model gpt-4o --dry-run
-  python -m src.data.retrofit_mock_tools -i outputs/.../test_cases.jsonl \\
-      --samples outputs/.../samples.jsonl --model gpt-4o
+  python -m src.data.retrofit_mock_tools -i outputs/.../samples.jsonl --model gpt-4o
+  python -m src.data.retrofit_mock_tools -i outputs/.../samples.jsonl --model gpt-4o --dry-run
+  python -m src.data.retrofit_mock_tools -i outputs/.../samples.jsonl \\
+      --workflows outputs/.../workflows.jsonl --model gpt-4o
 """,
     )
     parser.add_argument("--input", "-i", type=Path, required=True,
-                        help="Path to test_cases.jsonl to patch")
+                        help="Path to samples.jsonl to patch")
     parser.add_argument("--output", "-o", type=Path, default=None,
                         help="Output path (default: overwrites input)")
-    parser.add_argument("--samples", type=Path, default=None,
-                        help="Also patch a samples.jsonl alongside the test cases")
-    parser.add_argument("--samples-output", type=Path, default=None,
-                        help="Output path for patched samples (default: overwrites --samples)")
+    parser.add_argument("--workflows", type=Path, default=None,
+                        help="Also patch a workflows.jsonl alongside the test cases")
+    parser.add_argument("--workflows-output", type=Path, default=None,
+                        help="Output path for patched samples (default: overwrites --workflows)")
     parser.add_argument("--dry-run", action="store_true", default=False,
                         help="Identify tools only; do not generate data or write files")
     parser.add_argument("--workers", type=int, default=4,

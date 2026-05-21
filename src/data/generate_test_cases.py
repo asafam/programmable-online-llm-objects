@@ -6,8 +6,8 @@ instances using LLM-based generation.
 
 Usage:
     python -m src.data.generate_test_cases \\
-        --input outputs/data/zapier/generated/samples.jsonl \\
-        --output outputs/data/zapier/generated/test_cases.jsonl \\
+        --input outputs/data/zapier/generated/workflows.jsonl \\
+        --output outputs/data/zapier/generated/samples.jsonl \\
         --model claude-sonnet-4-5-20250929 \\
         --seed 42 \\
         --scenario-count 1
@@ -404,13 +404,13 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""
 Examples:
   # Generate with default model (provider inferred from model)
-  python -m src.data.generate_test_cases -i outputs/data/zapier/generated/samples.jsonl
+  python -m src.data.generate_test_cases -i outputs/data/zapier/generated/workflows.jsonl
 
   # Generate with OpenAI
-  python -m src.data.generate_test_cases -i outputs/data/zapier/generated/samples.jsonl --model gpt-4o
+  python -m src.data.generate_test_cases -i outputs/data/zapier/generated/workflows.jsonl --model gpt-4o
 
   # Custom scenario and event counts
-  python -m src.data.generate_test_cases -i outputs/data/zapier/generated/samples.jsonl --scenario-count 2 --events-before 2 --events-after 3
+  python -m src.data.generate_test_cases -i outputs/data/zapier/generated/workflows.jsonl --scenario-count 2 --events-before 2 --events-after 3
 """,
     )
 

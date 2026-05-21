@@ -6,7 +6,7 @@ reports correctness and cost metrics.
 
 Usage:
     python -m src.data.evaluate \\
-        -i outputs/data/zapier/20260322_120000/test_cases.jsonl \\
+        -i outputs/data/zapier/20260322_120000/samples.jsonl \\
         --runs 3 \\
         --model gpt-4o --judge-model claude-sonnet-4-6
 """
@@ -2144,9 +2144,9 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m src.data.evaluate -i outputs/data/zapier/20260322_120000/test_cases.jsonl
-  python -m src.data.evaluate -i test_cases.jsonl --runs 3 --model claude-sonnet-4-6
-  python -m src.data.evaluate -i test_cases.jsonl --model gpt-4o --judge-model claude-sonnet-4-6
+  python -m src.data.evaluate -i outputs/data/zapier/20260322_120000/samples.jsonl
+  python -m src.data.evaluate -i samples.jsonl --runs 3 --model claude-sonnet-4-6
+  python -m src.data.evaluate -i samples.jsonl --model gpt-4o --judge-model claude-sonnet-4-6
 """,
     )
     parser.add_argument(

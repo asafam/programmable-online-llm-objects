@@ -2,12 +2,12 @@
 # Run the LNL Runtime evaluation (evaluate.py).
 #
 # Usage:
-#   ./scripts/run-eval.sh -i <test_cases.jsonl> [options]
+#   ./scripts/run-eval.sh -i <samples.jsonl> [options]
 #
 # Examples:
-#   ./scripts/run-eval.sh -i outputs/data/zapier/.../test_cases.jsonl
-#   ./scripts/run-eval.sh -i outputs/data/zapier/.../test_cases.jsonl --model gpt-4o --runs 3
-#   ./scripts/run-eval.sh -i outputs/data/zapier/.../test_cases.jsonl --tc 1 --verbose
+#   ./scripts/run-eval.sh -i outputs/data/zapier/.../samples.jsonl
+#   ./scripts/run-eval.sh -i outputs/data/zapier/.../samples.jsonl --model gpt-4o --runs 3
+#   ./scripts/run-eval.sh -i outputs/data/zapier/.../samples.jsonl --tc 1 --verbose
 #
 # All extra arguments are passed through to evaluate.py unchanged.
 # Log is written to logs/evaluate/<output_basename>.log (same name as the results file).

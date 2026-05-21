@@ -204,8 +204,8 @@ async def run(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Test mock tool orchestration against a Docker pool worker")
     parser.add_argument("--input", "-i",
-                        default="outputs/data/zapier/20260411_zapier_clean/test_cases.jsonl",
-                        help="Path to test_cases.jsonl (relative to repo root)")
+                        default="outputs/data/zapier/20260411_zapier_clean/samples.jsonl",
+                        help="Path to samples.jsonl (relative to repo root)")
     parser.add_argument("--tc", type=int, default=0, metavar="N",
                         help="Index of the test case to run (default: 0)")
     parser.add_argument("--worker", type=int, default=1, metavar="N",
