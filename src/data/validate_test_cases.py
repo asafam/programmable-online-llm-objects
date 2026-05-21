@@ -27,12 +27,12 @@ from collections import deque
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.data.schema import Sample, TestCase
+    from src.data.schema import Workflow, Sample
 
 
 # ── Validator: mock data field mismatches ─────────────────────────────────────
 
-def find_mock_field_mismatches(tc: "TestCase") -> list[str]:
+def find_mock_field_mismatches(tc: "Sample") -> list[str]:
     """
     Return warnings where behavior text references a specific categorical-field
     value that differs from what the mock tool returns.
@@ -73,7 +73,7 @@ def find_mock_field_mismatches(tc: "TestCase") -> list[str]:
 
 # ── Validator: read/write misclassification ───────────────────────────────────
 
-def find_read_write_misclassifications(tc: "TestCase") -> list[str]:
+def find_read_write_misclassifications(tc: "Sample") -> list[str]:
     """
     Return warnings where an object queries a peer that cannot respond.
 
@@ -116,7 +116,7 @@ def find_read_write_misclassifications(tc: "TestCase") -> list[str]:
 
 # ── Validator: sequential confirmation chains ─────────────────────────────────
 
-def find_sequential_confirmation_chains(tc: "TestCase") -> list[str]:
+def find_sequential_confirmation_chains(tc: "Sample") -> list[str]:
     """
     Return warnings for behavior descriptions that wait for confirmation from
     fire-and-forget write services.
@@ -162,7 +162,7 @@ def find_sequential_confirmation_chains(tc: "TestCase") -> list[str]:
 
 # ── Validator: missing data in step text ──────────────────────────────────────
 
-def find_missing_step_data(tc: "TestCase") -> list[str]:
+def find_missing_step_data(tc: "Sample") -> list[str]:
     """
     Return warnings where event expectations reference identifiers not traceable
     to any step text or mock tool data.
@@ -217,7 +217,7 @@ def find_missing_step_data(tc: "TestCase") -> list[str]:
 
 # ── Validator: threshold evaluation in expectations ───────────────────────────
 
-def find_threshold_evaluation_errors(tc: "TestCase") -> list[str]:
+def find_threshold_evaluation_errors(tc: "Sample") -> list[str]:
     """
     Return warnings where an event expectation includes a conditional output
     even though the threshold condition is not met by the event's input.
@@ -278,7 +278,7 @@ def find_threshold_evaluation_errors(tc: "TestCase") -> list[str]:
 
 # ── Validator: trigger reference integrity ────────────────────────────────────
 
-def find_trigger_reference_errors(tc: "TestCase") -> list[str]:
+def find_trigger_reference_errors(tc: "Sample") -> list[str]:
     """
     Return reference errors in MockToolDef triggers and Event.triggered_by chains.
 
@@ -341,7 +341,7 @@ def find_trigger_reference_errors(tc: "TestCase") -> list[str]:
 
 # ── Validator: invalid peer declarations ──────────────────────────────────────
 
-def find_invalid_peer_declarations(tc: "TestCase") -> list[str]:
+def find_invalid_peer_declarations(tc: "Sample") -> list[str]:
     """
     Return warnings for PeerDecl entries that reference non-existent objects.
 
@@ -368,7 +368,7 @@ def find_invalid_peer_declarations(tc: "TestCase") -> list[str]:
 
 # ── Validator: undeclared peer references (fan-out completeness) ───────────────
 
-def find_undeclared_peer_references(tc: "TestCase") -> list[str]:
+def find_undeclared_peer_references(tc: "Sample") -> list[str]:
     """
     Return warnings where an object's behavior describes sending a message to
     another object but that object is not declared as a peer.
@@ -418,7 +418,7 @@ def find_undeclared_peer_references(tc: "TestCase") -> list[str]:
 
 # ── Validator: peer graph dead-ends ───────────────────────────────────────────
 
-def find_peer_graph_dead_ends(tc: "TestCase") -> list[str]:
+def find_peer_graph_dead_ends(tc: "Sample") -> list[str]:
     """
     Return warnings for entry-point objects (with event_sources) that have no peers.
 
@@ -443,7 +443,7 @@ def find_peer_graph_dead_ends(tc: "TestCase") -> list[str]:
 
 # ── Validator: unreachable objects ────────────────────────────────────────────
 
-def find_unreachable_objects(tc: "TestCase") -> list[str]:
+def find_unreachable_objects(tc: "Sample") -> list[str]:
     """
     Return warnings for objects not reachable from any entry point via the peer graph.
 
@@ -484,7 +484,7 @@ def find_unreachable_objects(tc: "TestCase") -> list[str]:
 
 # ── Validator: missing mock tools for _data skills ────────────────────────────
 
-def find_missing_mock_tools(tc: "TestCase") -> list[str]:
+def find_missing_mock_tools(tc: "Sample") -> list[str]:
     """
     Return warnings for _data skills that have no corresponding MockToolDef.
 
@@ -511,7 +511,7 @@ def find_missing_mock_tools(tc: "TestCase") -> list[str]:
 _DATA_TOOL_RE = re.compile(r"\b([\w][\w-]*_data)\b")
 
 
-def find_behavior_data_tool_references(tc: "TestCase") -> list[str]:
+def find_behavior_data_tool_references(tc: "Sample") -> list[str]:
     """
     Return errors where an object's behavior text references a *_data tool
     that has no corresponding MockToolDef.
@@ -543,7 +543,7 @@ def find_behavior_data_tool_references(tc: "TestCase") -> list[str]:
 
 # ── Validator: peer graph cycles ──────────────────────────────────────────────
 
-def find_peer_graph_cycles(tc: "TestCase") -> list[str]:
+def find_peer_graph_cycles(tc: "Sample") -> list[str]:
     """
     Return warnings for cycles in the peer graph that could cause infinite
     message loops at runtime.
@@ -605,7 +605,7 @@ def _parse_timestamp(when: str) -> "tuple[int, int, int, int] | None":
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)))
 
 
-def find_modification_target_errors(tc: "TestCase") -> list[str]:
+def find_modification_target_errors(tc: "Sample") -> list[str]:
     """
     Return errors where a modification targets a non-existent object_id.
 
@@ -625,7 +625,7 @@ def find_modification_target_errors(tc: "TestCase") -> list[str]:
     return issues
 
 
-def find_modification_timeline_errors(tc: "TestCase") -> list[str]:
+def find_modification_timeline_errors(tc: "Sample") -> list[str]:
     """
     Return warnings where a modification's `when` falls after every event, or
     where the `when` timestamp is malformed.
@@ -662,7 +662,7 @@ def find_modification_timeline_errors(tc: "TestCase") -> list[str]:
     return issues
 
 
-def find_event_timeline_errors(tc: "TestCase") -> list[str]:
+def find_event_timeline_errors(tc: "Sample") -> list[str]:
     """
     Return warnings where a child event's `when` timestamp is not strictly after
     its parent's `when` (as declared via triggered_by).
@@ -698,7 +698,7 @@ def find_event_timeline_errors(tc: "TestCase") -> list[str]:
 
 # ── Validator: unnatural identifiers in mock data ─────────────────────────────
 
-def find_unnatural_identifiers(tc: "TestCase") -> list[str]:
+def find_unnatural_identifiers(tc: "Sample") -> list[str]:
     """
     Return warnings for short identifiers that appear in BOTH mock data AND
     event expectations — where judge false-failures are most likely.
@@ -769,7 +769,7 @@ _COMPANY_NAME_RE = re.compile(
 )
 
 
-def find_event_entity_mock_gaps(tc: "TestCase") -> list[str]:
+def find_event_entity_mock_gaps(tc: "Sample") -> list[str]:
     """
     Return warnings where an event input or expectation references a structured
     entity ID (e.g. EMP-3317, ACC-10284) or email address that does not appear
@@ -925,16 +925,16 @@ _TEST_CASE_VALIDATORS = [
 ]
 
 
-def validate_sample(sample: "Sample") -> dict[str, list[str]]:
+def validate_sample(sample: "Workflow") -> dict[str, list[str]]:
     """
     Run structural validators on a Stage-1 sample.
 
     Returns {validator_name: [issue_str, ...]} for any validator that found issues.
     An empty dict means no problems detected.
     """
-    from src.data.schema import TestCase
-    # Construct a minimal TestCase so all validators can operate on a uniform type
-    tc = TestCase(
+    from src.data.schema import Sample
+    # Construct a minimal Sample so all validators can operate on a uniform type
+    tc = Sample(
         id=sample.id,
         name=sample.name,
         domain=sample.domain,
@@ -952,9 +952,9 @@ def validate_sample(sample: "Sample") -> dict[str, list[str]]:
     }
 
 
-def validate_test_case(tc: "TestCase") -> dict[str, list[str]]:
+def validate_test_case(tc: "Sample") -> dict[str, list[str]]:
     """
-    Run all validators on a fully-formed TestCase.
+    Run all validators on a fully-formed Sample.
 
     Returns {validator_name: [issue_str, ...]} for any validator that found issues.
     An empty dict means no problems detected.

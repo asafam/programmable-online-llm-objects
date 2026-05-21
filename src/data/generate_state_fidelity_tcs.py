@@ -50,10 +50,10 @@ from src.data.schema import (
     GeneratedEventWithExpect,
     MockToolDef,
     ObjectDef,
-    Sample,
+    Workflow,
     StateProbeQuestion,
     Step,
-    TestCase,
+    Sample,
 )
 from src.data.llm import create_llm
 from src.data.utils import (
@@ -87,7 +87,7 @@ def _format_state_events_for_context(events: list[GeneratedEventWithExpect]) -> 
 
 def _format_fidelity_events_prompt(
     template: str,
-    sample: Sample,
+    sample: Workflow,
     depth: int,
     n_corrections: int,
 ) -> str:
@@ -104,7 +104,7 @@ def _format_fidelity_events_prompt(
 
 def _format_fidelity_probe_prompt(
     template: str,
-    sample: Sample,
+    sample: Workflow,
     depth: int,
     state_events: list[GeneratedEventWithExpect],
     probe_target_entity: str,
@@ -217,13 +217,13 @@ def _interleave_events(
 
 
 def _scenario_to_test_case(
-    sample: Sample,
+    sample: Workflow,
     state_events: list[GeneratedEventWithExpect],
     probe_event: GeneratedEventWithExpect,
     depth: int,
     n_corrections: int,
     tc_index: int,
-) -> TestCase:
+) -> Sample:
     all_events: list[Event] = []
     for ge in state_events:
         d = ge.model_dump()
@@ -234,7 +234,7 @@ def _scenario_to_test_case(
     d.update(role="post_mod", after_mod_ids=[])
     all_events.append(Event(**d))
 
-    return TestCase(
+    return Sample(
         id=f"{sample.id}-sfid-D{depth:02d}-C{n_corrections:02d}-TC{tc_index:03d}",
         sample_id=sample.id,
         name=f"{sample.name} [State Fidelity D{depth} C{n_corrections}]",
@@ -250,17 +250,17 @@ def _scenario_to_test_case(
     )
 
 
-def _load_samples(input_path: Path) -> list[Sample]:
+def _load_samples(input_path: Path) -> list[Workflow]:
     raw = load_jsonl(input_path)
     if not raw:
         return []
     first = raw[0]
     if "modifications" in first and "events" in first:
-        seen: dict[str, Sample] = {}
+        seen: dict[str, Workflow] = {}
         for d in raw:
             sid = d["sample_id"]
             if sid not in seen:
-                seen[sid] = Sample(
+                seen[sid] = Workflow(
                     id=sid,
                     name=d["name"],
                     domain=d["domain"],
@@ -274,7 +274,7 @@ def _load_samples(input_path: Path) -> list[Sample]:
                     flag_reasons=[],
                 )
         return list(seen.values())
-    return [Sample(**d) for d in raw]
+    return [Workflow(**d) for d in raw]
 
 
 def _default_output_path(input_path: Path) -> Path:
@@ -361,7 +361,7 @@ def run(args: argparse.Namespace) -> Path:
         ]
     cell_pairs = [(d, nc) for d, nc in cell_pairs if nc + 1 <= d]
 
-    work_units: list[tuple[Sample, int, int]] = [
+    work_units: list[tuple[Workflow, int, int]] = [
         (sample, depth, n_c)
         for sample in samples
         for (depth, n_c) in cell_pairs
@@ -407,8 +407,8 @@ def run(args: argparse.Namespace) -> Path:
     fail_count = 0
     write_lock = threading.Lock()
 
-    def _process_unit(sample: Sample, depth: int, n_c: int) -> list[TestCase]:
-        test_cases: list[TestCase] = []
+    def _process_unit(sample: Workflow, depth: int, n_c: int) -> list[Sample]:
+        test_cases: list[Sample] = []
         for scenario_idx in range(1, args.scenarios_per_sample + 1):
             scenario_tag = f"{sample.id}-sfid-D{depth:02d}-C{n_c:02d}-v{scenario_idx}"
 

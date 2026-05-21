@@ -61,8 +61,8 @@ def _invalidate_test_cases(test_cases_path: Path, sample_ids: set[str]) -> int:
     """
     if not test_cases_path or not test_cases_path.exists() or not sample_ids:
         return 0
-    from src.data.schema import TestCase
-    tcs = load_jsonl(test_cases_path, TestCase)
+    from src.data.schema import Sample
+    tcs = load_jsonl(test_cases_path, Sample)
     kept = [tc for tc in tcs if tc.sample_id not in sample_ids]
     removed = len(tcs) - len(kept)
     if removed:
@@ -341,7 +341,7 @@ def _edit_sample_interactive(sample, samples_path: Path, sample_map: dict) -> di
     Open the sample JSON in $EDITOR, reload on save, re-validate.
     Returns the (possibly empty) blocking issues dict after the edit.
     """
-    from src.data.schema import Sample
+    from src.data.schema import Workflow
 
     raw = json.loads(sample.model_dump_json())
     with tempfile.NamedTemporaryFile(
@@ -357,7 +357,7 @@ def _edit_sample_interactive(sample, samples_path: Path, sample_map: dict) -> di
     try:
         with open(tmp) as f:
             edited = json.load(f)
-        updated = Sample(**edited)
+        updated = Workflow(**edited)
     except Exception as e:
         print(f"  [edit] Could not reload sample: {e} — keeping original.")
         return _blocking_issues(validate_sample(sample))
@@ -369,7 +369,7 @@ def _edit_sample_interactive(sample, samples_path: Path, sample_map: dict) -> di
 
     # Persist the edit and reload
     sample_map[updated.id] = updated
-    all_samples = [sample_map.get(s.id, s) for s in load_jsonl(samples_path, Sample)]
+    all_samples = [sample_map.get(s.id, s) for s in load_jsonl(samples_path, Workflow)]
     _save_samples(samples_path, all_samples)
 
     return _blocking_issues(validate_sample(updated))
@@ -395,7 +395,7 @@ def _validate_and_repair_samples(
     modified_sample_ids: IDs of samples that were changed — their existing test
     cases must be invalidated so Stage 2 regenerates them from the fixed data.
     """
-    from src.data.schema import Sample
+    from src.data.schema import Workflow
 
     print()
     print("  [validate] Checking Stage 1 samples...")
@@ -403,7 +403,7 @@ def _validate_and_repair_samples(
     modified_ids: set[str] = set()  # samples changed by any repair — their TCs must be regenerated
 
     try:
-        samples = load_jsonl(samples_path, Sample)
+        samples = load_jsonl(samples_path, Workflow)
     except Exception as e:
         print(f"  [validation skipped] Could not load samples: {e}")
         return samples_path, modified_ids
@@ -463,7 +463,7 @@ def _validate_and_repair_samples(
     if patched_ids:
         _save_samples(samples_path, samples)
         # Re-validate patched samples
-        samples = load_jsonl(samples_path, Sample)
+        samples = load_jsonl(samples_path, Workflow)
         sample_map = {s.id: s for s in samples}
         repaired = {sid: _blocking_issues(validate_sample(sample_map[sid])) for sid in patched_ids}
         fixed = {sid for sid, b in repaired.items() if not b}
@@ -551,7 +551,7 @@ def _validate_and_repair_samples(
         else:
             keep_flagged[sid] = current_issues
 
-    # Samples with no decision default to keep-flagged
+    # Workflows with no decision default to keep-flagged
     for sid, issues in blocking.items():
         if sid not in decisions:
             keep_flagged[sid] = issues
@@ -572,7 +572,7 @@ def _validate_and_repair_samples(
             break
 
         modified_ids |= set(ids)  # retried samples always need TC regeneration
-        samples = load_jsonl(samples_path, Sample)
+        samples = load_jsonl(samples_path, Workflow)
         sample_map = {s.id: s for s in samples}
         still = {sid: _blocking_issues(validate_sample(sample_map[sid])) for sid in ids}
         fixed = {sid for sid, b in still.items() if not b}
@@ -606,7 +606,7 @@ def _validate_and_repair_samples(
 
     # ── Mark flagged samples ──────────────────────────────────────────────────
     if keep_flagged:
-        samples = load_jsonl(samples_path, Sample)
+        samples = load_jsonl(samples_path, Workflow)
         sample_map = {s.id: s for s in samples}
         for sid, issues in keep_flagged.items():
             if sid in sample_map:
@@ -620,12 +620,12 @@ def _validate_and_repair_samples(
 
     # ── Drop skipped samples ──────────────────────────────────────────────────
     if skip_ids:
-        samples = load_jsonl(samples_path, Sample)
+        samples = load_jsonl(samples_path, Workflow)
         kept = [s for s in samples if s.id not in skip_ids]
         _save_samples(samples_path, kept)
         print(f"  [validate] Dropped {len(skip_ids)} sample(s): {', '.join(sorted(skip_ids))}")
 
-    total = len(load_jsonl(samples_path, Sample))
+    total = len(load_jsonl(samples_path, Workflow))
     print(f"  [validate] {total} sample(s) proceeding to Stage 2.")
     return samples_path, modified_ids
 
@@ -636,13 +636,13 @@ def _validate_test_cases_final(test_cases_path: Path) -> None:
     Blocking issues drop the test case from the file (logged).
     Warning issues are printed but the test case is kept.
     """
-    from src.data.schema import TestCase
+    from src.data.schema import Sample
 
     print()
     print("  [validate] Checking Stage 3 test cases...")
 
     try:
-        test_cases = load_jsonl(test_cases_path, TestCase)
+        test_cases = load_jsonl(test_cases_path, Sample)
     except Exception as e:
         print(f"  [validation skipped] Could not load test cases: {e}")
         return
@@ -716,7 +716,7 @@ Examples:
     )
 
     # --- Stage 1 args ---
-    stage1 = parser.add_argument_group("Stage 1: Generate Samples")
+    stage1 = parser.add_argument_group("Stage 1: Generate Workflows")
     stage1.add_argument(
         "--input", "-i",
         type=Path,
@@ -873,7 +873,7 @@ Examples:
         samples_path = args.samples
         skip_stage1 = True
         if not samples_path.exists():
-            print(f"Error: Samples file not found: {samples_path}", file=sys.stderr)
+            print(f"Error: Workflows file not found: {samples_path}", file=sys.stderr)
             sys.exit(1)
     elif args.target_dir is not None:
         # Target dir provided — check for existing samples (continuation)
@@ -904,7 +904,7 @@ Examples:
     if skip_stage1:
         print("STAGE 1: skipped (using existing samples)")
     else:
-        print("STAGE 1: Generate Samples")
+        print("STAGE 1: Generate Workflows")
     print("=" * 60)
 
     stage1_args = argparse.Namespace(
@@ -999,11 +999,11 @@ Examples:
     print("=" * 60)
     if not args.no_patch_gaps:
         from src.data.patch_event_entities import patch_entity_gaps
-        from src.data.schema import TestCase
+        from src.data.schema import Sample
         from src.data.utils import load_jsonl
         from src.data.llm import create_llm as _create_llm
         _patch_llm = _create_llm(args.provider or "anthropic", args.model)
-        _tcs = load_jsonl(output_path, TestCase)
+        _tcs = load_jsonl(output_path, Sample)
         _patched = patch_entity_gaps(_patch_llm, _tcs, workers=args.workers)
         with open(output_path, "w") as _f:
             for _tc in _patched:

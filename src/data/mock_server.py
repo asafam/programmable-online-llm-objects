@@ -2,7 +2,7 @@
 Shim — re-exports MockServer and supporting symbols from mock/server.py.
 
 Evaluation-layer helpers (resolve_mock_configs, merge_tc_mock_tools) live here
-because they depend on TestCase and MockToolDef from src/data/schema.
+because they depend on Sample and MockToolDef from src/data/schema.
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from src.data.schema import (
     OrchestratorScript,
     OrchestratorTrigger,
     EventTrigger,
-    TestCase,
+    Sample,
 )
 
 __all__ = [
@@ -82,8 +82,8 @@ _SYSTEM_KEYWORDS: dict[str, str] = {
 _MOCKS_DIR = Path(__file__).parent.parent.parent / "mock" / "config"
 
 
-def resolve_orchestration(tc: TestCase, time_scale: float = 1.0) -> Optional[OrchestratorScript]:
-    """Build an OrchestratorScript from a TestCase's events whose triggered_by is an EventTrigger.
+def resolve_orchestration(tc: Sample, time_scale: float = 1.0) -> Optional[OrchestratorScript]:
+    """Build an OrchestratorScript from a Sample's events whose triggered_by is an EventTrigger.
 
     Events sharing the same (tool, match) key are merged into a single OrchestratorTrigger
     with multiple reactions. Returns None if no event has an EventTrigger.
@@ -117,8 +117,8 @@ def resolve_orchestration(tc: TestCase, time_scale: float = 1.0) -> Optional[Orc
     return OrchestratorScript(name="tc_orchestration", time_scale=time_scale, triggers=triggers)
 
 
-def resolve_mock_configs(tc: TestCase) -> Optional[MockScript]:
-    """Scan a TestCase's object fields for known system keywords.
+def resolve_mock_configs(tc: Sample) -> Optional[MockScript]:
+    """Scan a Sample's object fields for known system keywords.
 
     Scans skills, event_sources, behavior, and role so that systems referenced
     only in free-text behavior descriptions (e.g. "store in Zapier Table",

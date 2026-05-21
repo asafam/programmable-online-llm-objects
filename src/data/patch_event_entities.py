@@ -45,7 +45,7 @@ load_dotenv()
 
 from src.data.llm import create_llm
 from src.data.llm.base import ChatMessage
-from src.data.schema import MockToolDef, TestCase
+from src.data.schema import MockToolDef, Sample
 from src.data.utils import add_common_args, infer_provider, load_jsonl, print_run_info
 from src.data.validate_test_cases import (
     _COMPANY_NAME_RE,
@@ -57,7 +57,7 @@ from src.data.validate_test_cases import (
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _extract_entity_context(tc: TestCase, entity: str) -> str:
+def _extract_entity_context(tc: Sample, entity: str) -> str:
     """Return the first event input that mentions *entity* (truncated to 500 chars)."""
     for evt in tc.events:
         text = (evt.input or "") + (" " + evt.expect.action if evt.expect else "")
@@ -72,7 +72,7 @@ def _extract_entity_context(tc: TestCase, entity: str) -> str:
 
 
 def _assign_entities_to_tools(
-    tc: TestCase, gap_issues: list[str]
+    tc: Sample, gap_issues: list[str]
 ) -> dict[str, list[tuple[str, str]]]:
     """Return {tool_name: [(entity, event_context), ...]} by matching entity types to tools.
 
@@ -245,17 +245,17 @@ def _patch_tool_with_entities(
 
 def patch_entity_gaps(
     llm,
-    test_cases: list[TestCase],
+    test_cases: list[Sample],
     workers: int = 1,
     verbose: bool = False,
-) -> list[TestCase]:
+) -> list[Sample]:
     """Detect entity gaps and patch mock tool response_templates in-place.
 
     Returns the updated test_cases list (same order, same length).
     TCs with no gaps are returned unchanged.
     """
     # Find TCs with gaps
-    tc_gaps: list[tuple[int, TestCase, list[str]]] = []
+    tc_gaps: list[tuple[int, Sample, list[str]]] = []
     for i, tc in enumerate(test_cases):
         issues = find_event_entity_mock_gaps(tc)
         if issues:
@@ -279,7 +279,7 @@ def patch_entity_gaps(
     )
 
     # Build a mutable copy of test_cases (shallow; TCs themselves are replaced)
-    result: list[TestCase] = list(test_cases)
+    result: list[Sample] = list(test_cases)
 
     # Track updated tool maps per TC (may get multiple patch calls for the same TC)
     updated_tools: dict[int, dict[str, MockToolDef]] = defaultdict(dict)
@@ -333,7 +333,7 @@ def patch_entity_gaps(
 
 # ── Dry-run report ────────────────────────────────────────────────────────────
 
-def _dry_run_report(test_cases: list[TestCase]) -> None:
+def _dry_run_report(test_cases: list[Sample]) -> None:
     """Print a gap analysis report without making any LLM calls."""
     from collections import Counter
 
@@ -412,7 +412,7 @@ def run(args: argparse.Namespace) -> None:
         print(f"Error: {args.input} not found", file=sys.stderr)
         sys.exit(1)
 
-    test_cases: list[TestCase] = load_jsonl(args.input, TestCase)
+    test_cases: list[Sample] = load_jsonl(args.input, Sample)
     print(f"Loaded {len(test_cases)} test cases from {args.input}")
 
     # Filter to specific IDs if requested

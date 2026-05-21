@@ -30,7 +30,7 @@ from tqdm import tqdm
 # Load environment variables from .env file
 load_dotenv()
 
-from src.data.schema import TestCases
+from src.data.schema import Samples
 from src.data.llm import create_llm, user_message
 
 
@@ -121,7 +121,7 @@ def generate_test_cases(
     prompt: str,
     example: dict,
     max_retries: int = 3,
-) -> Optional[TestCases]:
+) -> Optional[Samples]:
     """Generate test cases using LLM with retries and exponential backoff.
 
     Args:
@@ -131,13 +131,13 @@ def generate_test_cases(
         max_retries: Maximum number of retry attempts.
 
     Returns:
-        TestCases instance or None if generation fails.
+        Samples instance or None if generation fails.
     """
     for attempt in range(max_retries):
         try:
             result = llm.generate_structured(
                 messages=[user_message(prompt)],
-                response_model=TestCases,
+                response_model=Samples,
             )
 
             # Validate non-empty test cases
@@ -335,7 +335,7 @@ Examples:
 
     with open(args.output, file_mode) as f:
         for example in tqdm(pending, desc="Generating"):
-            # Sample counts for this example
+            # Workflow counts for this example
             test_case_count = random.randint(tc_min, tc_max)
             events_per_tc = random.randint(events_min, events_max)
 

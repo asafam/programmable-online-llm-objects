@@ -42,7 +42,7 @@ load_dotenv()
 from src.data.generate_samples import _generate_mock_tool_data
 from src.data.evaluate import _run_with_timeout, merge_mock_tools
 from src.data.llm import create_llm
-from src.data.schema import MockToolDef, TestCase
+from src.data.schema import MockToolDef, Sample
 from src.data.utils import add_common_args, infer_provider, load_jsonl, print_run_info
 from src.data.evaluate import to_lnl_definition, _build_trigger_map
 
@@ -64,7 +64,7 @@ class _NoOpHarness:
 # ── Discovery execution ───────────────────────────────────────────────────────
 
 def _discover_tool_calls(
-    tc: TestCase,
+    tc: Sample,
     brain,
     timeout_s: float = 60.0,
     max_chain_depth: int = 20,
@@ -136,7 +136,7 @@ def run(args: argparse.Namespace) -> None:
 
     print_run_info(args.provider, args.model, getattr(args, "seed", None), {})
 
-    test_cases: list[TestCase] = load_jsonl(args.input, TestCase)
+    test_cases: list[Sample] = load_jsonl(args.input, Sample)
     print(f"Loaded {len(test_cases)} test cases from {args.input}")
 
     # Group by sample_id; run one representative TC per sample
@@ -144,7 +144,7 @@ def run(args: argparse.Namespace) -> None:
     for i, tc in enumerate(test_cases):
         key = tc.sample_id or tc.id
         by_sample[key].append(i)
-    print(f"Samples to probe: {len(by_sample)}")
+    print(f"Workflows to probe: {len(by_sample)}")
 
     # Build brain (objects need real LLM); judge is no-op
     def _make_brain(provider, model):
@@ -248,8 +248,8 @@ def run(args: argparse.Namespace) -> None:
 
     # Optionally patch samples.jsonl too
     if args.samples and args.samples.exists():
-        from src.data.schema import Sample
-        samples: list[Sample] = load_jsonl(args.samples, Sample)
+        from src.data.schema import Workflow
+        samples: list[Workflow] = load_jsonl(args.samples, Workflow)
         sample_map = {s.id: i for i, s in enumerate(samples)}
         s_patched = 0
         for sid, tools in new_tools_by_sample.items():

@@ -1,7 +1,7 @@
 """
 Baseline evaluation runner — OpenClaw single/multi-agent comparison for the LNL experiment.
 
-Runs the same TestCases as evaluate.py but uses an OpenClaw agent instead of the
+Runs the same Samples as evaluate.py but uses an OpenClaw agent instead of the
 LNL runtime. By default, uses a single combined agent that receives all object
 definitions and handles all messages. With --multi-agent, uses one agent per LNL-object.
 
@@ -48,8 +48,8 @@ from src.data.schema import (
     EventResult,
     ModificationResult,
     ObjectDef,
-    TestCase,
-    TestCaseResult,
+    Sample,
+    SampleResult,
 )
 from src.data.mock_server import MockServer, merge_tc_mock_tools, resolve_mock_configs
 from src.data.evaluate import INTER_EVENT_TIMEOUT_S
@@ -1239,7 +1239,7 @@ async def _wait_mock_quiescence(
 # ── Prior context ────────────────────────────────────────────────────────────
 
 def _read_prior_context(
-    tc: TestCase,
+    tc: Sample,
     openclaw_home: Path,
     single_agent_id: Optional[str] = None,
 ) -> str:
@@ -1320,7 +1320,7 @@ def _delta_tokens(
 # ── Core execution ───────────────────────────────────────────────────────────
 
 async def _execute_tc_async(
-    tc: TestCase,
+    tc: Sample,
     gateway_url: Optional[str],
     openclaw_home: Path,
     harness,
@@ -1936,7 +1936,7 @@ async def _execute_tc_async(
 
 
 def _execute_test_case_inner(
-    tc: TestCase,
+    tc: Sample,
     agents: dict[str, OpenClawAgent],
     openclaw_home: Path,
     harness,
@@ -1973,7 +1973,7 @@ def _execute_test_case_inner(
 
 
 def execute_test_case(
-    tc: TestCase,
+    tc: Sample,
     agents: dict[str, OpenClawAgent],
     openclaw_home: Path,
     harness,
@@ -1991,7 +1991,7 @@ def execute_test_case(
     sequential: bool = False,
     peer_message_timeout: float = 90.0,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
-    """Run a single TestCase with an optional wall-clock timeout."""
+    """Run a single Sample with an optional wall-clock timeout."""
     if timeout_s is None:
         return _execute_test_case_inner(tc, agents, openclaw_home, harness,
                                         mock_server=mock_server, verbose=verbose,
@@ -2102,7 +2102,7 @@ def _role_elapsed_fields(events: list) -> dict:
 _STEP_EVENT_ID = re.compile(r"^S\d+$")
 
 
-def _running_metrics(results: "list[TestCaseResult]") -> tuple[Optional[float], Optional[float]]:
+def _running_metrics(results: "list[SampleResult]") -> tuple[Optional[float], Optional[float]]:
     """Return (mean_pass_rate, sample_pass_rate) across accumulated results.
 
     sample_pass_rate: among base-TC runs (first tc_id per sample_id) that have
@@ -2148,7 +2148,7 @@ def _pbar_postfix(pbar, results) -> None:
     pbar.set_postfix(refresh=False, **fields)
 
 
-def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
+def _compute_summary(results: list[SampleResult]) -> EvalSummary:
     """Compute aggregate metrics across all test case results.
 
     Step events (id matching S\\d+) are deduplicated by sample_id: only the first
@@ -2207,7 +2207,7 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
 
     # Steps pass rate + std (base TCs only, mean fraction of steps passed per TC)
     by_tc_step: dict[str, list[float]] = defaultdict(list)
-    # Samples completion + std (fraction of TCs where ALL step events passed)
+    # Workflows completion + std (fraction of TCs where ALL step events passed)
     by_tc_completion: dict[str, list[float]] = defaultdict(list)
     for r in results:
         if r.tc_id not in base_tc_ids or r.tc_id in infra_error_tc_ids:
@@ -2574,7 +2574,7 @@ async def _run_all_tcs_concurrent(
                                 mod_results = [_partial_mod[i] for i in sorted(seen_mod.values())]
                                 n_timeout = sum(1 for e in event_results if not e.passed)
                                 n_pass = sum(1 for e in event_results if e.passed)
-                                tc_result = TestCaseResult(
+                                tc_result = SampleResult(
                                     tc_id=tc.id, sample_id=tc.sample_id, tc_index=tc_idx,
                                     name=tc.name, domain=tc.domain, run_index=run_idx,
                                     events=event_results, modifications=mod_results,
@@ -2598,7 +2598,7 @@ async def _run_all_tcs_concurrent(
                                 sum(1 for e in event_results if e.passed) / len(event_results)
                                 if event_results else None
                             )
-                            tc_result = TestCaseResult(
+                            tc_result = SampleResult(
                                 tc_id=tc.id,
                                 sample_id=tc.sample_id,
                                 tc_index=tc_idx,
@@ -2666,7 +2666,7 @@ async def _run_all_tcs_concurrent(
                                 role=getattr(evt, "role", None),
                             ))
                 err_mod_results = [ModificationResult(mod_id=m.id) for m in (tc.modifications[:_max_mods_err] if _max_mods_err else tc.modifications)]
-                tc_result = TestCaseResult(
+                tc_result = SampleResult(
                     tc_id=tc.id, sample_id=tc.sample_id, tc_index=tc_idx,
                     name=tc.name, domain=tc.domain, run_index=run_idx,
                     events=err_results, modifications=err_mod_results,
@@ -2725,7 +2725,7 @@ def _print_summary(summary, output_path: Optional[Path] = None, elapsed_s: Optio
         print(f"Elapsed:             {elapsed_str}")
     print(f"Mean pass rate:      {_fmts(summary.mean_pass_rate, summary.pass_rate_std)}")
     print(f"Steps pass rate:     {_fmts(summary.steps_pass_rate, summary.steps_pass_rate_std)}")
-    print(f"Samples completion:  {_fmts(summary.samples_completion, summary.samples_completion_std)}")
+    print(f"Workflows completion:  {_fmts(summary.samples_completion, summary.samples_completion_std)}")
     print(f"Mod pass rate:       {_fmt_mod(summary.mod_pass_rate, summary.mod_pass_rate_std, summary.mod_pass_rate_all, summary.mod_pass_rate_all_std)}  (pre+post+irrelevant)")
     print(f"  Pre-mod:           {_fmt_mod(summary.pre_mod_pass_rate, summary.pre_mod_pass_rate_std, summary.pre_mod_pass_rate_all, summary.pre_mod_pass_rate_all_std)}")
     print(f"  Post-mod:          {_fmt_mod(summary.post_mod_pass_rate, summary.post_mod_pass_rate_std, summary.post_mod_pass_rate_all, summary.post_mod_pass_rate_all_std)}")
@@ -2808,10 +2808,10 @@ def run(args: argparse.Namespace) -> Path:
         print(f"Error: Input file not found: {args.input}", file=sys.stderr)
         sys.exit(1)
 
-    test_cases = load_jsonl(args.input, TestCase)
+    test_cases = load_jsonl(args.input, Sample)
 
     if getattr(args, "tc", None):
-        selected: list[TestCase] = []
+        selected: list[Sample] = []
         for selector in args.tc:
             if selector.isdigit():
                 idx = int(selector) - 1
@@ -2837,7 +2837,7 @@ def run(args: argparse.Namespace) -> Path:
     # When running steps-only, deduplicate by sample_id (same as evaluate.py)
     if getattr(args, "steps_only", False):
         seen_step_samples: set[str] = set()
-        deduped: list[TestCase] = []
+        deduped: list[Sample] = []
         for tc in test_cases:
             key = tc.sample_id or tc.id
             if key not in seen_step_samples:
@@ -2982,7 +2982,7 @@ def run(args: argparse.Namespace) -> Path:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
-    all_tc_results: list[TestCaseResult] = []
+    all_tc_results: list[SampleResult] = []
     seen_samples: set[str] = set()
     effective_provider = agent_provider or "openai"
 
@@ -2990,8 +2990,8 @@ def run(args: argparse.Namespace) -> Path:
     # When infra/timeout TCs are found, the user is prompted to choose whether to
     # skip them (continue with remaining TCs only) or retry them in order.
     completed: set[tuple[int, int]] = set()  # (tc_index, run_index)
-    infra_results:   list[TestCaseResult] = []  # TCs with error_type=="infra"
-    timeout_results: list[TestCaseResult] = []  # TCs with error_type=="timeout"
+    infra_results:   list[SampleResult] = []  # TCs with error_type=="infra"
+    timeout_results: list[SampleResult] = []  # TCs with error_type=="timeout"
     if args.output.exists():
         for r in _load_tc_results(args.output):
             # Re-classify TCs saved with error_type=None but infra-matching reasoning.
@@ -3221,7 +3221,7 @@ def run(args: argparse.Namespace) -> Path:
                         sum(1 for e in event_results if e.passed) / len(event_results)
                         if event_results else None
                     )
-                    tc_result = TestCaseResult(
+                    tc_result = SampleResult(
                         tc_id=tc.id,
                         sample_id=tc.sample_id,
                         tc_index=tc_idx,
@@ -3268,7 +3268,7 @@ def run(args: argparse.Namespace) -> Path:
                                 sum(1 for e in event_results if e.passed) / len(event_results)
                                 if event_results else None
                             )
-                            tc_result = TestCaseResult(
+                            tc_result = SampleResult(
                                 tc_id=tc.id, sample_id=tc.sample_id, tc_index=tc_idx,
                                 name=tc.name, domain=tc.domain, run_index=run_idx,
                                 events=event_results, modifications=mod_results,
@@ -3427,8 +3427,8 @@ Examples:
     return parser
 
 
-def _load_tc_results(path: Path) -> list[TestCaseResult]:
-    """Load TestCaseResult lines from a results JSONL, skipping EvalSummary lines."""
+def _load_tc_results(path: Path) -> list[SampleResult]:
+    """Load SampleResult lines from a results JSONL, skipping EvalSummary lines."""
     import json as _json
     results = []
     with open(path) as f:
@@ -3438,7 +3438,7 @@ def _load_tc_results(path: Path) -> list[TestCaseResult]:
                 continue
             data = _json.loads(line)
             if "tc_id" in data:
-                results.append(TestCaseResult(**data))
+                results.append(SampleResult(**data))
     return results
 
 

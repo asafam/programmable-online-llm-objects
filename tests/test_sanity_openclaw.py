@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.data.schema import ObjectDef, PeerDecl, Step, TestCase
+from src.data.schema import ObjectDef, PeerDecl, Step, Sample
 from src.data.mock_server import merge_tc_mock_tools, resolve_mock_configs
 from src.lnl.openclaw_export import (
     export_single_agent_workspace,
@@ -68,7 +68,7 @@ TC_INDEX = 0  # web-clipper: chrome-extension → content-curator → slack-cont
 # The downstream write objects (leads-table, sales-notification) are collapsed into
 # direct tool calls inside lead-capture-policy, keeping the chain to 2 agents.
 
-LEAD_CAPTURE_TC = TestCase(
+LEAD_CAPTURE_TC = Sample(
     id="lead-capture-sanity",
     name="Lead Capture 2-agent sanity",
     domain="general",
@@ -145,10 +145,10 @@ def worker(worker_num) -> WorkerConfig:
 
 
 @pytest.fixture(scope="session")
-def tc() -> TestCase:
+def tc() -> Sample:
     with open(TC_PATH) as f:
         lines = [l for l in f if l.strip()]
-    return TestCase(**json.loads(lines[TC_INDEX]))
+    return Sample(**json.loads(lines[TC_INDEX]))
 
 
 @pytest.fixture(scope="session")

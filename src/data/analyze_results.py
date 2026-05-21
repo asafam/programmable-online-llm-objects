@@ -29,7 +29,7 @@ except ImportError:
     _PLOTLY = False
 
 from src.data.failure_analysis import _extract_metrics as _extract_interaction_metrics
-from src.data.schema import EvalSummary, EventResult, TestCaseResult
+from src.data.schema import EvalSummary, EventResult, SampleResult
 
 
 # ── Failure category patterns (reused from scripts/categorize-failures.py) ──
@@ -127,7 +127,7 @@ class ResultBundle:
     label: str
     file_format: str  # "lnl" | "baseline" | "unknown"
     run_config: dict
-    tc_results: list[TestCaseResult]
+    tc_results: list[SampleResult]
     summary: Optional[EvalSummary]
 
 
@@ -192,7 +192,7 @@ def load_result_file(path: Path, label: Optional[str] = None) -> ResultBundle:
 
     # Parse body lines — skip first; try last as EvalSummary
     summary: Optional[EvalSummary] = None
-    tc_results: list[TestCaseResult] = []
+    tc_results: list[SampleResult] = []
 
     body_lines = lines[1:]
     # Check if last line is an EvalSummary (has mean_pass_rate)
@@ -216,7 +216,7 @@ def load_result_file(path: Path, label: Optional[str] = None) -> ResultBundle:
         if "tc_id" not in d or "events" not in d:
             continue
         try:
-            tc_results.append(TestCaseResult.model_validate(d))
+            tc_results.append(SampleResult.model_validate(d))
         except Exception as e:
             print(f"Warning: skipping TC record: {e}", file=sys.stderr)
 

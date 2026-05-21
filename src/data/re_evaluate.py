@@ -1,7 +1,7 @@
 """
 Re-evaluation runner — re-judge existing eval artifacts with a different judge.
 
-Reads TestCaseResult records from a _eval.jsonl file (produced by evaluate.py),
+Reads SampleResult records from a _eval.jsonl file (produced by evaluate.py),
 extracts the evidence and prior_context stored in each EventResult, and re-runs
 only the LLM-as-judge step without re-executing the LNL runtime.
 
@@ -49,8 +49,8 @@ from src.data.schema import (
     EventResult,
     ModificationResult,
     RunConfig,
-    TestCase,
-    TestCaseResult,
+    Sample,
+    SampleResult,
 )
 from src.data.utils import infer_provider, load_jsonl
 
@@ -99,9 +99,9 @@ def _build_judge(args: argparse.Namespace):
 
 # ── Eval file loading ─────────────────────────────────────────────────────────
 
-def _load_eval(eval_path: Path) -> list[TestCaseResult]:
-    """Load TestCaseResult records from an _eval.jsonl file."""
-    results: list[TestCaseResult] = []
+def _load_eval(eval_path: Path) -> list[SampleResult]:
+    """Load SampleResult records from an _eval.jsonl file."""
+    results: list[SampleResult] = []
     for line in eval_path.read_text().splitlines():
         line = line.strip()
         if not line:
@@ -111,9 +111,9 @@ def _load_eval(eval_path: Path) -> list[TestCaseResult]:
             rt = data.get("record_type", "")
             if rt in ("run_config", "eval_summary"):
                 continue
-            # TestCaseResult records have tc_id + run_index but no record_type
+            # SampleResult records have tc_id + run_index but no record_type
             if "tc_id" in data and "run_index" in data and "events" in data:
-                results.append(TestCaseResult.model_validate(data))
+                results.append(SampleResult.model_validate(data))
         except Exception:
             pass
     return results
@@ -123,7 +123,7 @@ def _load_eval(eval_path: Path) -> list[TestCaseResult]:
 
 def _build_expectation_map(tc_path: Path) -> "dict[str, dict[str, str]]":
     """Return {tc_id: {event_id: updated_expected}} from a test cases file."""
-    test_cases: list[TestCase] = load_jsonl(tc_path, TestCase)
+    test_cases: list[Sample] = load_jsonl(tc_path, Sample)
     result: dict[str, dict[str, str]] = {}
     for tc in test_cases:
         mapping: dict[str, str] = {}
@@ -139,7 +139,7 @@ def _build_expectation_map(tc_path: Path) -> "dict[str, dict[str, str]]":
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 
-def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
+def _compute_summary(results: list[SampleResult]) -> EvalSummary:
     import re
     import statistics
 
@@ -229,7 +229,7 @@ def run(args: argparse.Namespace) -> Path:
 
     tc_results = _load_eval(eval_path)
     if not tc_results:
-        print(f"Error: no TestCaseResult records found in {eval_path}", file=sys.stderr)
+        print(f"Error: no SampleResult records found in {eval_path}", file=sys.stderr)
         sys.exit(1)
 
     # Check that evidence is present (old eval files pre-refactor won't have it)
@@ -273,7 +273,7 @@ def run(args: argparse.Namespace) -> Path:
 
     workers: int = getattr(args, "workers", 1)
     write_lock = threading.Lock()
-    all_tc_results: list[TestCaseResult] = []
+    all_tc_results: list[SampleResult] = []
 
     run_config = RunConfig(
         timestamp=datetime.now().isoformat(),
@@ -293,7 +293,7 @@ def run(args: argparse.Namespace) -> Path:
         is_continuation=False,
     )
 
-    def _rejudge_one(orig: TestCaseResult) -> TestCaseResult:
+    def _rejudge_one(orig: SampleResult) -> SampleResult:
         tc_expect = expect_map.get(orig.tc_id, {})
         event_results: list[EventResult] = []
 
@@ -326,7 +326,7 @@ def run(args: argparse.Namespace) -> Path:
             sum(1 for e in event_results if e.passed) / len(event_results)
             if event_results else None
         )
-        return TestCaseResult(
+        return SampleResult(
             tc_id=orig.tc_id,
             sample_id=orig.sample_id,
             tc_index=orig.tc_index,

@@ -35,7 +35,7 @@ load_dotenv()
 import httpx
 import yaml
 
-from src.data.schema import TestCase
+from src.data.schema import Sample
 from src.data.mock_server import merge_tc_mock_tools, resolve_mock_configs
 from src.lnl.openclaw_export import export_workflow_from_objects, rewrite_agents_md, reset_agent_state
 from src.data.evaluate_baseline import (
@@ -49,13 +49,13 @@ from src.data.evaluate_baseline import (
 )
 
 
-def load_test_cases(path: Path) -> list[TestCase]:
+def load_test_cases(path: Path) -> list[Sample]:
     tcs = []
     with open(path) as f:
         for line in f:
             line = line.strip()
             if line:
-                tcs.append(TestCase(**json.loads(line)))
+                tcs.append(Sample(**json.loads(line)))
     return tcs
 
 

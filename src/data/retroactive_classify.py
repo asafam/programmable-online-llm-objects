@@ -59,7 +59,7 @@ def _build_role_map(tc_path: Path) -> dict[str, dict[str, Optional[str]]]:
             data = json.loads(line)
         except Exception:
             continue
-        # Support both TestCases wrapper and bare TestCase objects
+        # Support both Samples wrapper and bare Sample objects
         tcs = data.get("test_cases", [data]) if "test_cases" in data else [data]
         for tc in tcs:
             tc_id = tc.get("id", "")

@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.data.schema import TestCase
+from src.data.schema import Sample
 from src.data.mock_server import merge_tc_mock_tools, resolve_mock_configs
 from src.lnl.openclaw_export import export_workflow_from_objects, rewrite_agents_md, reset_agent_state
 from src.data.evaluate_baseline import (
@@ -75,10 +75,10 @@ def worker(worker_num) -> WorkerConfig:
 
 
 @pytest.fixture(scope="session")
-def tc() -> TestCase:
+def tc() -> Sample:
     with open(TC_PATH) as f:
         lines = [l for l in f if l.strip()]
-    return TestCase(**json.loads(lines[TC_INDEX]))
+    return Sample(**json.loads(lines[TC_INDEX]))
 
 
 @pytest.fixture(scope="session")
@@ -161,7 +161,7 @@ async def _send_step(
     sname = f"test-{OpenClawAgent._global_counter}"
 
     # Rewrite AGENTS.md with fresh session name
-    from src.data.schema import TestCase as _TC
+    from src.data.schema import Sample as _TC
     from src.lnl.openclaw_export import rewrite_agents_md
     # We need tc objects — pass openclaw_home and reconstruct from fixture
     # (handled by caller — rewrite done before this call)

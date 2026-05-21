@@ -29,7 +29,7 @@ from tqdm import tqdm
 load_dotenv()
 
 from src.data.schema import (
-    Sample, Scenarios, TestCase, Modification, ModType, Ambiguity,
+    Workflow, Scenarios, Sample, Modification, ModType, Ambiguity,
     Event, EventExpect, EventExpectations, ConcurrentGroupEvents,
 )
 from src.data.llm import create_llm
@@ -81,7 +81,7 @@ MODIFICATION_TYPES = {
 }
 
 
-def format_sample(sample: Sample) -> str:
+def format_sample(sample: Workflow) -> str:
     """Format a sample instance for the prompt, including object definitions."""
     # Format object definitions
     objects_lines = []
@@ -118,7 +118,7 @@ Steps:
 
 def format_prompt(
     prompt_template: str,
-    sample: Sample,
+    sample: Workflow,
     scenario_count: int,
     events_before: int,
     events_after: int,
@@ -165,7 +165,7 @@ def _active_mods_for(event_when: str, modifications: list) -> list[str]:
     return [mid for mk, mid in mod_keys if ek >= mk]
 
 
-def _rewrite_event_expectations(llm, test_case: TestCase, sample: Sample) -> None:
+def _rewrite_event_expectations(llm, test_case: Sample, sample: Workflow) -> None:
     """Rewrite event expectations using the finalized mock data (mutates test_case.events).
 
     The scenario generator writes events without expectations. This function writes them
@@ -243,8 +243,8 @@ def _next_event_id(events: list[Event]) -> int:
 
 def _generate_concurrent_group(
     llm,
-    sample: Sample,
-    tc: TestCase,
+    sample: Workflow,
+    tc: Sample,
     mod: Modification,
     group_type: str,   # "pre" or "post"
     n: int,
@@ -330,7 +330,7 @@ def _generate_concurrent_group(
     return out
 
 
-def _add_concurrent_events_to_tc(llm, sample: Sample, tc: TestCase, n: int, workers: int = 1) -> None:
+def _add_concurrent_events_to_tc(llm, sample: Workflow, tc: Sample, n: int, workers: int = 1) -> None:
     """Generate concurrent groups for all mods in tc and append to tc.events (mutates in place).
 
     All groups are generated in parallel (one LLM call per group) using pre-assigned IDs
@@ -363,9 +363,9 @@ def _add_concurrent_events_to_tc(llm, sample: Sample, tc: TestCase, n: int, work
 
 
 def scenario_to_test_case(
-    sample: Sample, scenario, index: int, mod_types: list[ModType], ambiguity: Ambiguity,
-) -> TestCase:
-    """Convert a scenario to a TestCase by merging with sample metadata and script-assigned fields."""
+    sample: Workflow, scenario, index: int, mod_types: list[ModType], ambiguity: Ambiguity,
+) -> Sample:
+    """Convert a scenario to a Sample by merging with sample metadata and script-assigned fields."""
     modifications = [
         Modification(**gen_mod.model_dump(), mod_type=mt, ambiguity=ambiguity)
         for gen_mod, mt in zip(scenario.modifications, mod_types)
@@ -381,7 +381,7 @@ def scenario_to_test_case(
     # Include mod_type in TC ID so each (sample, mod_type) pair is unique and
     # the completion cache (which keys by stripping "-TC{NNN}") can track them independently.
     mod_type_slug = mod_types[0].value if mod_types else "mixed"
-    return TestCase(
+    return Sample(
         id=f"{sample.id}-{mod_type_slug}-TC{index:03d}",
         sample_id=sample.id,
         name=sample.name,
@@ -540,7 +540,7 @@ def run(args: argparse.Namespace) -> Path:
     validate_paths(args.input, args.prompt_template)
 
     # Load data
-    samples = load_jsonl(args.input, Sample)
+    samples = load_jsonl(args.input, Workflow)
     prompt_template = load_prompt_template(args.prompt_template)["user_prompt"]
 
     # Apply ID filter if specified
@@ -627,7 +627,7 @@ def run(args: argparse.Namespace) -> Path:
     fail_count = 0
     write_lock = threading.Lock()
 
-    def _process_unit(sample: Sample, mod_type: str) -> list[TestCase]:
+    def _process_unit(sample: Workflow, mod_type: str) -> list[Sample]:
         """Generate test cases for one (sample, mod_type) pair."""
         if mod_type == "mixed":
             resolved_mod_types = [
@@ -729,7 +729,7 @@ def run(args: argparse.Namespace) -> Path:
     return args.output
 
 
-def _run_concurrent_events_pass(args: argparse.Namespace, samples: list[Sample]) -> None:
+def _run_concurrent_events_pass(args: argparse.Namespace, samples: list[Workflow]) -> None:
     """Add concurrent groups to all TCs in the output file that don't have them yet."""
     import json as _json
     from src.data.llm import create_llm as _create_llm
@@ -756,10 +756,10 @@ def _run_concurrent_events_pass(args: argparse.Namespace, samples: list[Sample])
                 pass
 
     # Build deduplicated TC list (one entry per unique ID, at its last line position)
-    tcs: list[tuple[int, TestCase]] = []
+    tcs: list[tuple[int, Sample]] = []
     for tc_id, idx in seen_ids.items():
         try:
-            tc = TestCase.model_validate(_json.loads(raw_lines[idx]))
+            tc = Sample.model_validate(_json.loads(raw_lines[idx]))
             tcs.append((idx, tc))
         except Exception:
             pass
@@ -768,7 +768,7 @@ def _run_concurrent_events_pass(args: argparse.Namespace, samples: list[Sample])
     if n_dupes > 0:
         print(f"Deduplicating: {len(raw_lines)} lines → {len(tcs)} unique TCs ({n_dupes} duplicates removed)")
 
-    def _has_correct_groups(tc: TestCase) -> bool:
+    def _has_correct_groups(tc: Sample) -> bool:
         """True when tc already has correctly-named cgroup_pre/post groups for every mod."""
         expected = {f"cgroup_{gt}_{mod.id}" for mod in tc.modifications for gt in ("pre", "post")}
         actual = {e.concurrent_group for e in tc.events if e.concurrent_group}
@@ -789,9 +789,9 @@ def _run_concurrent_events_pass(args: argparse.Namespace, samples: list[Sample])
     done = 0
     failed = 0
 
-    def _process_one(item: tuple[int, TestCase]) -> tuple[int, TestCase]:
+    def _process_one(item: tuple[int, Sample]) -> tuple[int, Sample]:
         idx, tc = item
-        sample = sample_map.get(tc.sample_id) or Sample(
+        sample = sample_map.get(tc.sample_id) or Workflow(
             id=tc.sample_id or tc.id, name=tc.name, domain=tc.domain,
             source_type=tc.source_type, link=tc.link,
             raw_steps=[s.text for s in tc.steps], objects=tc.objects,

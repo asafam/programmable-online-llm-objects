@@ -35,7 +35,7 @@ from tqdm import tqdm
 load_dotenv()
 
 import yaml
-from src.data.schema import TestCase, EventExpect
+from src.data.schema import Sample, EventExpect
 from src.data.llm import create_llm
 from src.data.llm.base import ChatMessage
 from src.data.utils import infer_provider, add_common_args, generate_with_retries
@@ -74,7 +74,7 @@ def _load_prompt() -> str:
         return yaml.safe_load(f)["prompt"]
 
 
-def _build_context(tc: TestCase) -> tuple[str, str, str]:
+def _build_context(tc: Sample) -> tuple[str, str, str]:
     """Return (obj_lines, mock_lines, mod_lines) shared across events."""
     obj_lines = "\n\n".join(
         f"[{o.object_id}]\nRole: {o.role}\nBehavior: {o.behavior}"
@@ -91,7 +91,7 @@ def _build_context(tc: TestCase) -> tuple[str, str, str]:
     return obj_lines, mock_lines, mod_lines
 
 
-def _evaluate_step(llm, tc: TestCase, step_idx: int, prompt_template: str) -> ExpectationVerdict | None:
+def _evaluate_step(llm, tc: Sample, step_idx: int, prompt_template: str) -> ExpectationVerdict | None:
     """Evaluate a single step's expectation. Returns None if no expectation stored."""
     step = tc.steps[step_idx]
     if step.expect is None:
@@ -126,7 +126,7 @@ def _evaluate_step(llm, tc: TestCase, step_idx: int, prompt_template: str) -> Ex
 
 # ── Per-TC audit ──────────────────────────────────────────────────────────────
 
-def _audit_tc(llm, tc: TestCase, prompt_template: str) -> AuditResult:
+def _audit_tc(llm, tc: Sample, prompt_template: str) -> AuditResult:
     verdicts = []
     for i in range(len(tc.steps)):
         v = _evaluate_step(llm, tc, i, prompt_template)
@@ -137,7 +137,7 @@ def _audit_tc(llm, tc: TestCase, prompt_template: str) -> AuditResult:
 
 # ── Load helpers ──────────────────────────────────────────────────────────────
 
-def _load_test_cases(path: Path) -> list[tuple[int, TestCase]]:
+def _load_test_cases(path: Path) -> list[tuple[int, Sample]]:
     tcs = []
     with open(path) as f:
         for i, line in enumerate(f):
@@ -148,7 +148,7 @@ def _load_test_cases(path: Path) -> list[tuple[int, TestCase]]:
             if "record_type" in d or "tc_id" in d:
                 continue
             try:
-                tc = TestCase.model_validate(d)
+                tc = Sample.model_validate(d)
                 # Only audit TCs that have at least one step with an expectation
                 if any(s.expect is not None for s in tc.steps):
                     tcs.append((i, tc))
@@ -177,7 +177,7 @@ def _load_completed(audit_path: Path) -> set[str]:
 
 # ── Repair ────────────────────────────────────────────────────────────────────
 
-def _repair_tc(tc: TestCase, audit: AuditResult) -> bool:
+def _repair_tc(tc: Sample, audit: AuditResult) -> bool:
     """Apply corrected actions from audit verdicts to steps. Returns True if any change made."""
     changed = False
     verdict_map = {v.event_id: v for v in audit.wrong}
@@ -221,7 +221,7 @@ def audit(
 
         results: list[tuple[int, AuditResult]] = []
 
-        def _do_one(args: tuple[int, TestCase]) -> tuple[int, AuditResult]:
+        def _do_one(args: tuple[int, Sample]) -> tuple[int, AuditResult]:
             i, tc = args
             return i, _audit_tc(llm, tc, prompt_template)
 
@@ -320,7 +320,7 @@ class _ResolvedExpect(BaseModel):
     reason: str
 
 
-def _resolve_uncertain_step(llm, tc: TestCase, step_idx: int, issue: str, prompt_template: str) -> EventExpect | None:
+def _resolve_uncertain_step(llm, tc: Sample, step_idx: int, issue: str, prompt_template: str) -> EventExpect | None:
     step = tc.steps[step_idx]
     obj_lines, mock_lines, _ = _build_context(tc)
     event_line = f"S{step_idx+1:03d} | baseline (no modifications) | recipient={step.target} | input: {step.text}"
@@ -344,7 +344,7 @@ def _resolve_uncertain_step(llm, tc: TestCase, step_idx: int, issue: str, prompt
     return None
 
 
-def _resolve_uncertain_event(llm, tc: TestCase, evt, issue: str, prompt_template: str) -> EventExpect | None:
+def _resolve_uncertain_event(llm, tc: Sample, evt, issue: str, prompt_template: str) -> EventExpect | None:
     obj_lines, mock_lines, mod_lines = _build_context(tc)
     active = _active_mods_for(evt.when, tc.modifications)
     mod_note = f" [active modifications: {', '.join(active)}]" if active else " [no modifications active — use baseline behavior]"
@@ -371,7 +371,7 @@ def _resolve_uncertain_event(llm, tc: TestCase, evt, issue: str, prompt_template
 
 # ── Event auditing ────────────────────────────────────────────────────────────
 
-def _evaluate_event(llm, tc: TestCase, evt, prompt_template: str) -> ExpectationVerdict | None:
+def _evaluate_event(llm, tc: Sample, evt, prompt_template: str) -> ExpectationVerdict | None:
     """Evaluate a single event's expectation. Returns None if no expectation stored."""
     if evt.expect is None:
         return None
@@ -403,7 +403,7 @@ def _evaluate_event(llm, tc: TestCase, evt, prompt_template: str) -> Expectation
     return result
 
 
-def _audit_tc_events(llm, tc: TestCase, prompt_template: str) -> AuditResult:
+def _audit_tc_events(llm, tc: Sample, prompt_template: str) -> AuditResult:
     verdicts = []
     for evt in tc.events:
         v = _evaluate_event(llm, tc, evt, prompt_template)
@@ -412,7 +412,7 @@ def _audit_tc_events(llm, tc: TestCase, prompt_template: str) -> AuditResult:
     return AuditResult(tc_id=tc.id, verdicts=verdicts)
 
 
-def _load_test_cases_events(path: Path) -> list[tuple[int, TestCase]]:
+def _load_test_cases_events(path: Path) -> list[tuple[int, Sample]]:
     tcs = []
     with open(path) as f:
         for i, line in enumerate(f):
@@ -423,7 +423,7 @@ def _load_test_cases_events(path: Path) -> list[tuple[int, TestCase]]:
             if "record_type" in d or "tc_id" in d:
                 continue
             try:
-                tc = TestCase.model_validate(d)
+                tc = Sample.model_validate(d)
                 if any(e.expect is not None for e in tc.events):
                     tcs.append((i, tc))
             except Exception:
@@ -431,7 +431,7 @@ def _load_test_cases_events(path: Path) -> list[tuple[int, TestCase]]:
     return tcs
 
 
-def _repair_tc_events(tc: TestCase, audit: AuditResult) -> bool:
+def _repair_tc_events(tc: Sample, audit: AuditResult) -> bool:
     """Apply corrected actions from audit verdicts to events. Returns True if any change made."""
     changed = False
     verdict_map = {v.event_id: v for v in audit.wrong}
@@ -471,7 +471,7 @@ def audit_events(
         llm = create_llm(model=model, provider=provider)
         prompt_template = _load_prompt()
 
-        def _do_one(args: tuple[int, TestCase]) -> tuple[int, AuditResult]:
+        def _do_one(args: tuple[int, Sample]) -> tuple[int, AuditResult]:
             i, tc = args
             return i, _audit_tc_events(llm, tc, prompt_template)
 
@@ -591,7 +591,7 @@ def resolve_uncertain_events(
     print(f"Resolving {total_events} uncertain events across {len(uncertain_map)} TCs")
 
     raw_lines: list[str] = []
-    tcs_to_resolve: list[tuple[int, TestCase]] = []
+    tcs_to_resolve: list[tuple[int, Sample]] = []
     with open(input_path) as f:
         for i, line in enumerate(f):
             line = line.rstrip("\n")
@@ -602,7 +602,7 @@ def resolve_uncertain_events(
                 d = json.loads(line)
                 if "record_type" in d or "tc_id" in d:
                     continue
-                tc = TestCase.model_validate(d)
+                tc = Sample.model_validate(d)
                 if tc.id in uncertain_map:
                     tcs_to_resolve.append((i, tc))
             except Exception:
@@ -613,7 +613,7 @@ def resolve_uncertain_events(
     write_lock = threading.Lock()
     resolved_events = resolved_tcs = 0
 
-    def _do_one(args: tuple[int, TestCase]) -> tuple[int, TestCase, int]:
+    def _do_one(args: tuple[int, Sample]) -> tuple[int, Sample, int]:
         i, tc = args
         event_issues = uncertain_map[tc.id]
         count = 0
@@ -685,7 +685,7 @@ def resolve_uncertain(
 
     # Load test cases
     raw_lines: list[str] = []
-    tcs_to_resolve: list[tuple[int, TestCase]] = []
+    tcs_to_resolve: list[tuple[int, Sample]] = []
     with open(input_path) as f:
         for i, line in enumerate(f):
             line = line.rstrip("\n")
@@ -696,7 +696,7 @@ def resolve_uncertain(
                 d = json.loads(line)
                 if "record_type" in d or "tc_id" in d:
                     continue
-                tc = TestCase.model_validate(d)
+                tc = Sample.model_validate(d)
                 if tc.id in uncertain_map:
                     tcs_to_resolve.append((i, tc))
             except Exception:
@@ -707,7 +707,7 @@ def resolve_uncertain(
     write_lock = threading.Lock()
     resolved_steps = resolved_tcs = 0
 
-    def _do_one(args: tuple[int, TestCase]) -> tuple[int, TestCase, int]:
+    def _do_one(args: tuple[int, Sample]) -> tuple[int, Sample, int]:
         i, tc = args
         step_issues = uncertain_map[tc.id]
         count = 0

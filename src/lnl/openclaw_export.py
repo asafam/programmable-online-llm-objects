@@ -526,7 +526,7 @@ def export_workflow_from_objects(
 ) -> list[str]:
     """Export from in-memory objects (list[ObjectDef] from schema.py or ObjectDefinition).
 
-    Accepts either Pydantic ObjectDef instances (from TestCase.objects) or
+    Accepts either Pydantic ObjectDef instances (from Sample.objects) or
     dataclass ObjectDefinition instances. Converts automatically.
 
     Args:

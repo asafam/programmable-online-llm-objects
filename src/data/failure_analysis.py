@@ -165,7 +165,7 @@ def _longest_path_len(edges: list[tuple[str, str]]) -> int:
     return best
 
 
-# ── Expected complexity from TestCase graph ───────────────────────────────────
+# ── Expected complexity from Sample graph ───────────────────────────────────
 
 @dataclass
 class ExpectedComplexity:

@@ -9,7 +9,7 @@ Each TC is built in (1 + E + K + 1) LLM calls:
   Stage D — generate background interference events (1 call)
 
 The script then interleaves relevant and background events deterministically
-(seeded), reassigns IDs and timestamps, and assembles a standard TestCase.
+(seeded), reassigns IDs and timestamps, and assembles a standard Sample.
 
 Probe events have `role="post_mod"` and `depends_on=[…tracked event IDs…]`.
 Tracked events have `role="irrelevant"` and `expect` set (per-event memory-fidelity check).
@@ -54,9 +54,9 @@ from src.data.schema import (
     ProbeTargetsList,
     ProbeType,
     RelevantEventsList,
-    Sample,
+    Workflow,
     Step,
-    TestCase,
+    Sample,
 )
 from src.data.llm import create_llm
 from src.data.utils import (
@@ -266,13 +266,13 @@ def _reassign_ids(
 
 
 def _scenario_to_test_case(
-    sample: Sample,
+    sample: Workflow,
     events: list[GeneratedEventWithExpect],
     probes: list[GeneratedEventWithExpect],
     depth: int,
     seed: int,
     tc_index: int,
-) -> TestCase:
+) -> Sample:
     all_events: list[Event] = []
     for ge in events:
         d = ge.model_dump()
@@ -283,7 +283,7 @@ def _scenario_to_test_case(
         d.update(role="post_mod", after_mod_ids=[])
         all_events.append(Event(**d))
 
-    return TestCase(
+    return Sample(
         id=f"{sample.id}-probe2-D{depth:02d}-S{seed:02d}-TC{tc_index:03d}",
         sample_id=sample.id,
         name=f"{sample.name} [Probe2 D{depth} S{seed}]",
@@ -456,7 +456,7 @@ def _validate_background_events(result: BackgroundEventsList, n_background: int)
 
 def _fmt_probe_targets(
     template: str,
-    sample: Sample,
+    sample: Workflow,
     depth: int,
     seed: int,
     probe_types: list[ProbeType],
@@ -503,7 +503,7 @@ def _fmt_probe_targets(
 
 def _fmt_relevant_events(
     template: str,
-    sample: Sample,
+    sample: Workflow,
     entity_id: str,
     entity_type: str,
     n_corrections: int,
@@ -552,7 +552,7 @@ def _fmt_relevant_events(
 
 def _fmt_probe_question(
     template: str,
-    sample: Sample,
+    sample: Workflow,
     probe_type: ProbeType,
     relevant_events: list[GeneratedEventWithExpect],
     target_entities: list[str],
@@ -575,7 +575,7 @@ def _fmt_probe_question(
 
 def _fmt_background_events(
     template: str,
-    sample: Sample,
+    sample: Workflow,
     n_background: int,
     tracked_entities,
     relevant_events: list[GeneratedEventWithExpect],
@@ -595,20 +595,20 @@ def _fmt_background_events(
     )
 
 
-# ── Sample loader (shared with generate_state_probe_tcs.py) ──────────────────
+# ── Workflow loader (shared with generate_state_probe_tcs.py) ──────────────────
 
-def _load_samples(input_path: Path) -> list[Sample]:
+def _load_samples(input_path: Path) -> list[Workflow]:
     """Load samples from JSONL — accepts both samples.jsonl and test_cases.jsonl."""
     raw = load_jsonl(input_path)
     if not raw:
         return []
     first = raw[0]
     if "modifications" in first and "events" in first:
-        seen: dict[str, Sample] = {}
+        seen: dict[str, Workflow] = {}
         for d in raw:
             sid = d["sample_id"]
             if sid not in seen:
-                seen[sid] = Sample(
+                seen[sid] = Workflow(
                     id=sid,
                     name=d["name"],
                     domain=d["domain"],
@@ -622,13 +622,13 @@ def _load_samples(input_path: Path) -> list[Sample]:
                     flag_reasons=[],
                 )
         return list(seen.values())
-    return [Sample(**d) for d in raw]
+    return [Workflow(**d) for d in raw]
 
 
 # ── Core generation logic ─────────────────────────────────────────────────────
 
 def _generate_tc(
-    sample: Sample,
+    sample: Workflow,
     depth: int,
     seed: int,
     tc_index: int,
@@ -636,7 +636,7 @@ def _generate_tc(
     templates: dict[str, str],
     tag: str,
     probe_types: list[ProbeType],
-) -> Optional[TestCase]:
+) -> Optional[Sample]:
     """Generate one TC for (sample, depth, seed). Returns None on failure."""
 
     expected_types: set[ProbeType] = set(probe_types)
@@ -994,7 +994,7 @@ def run(args: argparse.Namespace) -> Path:
 
     probe_types = [ProbeType(pt) for pt in args.probe_types]
 
-    def _process_unit(sample: Sample, depth: int, seed: int) -> Optional[TestCase]:
+    def _process_unit(sample: Workflow, depth: int, seed: int) -> Optional[Sample]:
         tag = f"{sample.id}-probe2-D{depth:02d}-S{seed:02d}"
         return _generate_tc(sample, depth, seed, 1, llm, templates, tag, probe_types)
 

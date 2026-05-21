@@ -35,7 +35,7 @@ from src.data.schema import (
     ObjectDef,
     PeerDecl,
     Step,
-    TestCase,
+    Sample,
 )
 from src.data.validate_test_cases import (
     find_invalid_peer_declarations,
@@ -101,7 +101,7 @@ class TestMockDataFieldMismatches:
             arguments_schema={"type": "object", "properties": {"ticket_id": {"type": "string"}}},
             response_template='{"id": "TICKET-001", "status": "captured", "priority": "high"}',
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC001", name="Ticket routing", domain="support", source_type="zapier",
             objects=[obj],
             steps=[Step(text="New ticket received from customer", target="ticket-router")],
@@ -127,7 +127,7 @@ class TestMockDataFieldMismatches:
             arguments_schema={"type": "object", "properties": {"contact_id": {"type": "string"}}},
             response_template='{"id": "CONTACT-001", "stage": "prospect", "priority": "medium"}',
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC002", name="Lead processing", domain="sales", source_type="zapier",
             objects=[obj],
             steps=[Step(text="New lead from Acme Corp", target="crm-handler")],
@@ -152,7 +152,7 @@ class TestMockDataFieldMismatches:
             arguments_schema={"type": "object", "properties": {"ticket_id": {"type": "string"}}},
             response_template='{"id": "TICKET-001", "status": "new", "priority": "high"}',
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC003", name="Ticket routing", domain="support", source_type="zapier",
             objects=[obj],
             steps=[Step(text="New ticket received from customer", target="ticket-router")],
@@ -186,7 +186,7 @@ class TestReadWriteMisclassification:
             role="Stores FAQ articles for HR policies",
             behavior="Receive new FAQ articles and store them. Do not reply to incoming messages.",
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC004", name="HR support", domain="hr", source_type="zapier",
             objects=[obj_a, obj_b],
             steps=[Step(text="Slack message from Maya Chen: question about parental leave", target="hr-triage")],
@@ -213,7 +213,7 @@ class TestReadWriteMisclassification:
             behavior="Append new policy documents to the store. Do not reply to queries.",
             event_sources=["admin"],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC005", name="Policy check", domain="compliance", source_type="zapier",
             objects=[obj_a, obj_b],
             steps=[Step(text="New vendor contract for review: Acme Corp MSA", target="policy-engine")],
@@ -239,7 +239,7 @@ class TestReadWriteMisclassification:
             behavior="When queried about a team, reply with the on-call agent name.",
             event_sources=["internal"],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC006", name="Ticket routing", domain="support", source_type="zapier",
             objects=[obj_a, obj_b],
             steps=[Step(text="High-priority ticket from Acme Corp", target="ticket-router")],
@@ -264,7 +264,7 @@ class TestReadWriteMisclassification:
             behavior="Return account details from state for any queried account ID.",
             skills=["crm_data"],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC007", name="Lead scoring", domain="sales", source_type="zapier",
             objects=[obj_a, obj_b],
             steps=[Step(text="New lead: Jane Smith, jane@acme.com", target="lead-scorer")],
@@ -300,7 +300,7 @@ class TestSequentialConfirmationChains:
                 PeerDecl(object_id="slack-notifications", relationship="Send summary"),
             ],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC008", name="Sales follow-up", domain="sales", source_type="zapier",
             objects=[obj],
             steps=[Step(text="Gong call summary: rep Alice, Acme Corp", target="follow-up-composer")],
@@ -327,7 +327,7 @@ class TestSequentialConfirmationChains:
                 PeerDecl(object_id="slack-finance",   relationship="Send expense notification"),
             ],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC009", name="Expense processing", domain="finance", source_type="zapier",
             objects=[obj],
             steps=[Step(text="Expense submitted by Alice: $450, client dinner", target="expense-policy")],
@@ -354,7 +354,7 @@ class TestSequentialConfirmationChains:
                 PeerDecl(object_id="slack-sales",  relationship="Notify sales team"),
             ],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC010", name="Lead dispatch", domain="sales", source_type="zapier",
             objects=[obj],
             steps=[Step(text="New lead: John Doe, john@acme.com, Acme Corp, Enterprise", target="lead-dispatcher")],
@@ -381,7 +381,7 @@ class TestMissingStepData:
             behavior="Post notification to the appropriate channel.",
             event_sources=["zendesk"],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC011", name="Helpdesk routing", domain="support", source_type="zapier",
             objects=[obj],
             steps=[Step(text="New support ticket from priya.nair", target="helpdesk-router")],
@@ -410,7 +410,7 @@ class TestMissingStepData:
             behavior="Create a Jira ticket for each form submission.",
             event_sources=["form"],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC012", name="Engineering intake", domain="engineering", source_type="zapier",
             objects=[obj],
             steps=[Step(text="Engineering intake form submitted: need dashboard feature", target="jira-handler")],
@@ -438,7 +438,7 @@ class TestMissingStepData:
             behavior="Post to the channel specified in the trigger.",
             event_sources=["zendesk"],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC013", name="Helpdesk routing", domain="support", source_type="zapier",
             objects=[obj],
             steps=[Step(text="New ticket from priya.nair, route to #support-queue", target="helpdesk-router")],
@@ -468,7 +468,7 @@ class TestMissingStepData:
             arguments_schema={"type": "object", "properties": {"id": {"type": "string"}}},
             response_template='{"id": "TICK-001", "channel": "#support-queue", "assignee": "Jordan Reyes"}',
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC014", name="Helpdesk routing", domain="support", source_type="zapier",
             objects=[obj],
             steps=[Step(text="New ticket TICK-001 from priya.nair", target="helpdesk-router")],
@@ -505,7 +505,7 @@ class TestThresholdEvaluationInExpectations:
             ),
             event_sources=["gong"],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC015", name="Call coaching", domain="sales", source_type="zapier",
             objects=[obj],
             steps=[Step(text="Call recording from rep Alice available", target="call-coach")],
@@ -538,7 +538,7 @@ class TestThresholdEvaluationInExpectations:
             ),
             event_sources=["gong"],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC016", name="Call coaching", domain="sales", source_type="zapier",
             objects=[obj],
             steps=[Step(text="Call recording from rep Bob available", target="call-coach")],
@@ -568,7 +568,7 @@ class TestThresholdEvaluationInExpectations:
             ),
             event_sources=["expensify"],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC017", name="Expense monitoring", domain="finance", source_type="zapier",
             objects=[obj],
             steps=[Step(text="Expense from Alice for team lunch", target="expense-monitor")],
@@ -629,7 +629,7 @@ class TestTriggerDataQuality:
         mock = self._base_mock_tool(triggers=[
             MockToolTrigger(target_object_id="nonexistent-handler", message_template="Email to {to}", source="slack"),
         ])
-        tc = TestCase(
+        tc = Sample(
             id="TC018", name="Email chain", domain="sales", source_type="zapier",
             objects=self._base_objects(),
             steps=[Step(text="Send follow-up email to alice@company.com", target="email-handler")],
@@ -653,7 +653,7 @@ class TestTriggerDataQuality:
                 source="slack",
             ),
         ])
-        tc = TestCase(
+        tc = Sample(
             id="TC019", name="Email chain", domain="sales", source_type="zapier",
             objects=self._base_objects(),
             steps=[Step(text="Send follow-up email", target="email-handler")],
@@ -683,7 +683,7 @@ class TestTriggerDataQuality:
                 ),
             ],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC020", name="Ticket creation", domain="support", source_type="zapier",
             objects=self._base_objects(),
             steps=[Step(text="Create ticket for login issue", target="email-handler")],
@@ -696,7 +696,7 @@ class TestTriggerDataQuality:
 
     def test_detects_triggered_by_referencing_nonexistent_event(self):
         """Event.triggered_by references an event ID that does not exist."""
-        tc = TestCase(
+        tc = Sample(
             id="TC021", name="Trigger chain", domain="sales", source_type="zapier",
             objects=self._base_objects(),
             steps=[Step(text="Send email to alice@company.com", target="email-handler")],
@@ -732,7 +732,7 @@ class TestTriggerDataQuality:
                 source="slack",
             ),
         ])
-        tc = TestCase(
+        tc = Sample(
             id="TC022", name="Email to Slack chain", domain="sales", source_type="zapier",
             objects=self._base_objects(),
             steps=[Step(text="Send follow-up to alice@company.com, subject: Q2 deal", target="email-handler")],
@@ -783,7 +783,7 @@ class TestInvalidPeerDeclarations:
                 PeerDecl(object_id="missing-service", relationship="Send notification"),
             ],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC023", name="Lead dispatch", domain="sales", source_type="zapier",
             objects=[
                 obj,
@@ -810,7 +810,7 @@ class TestInvalidPeerDeclarations:
                 PeerDecl(object_id="slack-sales",  relationship="Notify sales team"),
             ],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC024", name="Lead dispatch", domain="sales", source_type="zapier",
             objects=[
                 obj,
@@ -841,7 +841,7 @@ class TestPeerGraphDeadEnds:
             event_sources=["zendesk"],
             peers=[],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC025", name="Ticket routing", domain="support", source_type="zapier",
             objects=[entry, ObjectDef(object_id="support-team", role="Handles tickets", behavior="Respond.")],
             steps=[Step(text="New ticket from customer", target="ticket-router")],
@@ -860,7 +860,7 @@ class TestPeerGraphDeadEnds:
             event_sources=["zendesk"],
             peers=[PeerDecl(object_id="support-team", relationship="Forward ticket")],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC026", name="Ticket routing", domain="support", source_type="zapier",
             objects=[entry, ObjectDef(object_id="support-team", role="Handles tickets", behavior="Respond.")],
             steps=[Step(text="New ticket from customer", target="ticket-router")],
@@ -879,7 +879,7 @@ class TestPeerGraphDeadEnds:
             event_sources=["webhook"],
             peers=[],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC027", name="Notification", domain="comms", source_type="zapier",
             objects=[solo],
             steps=[Step(text="Send notification to alice@company.com", target="notification-sender")],
@@ -912,7 +912,7 @@ class TestUnreachableObjects:
             role="Logs all ticket events",
             behavior="Record event in audit log.",
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC028", name="Ticket routing", domain="support", source_type="zapier",
             objects=[
                 entry,
@@ -939,7 +939,7 @@ class TestUnreachableObjects:
                 PeerDecl(object_id="audit-logger",  relationship="Log ticket event"),
             ],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC029", name="Ticket routing", domain="support", source_type="zapier",
             objects=[
                 entry,
@@ -955,7 +955,7 @@ class TestUnreachableObjects:
 
     def test_single_object_not_flagged(self):
         solo = ObjectDef(object_id="sender", role="Sends emails", behavior="Send.", event_sources=["webhook"])
-        tc = TestCase(
+        tc = Sample(
             id="TC030", name="Send", domain="comms", source_type="zapier",
             objects=[solo],
             steps=[Step(text="Send email", target="sender")],
@@ -984,7 +984,7 @@ class TestMissingMockTools:
             event_sources=["slack"],
             skills=["faq_knowledge_base_data"],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC031", name="FAQ lookup", domain="hr", source_type="zapier",
             objects=[obj],
             steps=[Step(text="Question about parental leave from Maya Chen", target="faq-knowledge-base")],
@@ -1010,7 +1010,7 @@ class TestMissingMockTools:
             arguments_schema={"type": "object", "properties": {"query": {"type": "string"}}},
             response_template='{"article": "Parental leave is 16 weeks at full pay."}',
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC032", name="FAQ lookup", domain="hr", source_type="zapier",
             objects=[obj],
             steps=[Step(text="Question about parental leave from Maya Chen", target="faq-knowledge-base")],
@@ -1029,7 +1029,7 @@ class TestMissingMockTools:
             event_sources=["crm"],
             skills=["compose_email", "validate_address"],
         )
-        tc = TestCase(
+        tc = Sample(
             id="TC033", name="Email sending", domain="comms", source_type="zapier",
             objects=[obj],
             steps=[Step(text="Send email to alice@company.com", target="email-sender")],
@@ -1064,7 +1064,7 @@ class TestUnnaturalIdentifiers:
             behavior="Route ticket to the assigned agent.",
             event_sources=["zendesk"],
         )
-        return TestCase(
+        return Sample(
             id="TC034", name="Helpdesk", domain="support", source_type="zapier",
             objects=[obj],
             steps=[Step(text="New ticket TICK-001", target="helpdesk-router")],

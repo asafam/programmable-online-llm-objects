@@ -32,10 +32,10 @@ from src.data.schema import (
     ObjectDef,
     PeerDecl,
     Step,
-    TestCase,
+    Sample,
 )
 
-# ── Fixture TestCase: 2 objects, 1 step ─────────────────────────────────────
+# ── Fixture Sample: 2 objects, 1 step ─────────────────────────────────────
 
 ROUTER_OBJ = ObjectDef(
     object_id="message-router",
@@ -58,7 +58,7 @@ SINK_OBJ = ObjectDef(
     state_description="Idle — awaiting messages.",
 )
 
-ROUTER_SINK_TC = TestCase(
+ROUTER_SINK_TC = Sample(
     id="TC-ROUTER-SINK",
     sample_id="sample-router-sink",
     name="Message Router → Sink",

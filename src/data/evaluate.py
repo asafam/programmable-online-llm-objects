@@ -1,7 +1,7 @@
 """
 Evaluation runner — Stage 3 of the data pipeline.
 
-Executes TestCases against the LNL runtime, judges outcomes with an LLM, and
+Executes Samples against the LNL runtime, judges outcomes with an LLM, and
 reports correctness and cost metrics.
 
 Usage:
@@ -76,8 +76,8 @@ from src.data.schema import (
     MockToolDef,
     ModificationResult,
     RunConfig,
-    TestCase,
-    TestCaseResult,
+    Sample,
+    SampleResult,
     to_lnl_class_definition,
     to_lnl_definition,
 )
@@ -108,7 +108,7 @@ def merge_mock_tools(
     return list(merged.values())
 
 
-def _derive_tools_from_skills(tc: "TestCase") -> list[MockToolDef]:
+def _derive_tools_from_skills(tc: "Sample") -> list[MockToolDef]:
     """Derive MockToolDef entries from skills declared on each object.
 
     Skills expose internal capabilities as callable tools so they appear in
@@ -366,7 +366,7 @@ def _print_message(msg) -> None:
 
 
 def _execute_test_case_inner(
-    tc: TestCase,
+    tc: Sample,
     brain,
     harness,
     debug_messages: bool = False,
@@ -399,7 +399,7 @@ def _execute_test_case_inner(
     memory_backend: str = "nested",
     log_planner_output: bool = False,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
-    """Run a single TestCase and return event + modification results."""
+    """Run a single Sample and return event + modification results."""
     from src.lnl.gateway import EventGateway
     from src.lnl.runtime import Runtime
     from src.lnl.tools import CodeExecutor, MockInProcessExecutor, PassthroughExecutor, ToolRegistry
@@ -703,7 +703,7 @@ def _serialize_bus_messages(bus_msgs) -> list[dict]:
 
 
 def _run_test_case_timeline(
-    tc: TestCase,
+    tc: Sample,
     rt,
     gw,
     harness,
@@ -959,7 +959,7 @@ def _run_test_case_timeline(
     def _dispatch_concurrent_group(group: list, ctx: str, group_key: str = "") -> None:
         """Dispatch a sampled subset of a concurrent group in one transaction.
 
-        Samples `concurrency` events from `group` using a deterministic seed
+        Workflows `concurrency` events from `group` using a deterministic seed
         derived from the base seed, TC id, and group name — so the same C events
         are always chosen for a given (TC, seed, group) triple.
         """
@@ -1086,7 +1086,7 @@ def _run_test_case_timeline(
 
 
 def execute_test_case(
-    tc: TestCase,
+    tc: Sample,
     brain,
     harness,
     timeout_s: Optional[float] = INTER_EVENT_TIMEOUT_S,
@@ -1118,14 +1118,14 @@ def execute_test_case(
     memory_backend: str = "nested",
     log_planner_output: bool = False,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
-    """Run a single TestCase with a per-event timeout (seconds).
+    """Run a single Sample with a per-event timeout (seconds).
 
     Each step, modification, and event gets its own timeout. If a single
     step times out, it is marked as failed and execution continues.
 
     Args:
         global_mock_tools: Shared mock tool definitions loaded from --mock-config files.
-            Merged with tc.mock_tools; per-TestCase entries override shared ones.
+            Merged with tc.mock_tools; per-Sample entries override shared ones.
         progress_callback: Optional callable(msg) invoked on every bus message delivery.
         on_event_result: Optional callable(EventResult, is_step: bool) for real-time display.
         on_mod_applied: Optional callable(Modification) called before each modification runs.
@@ -1215,7 +1215,7 @@ def _print_event_result(ev, show_evidence: bool = False) -> None:
     tqdm.write("")
 
 
-def _print_verbose(tc_result: TestCaseResult, show_evidence: bool = False) -> None:
+def _print_verbose(tc_result: SampleResult, show_evidence: bool = False) -> None:
     """Print per-event breakdown to console."""
     for ev in tc_result.events:
         _print_event_result(ev, show_evidence=show_evidence)
@@ -1249,7 +1249,7 @@ def _print_summary(summary, output_path=None, elapsed_s=None) -> None:
         print(f"Elapsed:             {elapsed_str}")
     print(f"Mean pass rate:      {_fmts(summary.mean_pass_rate, summary.pass_rate_std)}")
     print(f"Steps pass rate:     {_fmts(summary.steps_pass_rate, summary.steps_pass_rate_std)}")
-    print(f"Samples completion:  {_fmts(summary.samples_completion, summary.samples_completion_std)}")
+    print(f"Workflows completion:  {_fmts(summary.samples_completion, summary.samples_completion_std)}")
     print(f"Mod pass rate:       {_fmt_mod(summary.mod_pass_rate, summary.mod_pass_rate_std, summary.mod_pass_rate_all, summary.mod_pass_rate_all_std)}  (pre+post+irrelevant)")
     print(f"  Pre-mod:           {_fmt_mod(summary.pre_mod_pass_rate, summary.pre_mod_pass_rate_std, summary.pre_mod_pass_rate_all, summary.pre_mod_pass_rate_all_std)}")
     print(f"  Post-mod:          {_fmt_mod(summary.post_mod_pass_rate, summary.post_mod_pass_rate_std, summary.post_mod_pass_rate_all, summary.post_mod_pass_rate_all_std)}")
@@ -1335,15 +1335,15 @@ def run(args: argparse.Namespace) -> Path:
         print(f"Error: Input file not found: {args.input}", file=sys.stderr)
         sys.exit(1)
 
-    test_cases = load_jsonl(args.input, TestCase)
+    test_cases = load_jsonl(args.input, Sample)
 
     if getattr(args, "tc", None):
         # Select test cases by 1-based index, ID, or ID[mod_type] (e.g. TC001[temporal]).
         # Preserve order of appearance in file.
-        def _tc_mod_type(tc: TestCase) -> str:
+        def _tc_mod_type(tc: Sample) -> str:
             return tc.modifications[0].mod_type.value if tc.modifications else "none"
 
-        selected: list[TestCase] = []
+        selected: list[Sample] = []
         for selector in args.tc:
             if selector.isdigit():
                 idx = int(selector) - 1
@@ -1377,7 +1377,7 @@ def run(args: argparse.Namespace) -> Path:
     # test cases sharing the same base steps are only executed once.
     if getattr(args, "steps_only", False):
         seen_samples: set[str] = set()
-        deduped: list[TestCase] = []
+        deduped: list[Sample] = []
         for tc in test_cases:
             key = tc.sample_id or tc.id
             if key not in seen_samples:
@@ -1558,7 +1558,7 @@ def run(args: argparse.Namespace) -> Path:
     # Legacy results (tc_index=-1) fall back to (tc_id, run_index) keying.
     completed: set[tuple[int, int, Optional[int]]] = set()  # (tc_index, run_index, seed)
     completed_legacy: set[tuple[str, int]] = set()
-    all_tc_results: list[TestCaseResult] = []
+    all_tc_results: list[SampleResult] = []
     if args.output.exists():
         for line in args.output.read_text().splitlines():
             if not line.strip():
@@ -1573,7 +1573,7 @@ def run(args: argparse.Namespace) -> Path:
                         completed.add((tc_index, run_index, result_seed))
                     else:
                         completed_legacy.add((data["tc_id"], run_index))
-                    all_tc_results.append(TestCaseResult.model_validate(data))
+                    all_tc_results.append(SampleResult.model_validate(data))
             except Exception:
                 pass
         n_done = len(completed) + len(completed_legacy)
@@ -1610,7 +1610,7 @@ def run(args: argparse.Namespace) -> Path:
     _out_tok_counter: list[int] = [sum(e.output_tokens or 0 for r in all_tc_results for e in r.events)]
     _pbar_holder: list = [None]       # set to the tqdm pbar once the loop starts
 
-    def _run_one(tc_idx: int, tc: TestCase, run_idx: int) -> Optional[TestCaseResult]:
+    def _run_one(tc_idx: int, tc: Sample, run_idx: int) -> Optional[SampleResult]:
         mod_type_str = tc.modifications[0].mod_type.value if tc.modifications else "none"
         label = f"{tc.id}[{mod_type_str}]"
         if args.runs > 1:
@@ -1725,7 +1725,7 @@ def run(args: argparse.Namespace) -> Path:
             if clean_events else None
         )
         elapsed_s = time.monotonic() - tc_start
-        result = TestCaseResult(
+        result = SampleResult(
             tc_id=tc.id,
             sample_id=tc.sample_id,
             tc_index=tc_idx,
@@ -1886,7 +1886,7 @@ def run(args: argparse.Namespace) -> Path:
 _STEP_EVENT_ID = re.compile(r"^S\d+$")
 
 
-def _running_metrics(results: "list[TestCaseResult]") -> tuple[Optional[float], Optional[float]]:
+def _running_metrics(results: "list[SampleResult]") -> tuple[Optional[float], Optional[float]]:
     """Return (mean_pass_rate, sample_pass_rate) across accumulated results.
 
     sample_pass_rate: among base-TC runs (first tc_id per sample_id) that have
@@ -1928,7 +1928,7 @@ def _pbar_postfix(pbar, results, events_done: int = 0, in_tok: int = 0, out_tok:
     pbar.set_postfix(refresh=False, **fields)
 
 
-def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
+def _compute_summary(results: list[SampleResult]) -> EvalSummary:
     """Compute aggregate metrics across all test case results.
 
     Step events (id matching S\\d+) are deduplicated by sample_id: only the first
@@ -2002,7 +2002,7 @@ def _compute_summary(results: list[TestCaseResult]) -> EvalSummary:
 
     # Steps pass rate + std (base TCs only, mean fraction of steps passed per TC)
     by_tc_step: dict[str, list[float]] = defaultdict(list)
-    # Samples completion + std (fraction of TCs where ALL step events passed)
+    # Workflows completion + std (fraction of TCs where ALL step events passed)
     by_tc_completion: dict[str, list[float]] = defaultdict(list)
     for r in results:
         if r.tc_id not in base_tc_ids or r.tc_id in infra_error_tc_ids:
@@ -2440,7 +2440,7 @@ Examples:
         metavar="YAML",
         help=(
             "YAML file with shared MockToolDef entries (can be specified multiple times). "
-            "Loaded tools are merged with per-TestCase mock_tools; TestCase entries win on collision. "
+            "Loaded tools are merged with per-Sample mock_tools; Sample entries win on collision. "
             "Example: --mock-config config/mocks/lnl/email.yaml --mock-config config/mocks/lnl/slack.yaml"
         ),
     )
@@ -2469,8 +2469,8 @@ Examples:
     return parser
 
 
-def _load_tc_results(path: Path) -> list[TestCaseResult]:
-    """Load TestCaseResult lines from a results JSONL, skipping EvalSummary lines."""
+def _load_tc_results(path: Path) -> list[SampleResult]:
+    """Load SampleResult lines from a results JSONL, skipping EvalSummary lines."""
     import json as _json
     results = []
     with open(path) as f:
@@ -2480,7 +2480,7 @@ def _load_tc_results(path: Path) -> list[TestCaseResult]:
                 continue
             data = _json.loads(line)
             if "tc_id" in data:
-                results.append(TestCaseResult(**data))
+                results.append(SampleResult(**data))
     return results
 
 

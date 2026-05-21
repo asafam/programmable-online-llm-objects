@@ -43,7 +43,7 @@ from tqdm import tqdm
 
 load_dotenv()
 
-from src.data.schema import Sample, TestCase
+from src.data.schema import Workflow, Sample
 from src.data.generate_samples import _generate_mock_tool_data, _DATA_TOOL_RE
 from src.data.generate_test_cases import _rewrite_event_expectations
 from src.data.llm import create_llm
@@ -54,7 +54,7 @@ from src.data.utils import (
 )
 
 
-def generate_seed(llm, test_case: TestCase, sample: Sample) -> None:
+def generate_seed(llm, test_case: Sample, sample: Workflow) -> None:
     """Generate mock_tools and expectations for one TC in one consistent pass.
 
     Context = step texts + THIS TC's own event inputs only. Each TC is an
@@ -92,7 +92,7 @@ def generate_seed(llm, test_case: TestCase, sample: Sample) -> None:
     _rewrite_event_expectations(llm, test_case, sample)
 
 
-def _needs_seed(tc: TestCase, force: bool) -> bool:
+def _needs_seed(tc: Sample, force: bool) -> bool:
     if force:
         return True
     # Expectations are the reliable completion signal — a TC with no data-lookup
@@ -159,23 +159,23 @@ def run(args: argparse.Namespace) -> Path:
         sys.exit(1)
 
     # Load samples indexed by id
-    samples_by_id: dict[str, Sample] = {}
+    samples_by_id: dict[str, Workflow] = {}
     with open(args.samples) as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            s = Sample.model_validate_json(line)
+            s = Workflow.model_validate_json(line)
             samples_by_id[s.id] = s
 
     # Load test cases, preserving original order
-    test_cases: list[TestCase] = []
+    test_cases: list[Sample] = []
     with open(args.input) as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            test_cases.append(TestCase.model_validate_json(line))
+            test_cases.append(Sample.model_validate_json(line))
 
     if args.limit:
         test_cases = test_cases[: args.limit]
@@ -214,7 +214,7 @@ def run(args: argparse.Namespace) -> Path:
         for tc in test_cases:
             f.write(tc.model_dump_json() + "\n")
 
-    def _seed_one(tc: TestCase) -> bool:
+    def _seed_one(tc: Sample) -> bool:
         sample_id = tc.id.rsplit("-TC", 1)[0]
         sample = samples_by_id.get(sample_id)
         if sample is None:

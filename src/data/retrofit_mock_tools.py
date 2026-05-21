@@ -42,7 +42,7 @@ load_dotenv()
 from src.data.generate_samples import _generate_mock_tool_data
 from src.data.llm import create_llm
 from src.data.llm.base import ChatMessage
-from src.data.schema import MockToolDef, TestCase
+from src.data.schema import MockToolDef, Sample
 from src.data.utils import add_common_args, infer_provider, load_jsonl, print_run_info
 
 
@@ -94,7 +94,7 @@ Example: [{{"tool_name": "org_directory_data", "description": "Employee org char
 
 def _identify_missing_tools(
     llm,
-    tc: TestCase,
+    tc: Sample,
 ) -> list[dict]:
     """Ask LLM what read-service data tools this TC's objects still need."""
     objects_text = "\n".join(
@@ -139,7 +139,7 @@ def run(args: argparse.Namespace) -> None:
 
     llm = create_llm(args.provider, args.model)
 
-    test_cases: list[TestCase] = load_jsonl(args.input, TestCase)
+    test_cases: list[Sample] = load_jsonl(args.input, Sample)
     print(f"Loaded {len(test_cases)} test cases from {args.input}")
 
     # Group by sample_id (all variants share the same objects + steps structure)
@@ -149,7 +149,7 @@ def run(args: argparse.Namespace) -> None:
         by_sample[key].append(i)
 
     needs_work = dict(by_sample)
-    print(f"Samples to check: {len(needs_work)} ({len(test_cases)} TCs)")
+    print(f"Workflows to check: {len(needs_work)} ({len(test_cases)} TCs)")
 
     if not needs_work:
         print("All samples already have mock tools. Nothing to do.")
@@ -221,8 +221,8 @@ def run(args: argparse.Namespace) -> None:
 
     # Optionally patch samples.jsonl too
     if args.samples and args.samples.exists():
-        from src.data.schema import Sample
-        samples: list[Sample] = load_jsonl(args.samples, Sample)
+        from src.data.schema import Workflow
+        samples: list[Workflow] = load_jsonl(args.samples, Workflow)
         sample_map = {s.id: i for i, s in enumerate(samples)}
         s_patched = 0
         for sid, tools in new_tools_by_sample.items():

@@ -20,7 +20,7 @@ from src.data.schema import (
     OrchestratorReaction,
     OrchestratorScript,
     OrchestratorTrigger,
-    TestCase,
+    Sample,
     Step,
     Modification,
     ModType,
@@ -136,7 +136,7 @@ class TestCallLog:
 
 
 class TestResolveMockConfigs:
-    def _make_tc(self, skills=None, event_sources=None) -> TestCase:
+    def _make_tc(self, skills=None, event_sources=None) -> Sample:
         obj = ObjectDef(
             object_id="test-obj",
             role="test",
@@ -144,7 +144,7 @@ class TestResolveMockConfigs:
             skills=skills or [],
             event_sources=event_sources or [],
         )
-        return TestCase(
+        return Sample(
             id="TC001",
             name="Test",
             domain="test",
@@ -230,7 +230,7 @@ ORCH_SCRIPT = OrchestratorScript(
 
 
 class TestResolveOrchestration:
-    def _make_tc_with_events(self, events: list[Event]) -> TestCase:
+    def _make_tc_with_events(self, events: list[Event]) -> Sample:
         obj = ObjectDef(
             object_id="test-obj",
             role="test",
@@ -238,7 +238,7 @@ class TestResolveOrchestration:
             behavior="",
             skills=["Send email notifications"],
         )
-        return TestCase(
+        return Sample(
             id="TC-ORCH",
             name="Orchestration Test",
             domain="test",

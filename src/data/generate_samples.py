@@ -1,5 +1,5 @@
 """
-Sample generator for live NL programming.
+Workflow generator for live NL programming.
 
 Generates concrete samples from raw Zapier automation templates using a three-stage
 LLM pipeline:
@@ -38,8 +38,8 @@ from src.data.schema import (
     GroundedTemplate,
     MockToolDef,
     ObjectGraph,
-    Sample,
-    SampleSteps,
+    Workflow,
+    WorkflowSteps,
 )
 from src.data.llm import create_llm
 from src.lnl.parser import slugify
@@ -138,7 +138,7 @@ def _identify_objects(llm, grounded: GroundedTemplate, template: dict, prompt_cf
     )
 
 
-def _write_steps(llm, grounded: GroundedTemplate, graph: ObjectGraph, template: dict, prompt_cfg: dict) -> SampleSteps | None:
+def _write_steps(llm, grounded: GroundedTemplate, graph: ObjectGraph, template: dict, prompt_cfg: dict) -> WorkflowSteps | None:
     """Stage 1c: write the external trigger steps."""
     steps_text = "\n".join(f"- {s}" for s in grounded.grounded_steps)
     prompt = (
@@ -149,7 +149,7 @@ def _write_steps(llm, grounded: GroundedTemplate, graph: ObjectGraph, template: 
     )
     valid_entry_points = {obj.object_id for obj in graph.objects if obj.event_sources}
 
-    def _validate_steps(r: SampleSteps) -> bool:
+    def _validate_steps(r: WorkflowSteps) -> bool:
         if not r.steps:
             raise ValueError("No steps were generated")
         bad = [s.target for s in r.steps if s.target not in valid_entry_points]
@@ -164,7 +164,7 @@ def _write_steps(llm, grounded: GroundedTemplate, graph: ObjectGraph, template: 
     return generate_with_retries(
         llm=llm,
         prompt=prompt,
-        response_model=SampleSteps,
+        response_model=WorkflowSteps,
         item_id=f"{template['id']}:steps",
         validator=_validate_steps,
     )
@@ -292,8 +292,8 @@ def _generate_mock_tool_data(llm, tool_name: str, description: str, step_texts: 
         return None
 
 
-def _assemble_sample(template: dict, grounded: GroundedTemplate, graph: ObjectGraph, steps: SampleSteps) -> Sample:
-    """Combine stage outputs into a Sample. Slugify ids. Mock tools generated separately."""
+def _assemble_sample(template: dict, grounded: GroundedTemplate, graph: ObjectGraph, steps: WorkflowSteps) -> Workflow:
+    """Combine stage outputs into a Workflow. Slugify ids. Mock tools generated separately."""
     for obj in graph.objects:
         obj.object_id = slugify(obj.object_id)
         for peer in obj.peers:
@@ -301,7 +301,7 @@ def _assemble_sample(template: dict, grounded: GroundedTemplate, graph: ObjectGr
     for step in steps.steps:
         step.target = slugify(step.target)
 
-    return Sample(
+    return Workflow(
         id=template["id"],
         name=grounded.name,
         domain=grounded.domain,
@@ -316,7 +316,7 @@ def _assemble_sample(template: dict, grounded: GroundedTemplate, graph: ObjectGr
 _DATA_TOOL_RE = re.compile(r"call the `([a-z][a-z0-9_]*_data)` tool", re.IGNORECASE)
 
 
-def _add_mock_tools(llm, sample: Sample) -> None:
+def _add_mock_tools(llm, sample: Workflow) -> None:
     """Post-process: generate mock tools for read-service objects (mutates sample.mock_tools).
 
     Read services are detected by the mandatory behavior phrase:
@@ -417,7 +417,7 @@ def run(args: argparse.Namespace) -> Path:
 
     workers = getattr(args, "workers", 1)
     print_run_info(args.provider, args.model, args.seed,
-                   {"Samples per template": str(args.samples_per_template),
+                   {"Workflows per template": str(args.samples_per_template),
                     "Workers": str(workers)})
 
     llm = create_llm(provider=args.provider, model=args.model,
@@ -470,7 +470,7 @@ def run(args: argparse.Namespace) -> Path:
 
     print()
     print(f"Complete. Output: {args.output}")
-    print(f"Samples generated: {success_count}, Templates failed: {fail_count}")
+    print(f"Workflows generated: {success_count}, Templates failed: {fail_count}")
     return args.output
 
 

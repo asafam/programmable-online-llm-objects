@@ -308,7 +308,7 @@ class LLMClassDef(BaseModel):
         return slugify(v)
 
 
-class TestCase(BaseModel):
+class Sample(BaseModel):
     id: str
     sample_id: str = ""  # ID of the originating sample; shared across all TC variants from the same sample
     name: str
@@ -322,8 +322,8 @@ class TestCase(BaseModel):
     events: list[Event]
     mock_tools: list[MockToolDef] = Field(default_factory=list, description="Per-test-case mock tool overrides. Merged with --mock-config at eval time (these win on collision).")
 
-class TestCases(BaseModel):
-    test_cases: list[TestCase]
+class Samples(BaseModel):
+    test_cases: list[Sample]
 
 # ── Multi-stage sample generation intermediate schemas ────────────────────────
 
@@ -337,13 +337,13 @@ class ObjectGraph(BaseModel):
     """Output of Stage 1b (object identification): distributed LLM-object system design."""
     objects: list[ObjectDef]
 
-class SampleSteps(BaseModel):
+class WorkflowSteps(BaseModel):
     """Output of Stage 1c (step writing): external trigger steps only."""
     steps: list[Step]
 
 
-# Sample generation schemas
-class Sample(BaseModel):
+# Workflow generation schemas
+class Workflow(BaseModel):
     id: str
     name: str
     domain: str
@@ -362,8 +362,8 @@ class Sample(BaseModel):
         description="Human-reviewed structural issues that were kept but not fixed. Flagged samples are included in Stage 2 but marked for manual follow-up.",
     )
 
-class Samples(BaseModel):
-    samples: list[Sample]
+class Workflows(BaseModel):
+    samples: list[Workflow]
 
 # Scenario generation schemas (LLM output before merging with instance metadata)
 class Scenario(BaseModel):
@@ -523,10 +523,10 @@ class ModificationResult(BaseModel):
 
 
 
-class TestCaseResult(BaseModel):
-    """Result of running a single TestCase (one run)."""
+class SampleResult(BaseModel):
+    """Result of running a single Sample (one run)."""
     tc_id: str
-    sample_id: str = ""          # propagated from TestCase.sample_id
+    sample_id: str = ""          # propagated from Sample.sample_id
     tc_index: int = -1           # 0-based position in input file; -1 for legacy results
     seed: Optional[int] = None   # effective seed used for this run (base_seed + run_index)
     name: str

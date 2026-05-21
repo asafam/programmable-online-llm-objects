@@ -187,7 +187,7 @@ def run(args: argparse.Namespace) -> None:
 
     # Load all test cases as raw dicts to preserve unknown fields
     raw_tcs: list[dict] = []
-    header: Optional[dict] = None  # TestCases wrapper if present
+    header: Optional[dict] = None  # Samples wrapper if present
 
     raw_lines = [l.strip() for l in tc_path.read_text().splitlines() if l.strip()]
     if len(raw_lines) == 1:

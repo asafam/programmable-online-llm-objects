@@ -28,7 +28,7 @@ from tqdm import tqdm
 
 load_dotenv()
 
-from src.data.schema import Sample, TestCase, Samples
+from src.data.schema import Workflow, Sample, Workflows
 from src.data.validate_test_cases import find_trigger_reference_errors, find_missing_step_data
 from src.data.llm import create_llm
 from src.data.utils import infer_provider, add_common_args
@@ -37,7 +37,7 @@ from src.data.generate_test_cases import _rewrite_event_expectations
 
 # ── Fix 1: triggered_by patch (deterministic, no LLM) ────────────────────────
 
-def _fix_triggered_by(tc: TestCase) -> bool:
+def _fix_triggered_by(tc: Sample) -> bool:
     """Clear triggered_by values that reference non-event IDs. Returns True if any change made."""
     event_ids = {e.id for e in tc.events}
     changed = False
@@ -52,14 +52,14 @@ def _fix_triggered_by(tc: TestCase) -> bool:
 
 # ── Fix 2: re-run expectations (LLM) ─────────────────────────────────────────
 
-def _needs_expectation_rewrite(tc: TestCase) -> bool:
+def _needs_expectation_rewrite(tc: Sample) -> bool:
     return bool(find_missing_step_data(tc)) or any(e.expect is None for e in tc.events)
 
 
-# ── Sample loader ─────────────────────────────────────────────────────────────
+# ── Workflow loader ─────────────────────────────────────────────────────────────
 
-def _load_samples(samples_path: Path) -> dict[str, Sample]:
-    samples: dict[str, Sample] = {}
+def _load_samples(samples_path: Path) -> dict[str, Workflow]:
+    samples: dict[str, Workflow] = {}
     if not samples_path.exists():
         return samples
     with open(samples_path) as f:
@@ -70,7 +70,7 @@ def _load_samples(samples_path: Path) -> dict[str, Sample]:
             d = json.loads(line)
             if "id" not in d:
                 continue
-            s = Sample.model_validate(d)
+            s = Workflow.model_validate(d)
             samples[s.id] = s
     return samples
 
@@ -87,7 +87,7 @@ def repair(
 ) -> None:
     # Load all lines preserving original order and non-TC records
     raw_lines: list[str] = []
-    tcs: list[tuple[int, TestCase]] = []  # (line_index, tc)
+    tcs: list[tuple[int, Sample]] = []  # (line_index, tc)
 
     with open(input_path) as f:
         for i, line in enumerate(f):
@@ -99,7 +99,7 @@ def repair(
             if "record_type" in d or "tc_id" in d:
                 continue  # skip run_config and result records
             try:
-                tc = TestCase.model_validate(d)
+                tc = Sample.model_validate(d)
                 tcs.append((i, tc))
             except Exception:
                 pass  # non-TC lines (run_config etc.)
@@ -107,7 +107,7 @@ def repair(
     print(f"Loaded {len(tcs)} test cases from {input_path}")
 
     # Load samples for expectations rewrite
-    samples: dict[str, Sample] = {}
+    samples: dict[str, Workflow] = {}
     if samples_path:
         samples = _load_samples(samples_path)
         print(f"Loaded {len(samples)} samples from {samples_path}")
@@ -126,12 +126,12 @@ def repair(
     if needs_rewrite and not dry_run:
         llm = create_llm(model=model, provider=provider)
 
-        def _rewrite_one(args: tuple[int, TestCase]) -> tuple[int, TestCase]:
+        def _rewrite_one(args: tuple[int, Sample]) -> tuple[int, Sample]:
             idx, tc = args
             sample = samples.get(tc.sample_id)
             if sample is None:
-                # Build a minimal Sample from the TC itself
-                sample = Sample(
+                # Build a minimal Workflow from the TC itself
+                sample = Workflow(
                     id=tc.sample_id or tc.id,
                     name=tc.name,
                     domain=tc.domain,

@@ -40,11 +40,11 @@ from src.data.schema import (
     GeneratedEventWithExpect,
     MockToolDef,
     ObjectDef,
-    Sample,
+    Workflow,
     StateEventsList,
     StateProbeQuestion,
     Step,
-    TestCase,
+    Sample,
 )
 from src.data.llm import create_llm
 from src.data.utils import (
@@ -162,7 +162,7 @@ def _format_state_events_for_context(events: list[GeneratedEventWithExpect]) -> 
 
 def _format_state_events_prompt(
     template: str,
-    sample: Sample,
+    sample: Workflow,
     depth: int,
 ) -> str:
     return (
@@ -175,7 +175,7 @@ def _format_state_events_prompt(
 
 def _format_probe_question_prompt(
     template: str,
-    sample: Sample,
+    sample: Workflow,
     depth: int,
     state_events: list[GeneratedEventWithExpect],
     probe_type_key: str,
@@ -199,7 +199,7 @@ def _format_probe_question_prompt(
     )
 
 
-def _load_samples(input_path: Path) -> list[Sample]:
+def _load_samples(input_path: Path) -> list[Workflow]:
     """Load samples from JSONL — accepts both samples.jsonl and test_cases.jsonl.
 
     When test_cases.jsonl is provided (detected by presence of 'modifications' and
@@ -211,11 +211,11 @@ def _load_samples(input_path: Path) -> list[Sample]:
 
     first = raw[0]
     if "modifications" in first and "events" in first:
-        seen: dict[str, Sample] = {}
+        seen: dict[str, Workflow] = {}
         for d in raw:
             sid = d["sample_id"]
             if sid not in seen:
-                seen[sid] = Sample(
+                seen[sid] = Workflow(
                     id=sid,
                     name=d["name"],
                     domain=d["domain"],
@@ -230,7 +230,7 @@ def _load_samples(input_path: Path) -> list[Sample]:
                 )
         return list(seen.values())
 
-    return [Sample(**d) for d in raw]
+    return [Workflow(**d) for d in raw]
 
 
 def _validate_state_events(
@@ -275,12 +275,12 @@ def _validate_probe_question(
 
 
 def _scenario_to_test_case(
-    sample: Sample,
+    sample: Workflow,
     state_events: list[GeneratedEventWithExpect],
     probe_events: list[GeneratedEventWithExpect],
     depth: int,
     tc_index: int,
-) -> TestCase:
+) -> Sample:
     all_events: list[Event] = []
 
     for ge in state_events:
@@ -293,7 +293,7 @@ def _scenario_to_test_case(
         d.update(role="post_mod", after_mod_ids=[])
         all_events.append(Event(**d))
 
-    return TestCase(
+    return Sample(
         id=f"{sample.id}-probe-D{depth:02d}-TC{tc_index:03d}",
         sample_id=sample.id,
         name=f"{sample.name} [State Probe D{depth}]",
@@ -452,8 +452,8 @@ def run(args: argparse.Namespace) -> Path:
     fail_count = 0
     write_lock = threading.Lock()
 
-    def _process_unit(sample: Sample, depth: int) -> list[TestCase]:
-        test_cases: list[TestCase] = []
+    def _process_unit(sample: Workflow, depth: int) -> list[Sample]:
+        test_cases: list[Sample] = []
         for scenario_idx in range(1, args.scenarios_per_sample + 1):
             scenario_tag = f"{sample.id}-probe-D{depth:02d}-v{scenario_idx}"
 

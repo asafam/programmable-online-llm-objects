@@ -1,7 +1,7 @@
 """Derive a clean samples.jsonl from test_cases.jsonl.
 
 For each sample_id, pick the test_case variant with the fewest peer-behavior
-mismatches, reduce it to a Sample-shaped record (strip modifications/events,
+mismatches, reduce it to a Workflow-shaped record (strip modifications/events,
 restore sample_id as id), then fix remaining mismatches by adding missing
 peers with a generic relationship description.
 
@@ -38,7 +38,7 @@ def find_mismatches(record: dict) -> list[tuple[str, str]]:
 
 
 def to_sample(tc: dict) -> dict:
-    """Convert a TestCase record to a Sample-shaped record.
+    """Convert a Sample record to a Workflow-shaped record.
 
     sample_id becomes id; modifications and events are dropped. raw_steps is
     empty (the source markdown that produced steps is not recoverable from
@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         fixed_samples.append(s)
         fix_records.append((s["id"], added, before))
         assert not after, (
-            f"Sample {s['id']} still has mismatches after fix: {after}"
+            f"Workflow {s['id']} still has mismatches after fix: {after}"
         )
 
     # Write samples.jsonl
@@ -155,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         fo.write(f"**Input:** `{args.input}`\n")
         fo.write(f"**Output:** `{out_samples}`\n\n")
         fo.write(f"**Total samples:** {len(fixed_samples)}\n")
-        fo.write(f"**Samples needing peer fixes:** {n_fixed}\n")
+        fo.write(f"**Workflows needing peer fixes:** {n_fixed}\n")
         fo.write(f"**Total peer entries added:** {total_added}\n\n")
         fo.write("## Per-sample variant selection\n\n")
         fo.write("Matches the eval's steps-only dedupe logic: first occurrence per "
@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Wrote: {out_samples} ({len(fixed_samples)} samples)")
     print(f"Wrote: {log}")
-    print(f"Samples fixed: {n_fixed} / {len(fixed_samples)}; peers added: {total_added}")
+    print(f"Workflows fixed: {n_fixed} / {len(fixed_samples)}; peers added: {total_added}")
     return 0
 
 
