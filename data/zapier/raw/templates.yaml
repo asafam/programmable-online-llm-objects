@@ -168,10 +168,11 @@
   raw_steps:
   - Prospects submit information through a customizable lead capture form embedded on the website.
   - The system routes leads to qualified sales reps based on criteria such as region and company size.
-  - Qualified sales representatives are alerted when a new lead matches their criteria.
+  - Qualified sales representatives are notified via Slack DM (with lead details and a claim link) when a new lead matches
+    their criteria.
   - An alerted sales rep claims the lead through the agent claim page.
   - The system updates lead details when a rep claims it.
-  - The system tracks sales team events (meetings booked and closed won deals) to calculate agent ranking scores.
+  - Meeting-booked and closed-won-deal events from the CRM trigger updates to the agent ranking scores.
 - id: marketing-intake-form
   name: Marketing Intake Form Integration
   source_type: Zapier/Workflow Logic
@@ -187,12 +188,10 @@
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/instagram-content-calendar
   raw_steps:
-  - User enters Instagram post details including content description, scheduled date/time, and image URL into the Zapier interface.
-  - Post details are automatically stored in Zapier Tables as a central content calendar database.
-  - A Zap monitors the database for scheduled posts and identifies when the correct posting time has arrived.
-  - The Zap executes the post on Instagram at the scheduled time.
-  - After successful publication, the Zap updates the corresponding database record with a confirmation ID.
-  - User can track which posts have been published and when by viewing the updated database records.
+  - A user submits a new Instagram post (content, scheduled date/time, image URL) to the content calendar.
+  - The submission is stored in the content calendar database.
+  - When the scheduled date/time for a post arrives, the post is published to Instagram.
+  - After successful publication, the corresponding database record is updated with the Instagram confirmation ID.
 - id: form-zoho-crm
   name: Form to Zoho CRM Integration
   source_type: Zapier/Workflow Logic
@@ -219,11 +218,10 @@
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/utm-builder
   raw_steps:
-  - User submits a form in Zapier Interfaces with UTM parameters including website URL, campaign ID, source, medium, name,
-    term, and content.
-  - Zapier automatically encodes the submitted content using all UTM tags to generate a custom UTM-tagged URL.
-  - Zapier generates a shortened version of the UTM-tagged URL.
-  - The full UTM-tagged URL and shortened version are stored in a Zapier Table displayed beneath the form for easy access.
+  - User submits a form with UTM parameters including website URL, campaign ID, source, medium, name, term, and content.
+  - The system encodes the submitted content with the UTM tags to generate a custom UTM-tagged URL.
+  - The system generates a shortened version of the UTM-tagged URL.
+  - The full UTM-tagged URL and shortened version are stored in a database table.
 - id: landing-page
   name: Landing Page Form to CRM Pipeline
   source_type: Zapier/Workflow Logic
@@ -239,11 +237,11 @@
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/order-request-form
   raw_steps:
-  - 'Submission: Users fill out the form with details such as the current column order, desired order, and any additional
-    notes or instructions.'
-  - 'Review: Once submitted, the request is automatically sent to the designated team member or department for review.'
-  - 'Approval: The request is either approved or sent back for further clarification, with automated updates sent to the requester.'
-  - 'Implementation: Upon approval, the changes are implemented, and the requester is notified of the completion.'
+  - User submits an approval request form describing the requested change, with any additional notes or instructions.
+  - The request is automatically routed to the designated team member or department for review.
+  - The reviewer approves the request or sends it back for clarification; the outcome is sent to the requester.
+  - 'Implementation event: The downstream system reports completion of the approved change back to the workflow.'
+  - The requester is notified of the completion.
 - id: form-jira
   name: Jira Issue Creation From Form
   source_type: Zapier/Workflow Logic
@@ -284,15 +282,10 @@
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/lead-capture
   raw_steps:
-  - Create a customizable Contact Us form page using Zapier Interfaces with configurable fields such as text, date pickers,
-    and file uploads.
-  - Add custom branding to the Contact Us page to match your website.
-  - Share the form URL or embed the form code on your website.
-  - When a user submits the form, automatically store the lead information in a Zapier table.
-  - Automatically redirect the user to a customizable Thank You page after form submission.
-  - Automatically send an email notification to you containing the new lead's contact information and a link to the Zapier
-    table.
-  - Enable the ability to send emails directly to new leads by clicking a button within the Zapier table.
+  - A user submits the Contact Us form on the website.
+  - The lead information is stored in the leads database.
+  - A Thank You email is sent to the user at the email address they submitted.
+  - An email notification is sent to the operator with the new lead's contact information and a link to the lead in the database.
 - id: product-feedback
   name: Product Feedback Collection and Response
   source_type: Zapier/Workflow Logic
@@ -309,12 +302,11 @@
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/email-campaign-portal
   raw_steps:
-  - Add four emails and their content to the Email Campaign Portal Template table, specifying the sequence number for each
-    email.
-  - Navigate to the connected Workflows (Zaps) and configure each step of the automation.
-  - Test each workflow to ensure proper functionality.
-  - Publish each workflow.
-  - Add a prospect to the form to trigger the email campaign sequence.
+  - A new prospect is added to the campaign sequence.
+  - Email 1 of 4 is sent to the prospect.
+  - After the configured delay, email 2 of 4 is sent.
+  - After the configured delay, email 3 of 4 is sent.
+  - After the configured delay, email 4 of 4 is sent and the prospect's status is updated to "completed".
 - id: applicant-tracker
   name: Applicant Tracker Notification System
   source_type: Zapier/Workflow Logic
@@ -342,8 +334,8 @@
   link: https://zapier.com/templates/details/round-robin-lead-assignment
   raw_steps:
   - Capture lead information through a customizable form on a lead capture page.
-  - Maintain a sales reps table with current representatives and their assigned positions.
-  - Automatically update positions in the sales reps table when a new rep is added or an existing rep is removed.
+  - The sales reps table maintains current representatives and their positions; positions are automatically updated when a
+    new rep is added or an existing rep is removed.
   - Retrieve the sales rep currently in position 1 when a new lead is submitted.
   - Assign the new lead to the sales rep in position 1.
   - Move the assigned sales rep to the back of the line to rotate positions.
@@ -401,14 +393,14 @@
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/employee-onboarding-manager
   raw_steps:
-  - Click a button to trigger the onboarding workflow for a new employee.
-  - Find and add the employee to an onboarding event in Google Calendar.
-  - Add the employee to your Zapier account.
-  - Send a team message notification in Slack.
-  - Send a checklist email to the new hire.
-  - Transform date fields into month-day format for recurring reminders.
-  - Send a reminder email on the employee's work anniversary.
-  - Send a reminder email on the employee's birthday.
+  - A new employee is registered in the Workday platform with profile details including name, role, team, work email, start
+    date, and birthday.
+  - A new-hire onboarding event is created in Google Calendar with the team and manager invited.
+  - The new employee is added to the company's internal directory (e.g., Slack workspace, Google Workspace, LDAP).
+  - An onboarding announcement is posted to the team's Slack channel introducing the new hire.
+  - A checklist email is sent to the new hire with onboarding tasks and important links.
+  - When the employee's birthday arrives each year, a reminder email is sent to the team.
+  - When the employee's work anniversary arrives each year, a reminder email is sent to the team.
 - id: automate-sales-follow-up-emails-gong-hubspot
   name: Gong Call to AI Follow-up Automation
   source_type: Zapier/Workflow Logic
@@ -577,29 +569,26 @@
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/ai-generated-press-mentions
   raw_steps:
-  - Run the Zap on a weekly schedule.
-  - Use OpenAI to search for the 25 most recent press mentions of your brand.
-  - Use News API and PhantomJsCloud to gather comprehensive media data.
-  - Use OpenAI to summarize each article and extract key information and sentiment.
-  - Store all press mentions and AI-generated summaries in Zapier Tables.
-  - Display the stored data in a custom Zapier interface for viewing and analysis.
+  - A weekly scheduled event fires.
+  - The system queries News API and PhantomJsCloud to gather the 25 most recent press mentions of the brand.
+  - OpenAI summarizes each article and extracts key information and sentiment.
+  - The press mentions and AI-generated summaries are stored in the database.
 - id: ai-form
   name: AI-Powered Form Data Extraction
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/ai-form
   raw_steps:
-  - Users submit data through a Zapier Interface form.
-  - The form submission triggers a Zap that sends the combined fields to ChatGPT for processing.
-  - ChatGPT extracts and structures the data into twelve separate fields such as First Name, Last Name, and Company Name.
-  - The extracted and formatted data is stored in a Zapier Table for access and management.
-  - The form URL is shared or embedded on a website to receive ongoing submissions.
+  - A user submits a free-form data submission through the form.
+  - The form fields are sent to ChatGPT.
+  - ChatGPT extracts and structures the data into twelve typed fields (e.g., First Name, Last Name, Company Name).
+  - The structured data is stored in the database.
 - id: contact-list
   name: Contact List Email Automation
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/contact-list
   raw_steps:
-  - Store contact information including name, email, business details, and communication history in a Zapier Table.
-  - Click the Send Email button to trigger a Zap for a selected contact.
+  - Lead information arrives.
+  - Store contact information including name, email, business details, and communication history in a database table.
   - Automatically send an email to the contact's email address using the subject and body fields from the table.
   - Automatically update the Last Email Sent column with the current date.
 - id: expenses-tracker
@@ -607,30 +596,29 @@
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/expenses-tracker
   raw_steps:
-  - Add expense details (Date, Description, Amount, Category) manually as a new row in the Zapier Tables expense tracker
-  - Click the reimbursement button on the expense row to trigger a Zap that sends an email to your finance team notifying
-    them of the new expense
-  - A second Zap automatically updates the expense status to 'pending' after the button is clicked
+  - An employee adds expense details (date, description, amount, category) as a new row in the expense tracker.
+  - An email notification is sent to the finance team with the expense details.
+  - The expense status is updated to "pending".
 - id: inventory
   name: Inventory Reorder Automation
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/inventory
   raw_steps:
-  - Enter product data into the inventory table with details including cost and quantity needed.
-  - Check the Need More? box when a product's quantity reaches the reorder level.
-  - Click the Send Reorder Request button to trigger the automation.
-  - The first Zap sends an email to a designated email address with inventory information from the table.
-  - The second Zap automatically updates the reorder quantity and last reorder date fields in the table.
+  - A request for product inventory data arrives via email with an attached form specifying the product and reply-to address.
+  - The system reads the product's inventory data (quantity, cost, reorder level) from the database; if the current quantity
+    is at or below the reorder level, it sends a reorder request to the supplier.
+  - The system replies to the requester's email (using the reply-to address from the form) with the inventory data for the
+    product.
+  - If a reorder was triggered, the system updates the Last Reorder Date field in the database for that product.
 - id: subscription-tracker
   name: Subscription Renewal Reminder Tracker
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/subscription-tracker
   raw_steps:
-  - Store subscription details in a Zapier Table with columns for Subscription Name, Start Date, Renewal Date, Cost, Status,
-    and Contact Email.
-  - Check the table seven days before each renewal date.
-  - Send a reminder email with subscription details to the configured recipient when the renewal date approaches.
-  - Allow customization of the reminder timeframe and recipient email address.
+  - A new subscription is registered with details including name, start date, renewal date, cost, status, and contact email.
+  - Seven days before the subscription's renewal date, a renewal-approaching event fires for that subscription.
+  - A reminder email with the subscription details is sent to the configured recipient.
+  - The subscription record is updated to mark the reminder as sent.
 - id: save-email-attachments
   name: Email Attachment Saver
   source_type: Zapier/Workflow Logic
@@ -844,32 +832,29 @@
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/g2-reviews-product-team
   raw_steps:
-  - 'Trigger: Monitor G2 for new reviews'
-  - Collect review data from G2
-  - Enrich review data with user information when available
-  - Send enriched reviews to Productboard
-  - Track sentiment changes over time in Productboard
+  - A new review is posted on G2 about the product.
+  - User information is fetched from the CRM to enrich the review (when the reviewer is identifiable).
+  - The enriched review is sent to Productboard.
 - id: user-research-customer-interview-signup
   name: Customer Interview Signup Automation
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/user-research-customer-interview-signup
   raw_steps:
-  - Customer interviews are scheduled and automatically appear in a centralized Zapier Table database.
-  - Team members across the organization browse upcoming interview sessions in the database.
-  - Team members add themselves as attendees to sessions without requiring coordination from researchers.
-  - Calendar events automatically update to reflect new attendees.
-  - Attendance information stays organized in the database.
-  - User researchers can focus on facilitating interviews instead of managing invites and coordination.
+  - A customer interview is scheduled on the shared interviews calendar (with date, time, customer details).
+  - The interview is recorded in the interviews database with the customer details and status "scheduled".
+  - A notification is posted to the team's Slack channel announcing the new interview opportunity.
+  - A team member signs up as an attendee for an upcoming interview session.
+  - The corresponding calendar event is updated to include the new attendee.
+  - The interview record in the database is updated with the new attendee.
 - id: import-account-signals-salesloft-looker
   name: Looker to Salesloft Account Enrichment
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/import-account-signals-salesloft-looker
   raw_steps:
-  - Monitor for changes in lead or account status in Looker.
-  - Retrieve customer signals and engagement metrics from Looker.
-  - Push the retrieved data into Salesloft to enrich account records.
-  - Trigger automated task assignments in Salesloft Play based on the updated account data.
-  - Notify sales representatives to take action on the enriched account information.
+  - A lead or account status change event arrives from Looker with updated customer signals and engagement metrics.
+  - The data is pushed to Salesloft to enrich the corresponding account record.
+  - Salesloft assigns an automated task to the relevant sales rep based on the enriched data.
+  - The assigned sales rep is notified via Slack DM with the account context and recommended next action.
 - id: connect-databricks-engagement-data-salesloft-signals
   name: Databricks to Salesloft Signals Automation
   source_type: Zapier/Workflow Logic
@@ -885,13 +870,12 @@
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/ai-image-generator
   raw_steps:
-  - Create a customizable form in the Zapier Interface to collect user inputs such as image style and art style preferences.
-  - Submit the form data as a trigger to initiate the automation.
-  - Map the form fields into a prompt and send the prompt to OpenAI's DALL-E API to generate an image.
-  - Receive the generated image and its URL from OpenAI.
-  - Store the image link and prompt details in a Table for viewing on the Interface.
-  - Optionally upload the image to an external storage service like Google Drive to preserve it beyond OpenAI's expiration
-    window.
+  - A user submits the image generation form with prompt details (subject, image style, art style preferences).
+  - The form fields are mapped into a prompt and sent to OpenAI's DALL-E API.
+  - DALL-E returns the generated image and its URL.
+  - The image link and prompt details are stored in the database.
+  - The image is uploaded to external storage (e.g., Google Drive) to preserve it beyond DALL-E's URL expiration window.
+  - The image link is shared with the user via email.
 - id: email-assistant-turn-starred-emails-into-asana-tasks-with-ai
   name: Email to Asana Tasks with AI
   source_type: Zapier/Workflow Logic

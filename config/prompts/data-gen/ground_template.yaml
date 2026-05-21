@@ -24,6 +24,14 @@ prompt: |
   - "predefined options" or "a list of options" → list the actual options (e.g., "High, Medium, Low")
   - "X or Y" → pick one specific value
   - "a specific [thing]" → a concrete instance of that thing
+  - "a configured delay" / "the configured delay" / "after a delay" → a specific duration
+    (e.g., "2 days", "1 week", "48 hours", "5 business days"). Pick a sensible value
+    for the workflow domain; keep it consistent within one workflow if multiple delays
+    refer to the same configured value.
+  - "a threshold" / "the threshold" → a specific numeric or categorical threshold
+    (e.g., "15 out of 30", "$10,000", "P1 severity", "engagement score below 40")
+  - "a schedule" / "scheduled" without specifics → a concrete cadence
+    (e.g., "every Monday at 09:00 UTC", "every 15 minutes", "the first business day of each month")
   - Any other vague or generic reference → the specific concrete equivalent
 
   **De-Zapifying — the benchmark must not bake in Zapier-specific vocabulary.**
