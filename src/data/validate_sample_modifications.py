@@ -90,12 +90,17 @@ def _format_events(s: Sample) -> str:
     for e in s.events:
         role = e.role or "?"
         after = ",".join(e.after_mod_ids) if e.after_mod_ids else "-"
-        expect = (e.expect.action if e.expect else "")[:140]
+        # NOTE: do NOT truncate input or expect.action — the judge needs the
+        # full payload to verify mod-qualifying conditions in addresses,
+        # ticket text, etc. Earlier truncation at 120/140 chars caused sonnet
+        # to flag PARTIAL because it couldn't see whether addresses contained
+        # the modification's filter term (e.g., "TX"/"Texas").
+        expect = e.expect.action if e.expect else ""
         lines.append(
             f"  - {e.id}  role={role}  when={e.when}  recipient={e.recipient}  "
             f"after_mod={after}"
         )
-        lines.append(f"    input: {e.input[:120]}")
+        lines.append(f"    input: {e.input}")
         if expect:
             lines.append(f"    expect.action: {expect}")
     return "\n".join(lines)
