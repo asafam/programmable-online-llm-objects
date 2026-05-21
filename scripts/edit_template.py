@@ -73,7 +73,17 @@ def edit_in_editor(initial_text: str) -> str:
         tmp.write(initial_text)
         tmp_path = tmp.name
     try:
-        subprocess.run([editor, tmp_path], check=True)
+        # Do not pass check=True — some editors (vi in particular) can exit
+        # non-zero for benign reasons. Read the file regardless; we'll detect
+        # an unmodified-or-aborted edit downstream by comparing to the initial
+        # text.
+        result = subprocess.run([editor, tmp_path])
+        if result.returncode != 0:
+            print(
+                f"warning: editor '{editor}' exited with code {result.returncode}; "
+                f"reading the file anyway in case your edits were saved.",
+                file=sys.stderr,
+            )
         with open(tmp_path) as f:
             return f.read()
     finally:
