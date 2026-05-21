@@ -26,6 +26,25 @@ prompt: |
 
   Once a trigger fires, the objects take over: each object's behavior and peer declarations determine what happens next automatically. Do not write steps for internal actions.
 
+  **A "trigger" is an event that ARRIVES from outside, NOT a response
+  that the workflow elicited.** When the workflow itself sends a Slack
+  approval message or a request-for-input and then receives the answer
+  back, that answer is **CASCADE** (part of the workflow's own flow),
+  not a separate Step. Specifically:
+
+  - Slack approval action arriving in response to a workflow-sent approval
+    message → CASCADE, not a Step.
+  - Slack reaction added in response to a workflow-posted message → CASCADE.
+  - Exit interview confirmation arriving after the workflow scheduled it
+    → CASCADE.
+  - DocuSign signature returning after the workflow sent for signature
+    → CASCADE.
+
+  Only emit a Step when the external event is INITIATED from outside, not
+  when it's a reply to something the workflow just sent. The general test:
+  could this event arrive even if the workflow never ran? If yes → TRIGGER.
+  If no (the event only happens because the workflow asked for it) → CASCADE.
+
   **Emit ONE Step per distinct external trigger in the scenario.** Many
   workflows have multiple external triggers — the initial event plus
   later ones. Don't stop after the first. Concretely:
