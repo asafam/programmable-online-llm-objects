@@ -49,20 +49,34 @@ prompt: |
     update an internal status. The defining property: this happens
     BECAUSE the workflow is running.
 
-  ### Recognising implicit triggers
+  ### Recognising implicit triggers — and avoiding double-classification
 
   Many templates describe an artefact ("Create a job posting page",
   "Set up an HR chatbot", "Maintain a leads database") without an explicit
   "X submits / clicks / asks" sentence. **Treat such a raw_step as a
-  TRIGGER if its purpose is to receive external input** — the trigger
-  event is implicit in the artefact's role:
+  TRIGGER ONLY if no other raw_step in the same template describes the
+  actual external arrival event.** Otherwise it's SETUP (CASCADE).
 
-  - "Create a form" → TRIGGER (someone fills the form is the trigger).
-  - "Set up the chatbot to respond" → TRIGGER (a user asking is the trigger).
-  - "A capture page for prospects" → TRIGGER (prospect submission).
-  - "Maintain a sales-rep table to assign leads" → CASCADE (this is state,
-    not an external event entering the system).
+  - "Create a form" alone → TRIGGER (the submission is implicit).
+  - "Create a form" + later "User submits the form" → SETUP/CASCADE on
+    the first; TRIGGER on the second. Never both.
+  - "Set up the chatbot to respond" alone → TRIGGER.
+  - "Set up the chatbot" + later "Employee asks the chatbot" → CASCADE
+    on the setup; TRIGGER on the asking.
+  - "Trigger a Zap when a new row is added to the table" → CASCADE.
+    The "Zap" here is fired by an INTERNAL state change (row insert) that
+    a prior workflow step caused; it's not an externally-arriving event.
+    The word "trigger" in this sentence describes the internal automation
+    routing, not an external trigger event.
+  - "Maintain a sales-rep table to assign leads" → CASCADE (state, not
+    external event entering the system).
   - "Connect to Google Contacts" → CASCADE (outbound action).
+
+  **Urgency / metadata annotations are not separate triggers.** A
+  raw_step like "Employees can mark urgency levels for time-sensitive
+  requests" describes a *modifier* on the user's primary submission
+  action — it's part of the same trigger event, not a separate trigger.
+  Classify these as CASCADE (or SETUP if it describes the UI capability).
 
   Also classify as TRIGGER:
   - External responses returning to the workflow (e.g., "Facebook
