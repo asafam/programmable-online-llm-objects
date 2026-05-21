@@ -293,7 +293,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-20 (v8): companion bump — schema gained EventResult.planner_plans / outgoing_messages (LNL-only fields; baseline emits empty lists)
+_VERSION: str = _build_version()  # bumped 2026-05-21 (v9): companion bump — schema gained executor_calls / executor_retries on EventResult + ModificationResult (LNL-only; baseline emits 0)
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 

@@ -67,7 +67,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-20 (v8): _collect_planner_plans now walks all objects' _active_plans + _completed_plans filtered by event trace_ids (was missing pre-mod plans that completed mid-cascade)
+_VERSION: str = _build_version()  # bumped 2026-05-21 (v9): executor_calls + executor_retries per event (and per mod) surfaced from ProcessingResult.executor_cycles; new EvalSummary totals + mean-per-event
 
 from src.data.schema import (
     EvalSummary,
@@ -774,6 +774,8 @@ def _run_test_case_timeline(
                 planner_out_tok  = sum(r.planner_metrics.output_tokens  for r in results if r.planner_metrics)
                 executor_in_tok  = sum(r.executor_metrics.input_tokens  for r in results if r.executor_metrics)
                 executor_out_tok = sum(r.executor_metrics.output_tokens for r in results if r.executor_metrics)
+                executor_calls   = sum(r.executor_cycles for r in results if r.executor_cycles)
+                executor_retries = sum(max(0, r.executor_cycles - 1) for r in results if r.executor_cycles)
                 evaluator_in_tok  = sum(r.evaluator_metrics.input_tokens  for r in results if r.evaluator_metrics)
                 evaluator_out_tok = sum(r.evaluator_metrics.output_tokens for r in results if r.evaluator_metrics)
                 bus_msgs = rt.message_log[log_snapshot:]
@@ -801,6 +803,8 @@ def _run_test_case_timeline(
                     planner_output_tokens=planner_out_tok,
                     executor_input_tokens=executor_in_tok,
                     executor_output_tokens=executor_out_tok,
+                    executor_calls=executor_calls,
+                    executor_retries=executor_retries,
                     evaluator_input_tokens=evaluator_in_tok,
                     evaluator_output_tokens=evaluator_out_tok,
                     latency_ms=latency_ms,
@@ -917,6 +921,8 @@ def _run_test_case_timeline(
             planner_out_tok  = _planner_out_tok  if _planner_out_tok  is not None else sum(r.planner_metrics.output_tokens  for r in res if r.planner_metrics)
             executor_in_tok  = _executor_in_tok  if _executor_in_tok  is not None else sum(r.executor_metrics.input_tokens  for r in res if r.executor_metrics)
             executor_out_tok = _executor_out_tok if _executor_out_tok is not None else sum(r.executor_metrics.output_tokens for r in res if r.executor_metrics)
+            executor_calls   = sum(r.executor_cycles for r in res if r.executor_cycles)
+            executor_retries = sum(max(0, r.executor_cycles - 1) for r in res if r.executor_cycles)
             evaluator_in_tok  = _evaluator_in_tok  if _evaluator_in_tok  is not None else sum(r.evaluator_metrics.input_tokens  for r in res if r.evaluator_metrics)
             evaluator_out_tok = _evaluator_out_tok if _evaluator_out_tok is not None else sum(r.evaluator_metrics.output_tokens for r in res if r.evaluator_metrics)
             bus_msgs = rt.message_log[log_snap:]
@@ -942,6 +948,8 @@ def _run_test_case_timeline(
                 planner_output_tokens=planner_out_tok,
                 executor_input_tokens=executor_in_tok,
                 executor_output_tokens=executor_out_tok,
+                executor_calls=executor_calls,
+                executor_retries=executor_retries,
                 evaluator_input_tokens=evaluator_in_tok,
                 evaluator_output_tokens=evaluator_out_tok,
                 latency_ms=lat_ms,
@@ -1050,6 +1058,8 @@ def _run_test_case_timeline(
                 planner_out_tok  = sum(r.planner_metrics.output_tokens  for r in results if r.planner_metrics)
                 executor_in_tok  = sum(r.executor_metrics.input_tokens  for r in results if r.executor_metrics)
                 executor_out_tok = sum(r.executor_metrics.output_tokens for r in results if r.executor_metrics)
+                executor_calls   = sum(r.executor_cycles for r in results if r.executor_cycles)
+                executor_retries = sum(max(0, r.executor_cycles - 1) for r in results if r.executor_cycles)
                 evaluator_in_tok  = sum(r.evaluator_metrics.input_tokens  for r in results if r.evaluator_metrics)
                 evaluator_out_tok = sum(r.evaluator_metrics.output_tokens for r in results if r.evaluator_metrics)
                 mod_results.append(ModificationResult(
@@ -1060,6 +1070,8 @@ def _run_test_case_timeline(
                     planner_output_tokens=planner_out_tok,
                     executor_input_tokens=executor_in_tok,
                     executor_output_tokens=executor_out_tok,
+                    executor_calls=executor_calls,
+                    executor_retries=executor_retries,
                     evaluator_input_tokens=evaluator_in_tok,
                     evaluator_output_tokens=evaluator_out_tok,
                     latency_ms=latency_ms,
@@ -1268,6 +1280,13 @@ def _print_summary(summary, output_path=None, elapsed_s=None) -> None:
     print(f"Agent tokens:        {summary.total_agent_input_tokens:,} in / {summary.total_agent_output_tokens:,} out"
           f"  (mean/event: {summary.mean_event_input_tokens:.0f} in / {summary.mean_event_output_tokens:.0f} out)")
     print(f"  executor:          {summary.total_executor_input_tokens:,} in / {summary.total_executor_output_tokens:,} out")
+    if summary.total_executor_calls:
+        print(
+            f"  executor cycles:   {summary.total_executor_calls:,} calls / "
+            f"{summary.total_executor_retries:,} retries "
+            f"(mean/event: {summary.mean_executor_calls_per_event:.2f} calls / "
+            f"{summary.mean_executor_retries_per_event:.2f} retries)"
+        )
     if summary.total_planner_input_tokens or summary.total_planner_output_tokens:
         print(f"  planner:           {summary.total_planner_input_tokens:,} in / {summary.total_planner_output_tokens:,} out")
     if summary.total_evaluator_input_tokens or summary.total_evaluator_output_tokens:
@@ -2131,6 +2150,14 @@ def _compute_summary(results: list[SampleResult]) -> EvalSummary:
         total_planner_output_tokens=sum(e.planner_output_tokens for e in all_events) + sum(m.planner_output_tokens for m in all_mods),
         total_executor_input_tokens=sum(e.executor_input_tokens for e in all_events) + sum(m.executor_input_tokens for m in all_mods),
         total_executor_output_tokens=sum(e.executor_output_tokens for e in all_events) + sum(m.executor_output_tokens for m in all_mods),
+        total_executor_calls=sum(e.executor_calls for e in all_events) + sum(m.executor_calls for m in all_mods),
+        total_executor_retries=sum(e.executor_retries for e in all_events) + sum(m.executor_retries for m in all_mods),
+        mean_executor_calls_per_event=(
+            (sum(e.executor_calls for e in all_events) / len(all_events)) if all_events else 0.0
+        ),
+        mean_executor_retries_per_event=(
+            (sum(e.executor_retries for e in all_events) / len(all_events)) if all_events else 0.0
+        ),
         total_evaluator_input_tokens=sum(e.evaluator_input_tokens for e in all_events) + sum(m.evaluator_input_tokens for m in all_mods),
         total_evaluator_output_tokens=sum(e.evaluator_output_tokens for e in all_events) + sum(m.evaluator_output_tokens for m in all_mods),
     )

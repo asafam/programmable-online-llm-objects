@@ -596,6 +596,13 @@ class EventResult(BaseModel):
     planner_output_tokens: int = 0
     executor_input_tokens: int = 0
     executor_output_tokens: int = 0
+    # Total executor invocations across this event's cascade (sum of
+    # ProcessingResult.executor_cycles over every object that processed a
+    # message for this event). One "cycle" = one ReAct executor pass.
+    # executor_retries = max(0, executor_calls - n_objects_processed).
+    # Baseline eval reports 0 (no analogue).
+    executor_calls: int = 0
+    executor_retries: int = 0
     evaluator_input_tokens: int = 0
     evaluator_output_tokens: int = 0
     latency_ms: float = 0.0
@@ -678,6 +685,8 @@ class ModificationResult(BaseModel):
     planner_output_tokens: int = 0
     executor_input_tokens: int = 0
     executor_output_tokens: int = 0
+    executor_calls: int = 0
+    executor_retries: int = 0
     evaluator_input_tokens: int = 0
     evaluator_output_tokens: int = 0
     latency_ms: float = 0.0
@@ -754,6 +763,10 @@ class EvalSummary(BaseModel):
     total_planner_output_tokens: int = 0
     total_executor_input_tokens: int = 0
     total_executor_output_tokens: int = 0
+    total_executor_calls: int = 0
+    total_executor_retries: int = 0
+    mean_executor_calls_per_event: float = 0.0
+    mean_executor_retries_per_event: float = 0.0
     total_evaluator_input_tokens: int = 0
     total_evaluator_output_tokens: int = 0
 

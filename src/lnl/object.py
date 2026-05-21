@@ -1018,6 +1018,7 @@ class LLMObject:
             planner_metrics=planner_metrics,
             executor_metrics=executor_total if (executor_total.input_tokens or executor_total.output_tokens) else None,
             evaluator_metrics=evaluator_total if (evaluator_total.input_tokens or evaluator_total.output_tokens) else None,
+            executor_cycles=eval_cycle + 1,  # eval_cycle is 0 on first pass; +1 = total executor invocations
             in_reply_to=message.sender,
             source_message_type=message.type,
             depth_remaining=message.depth_remaining,

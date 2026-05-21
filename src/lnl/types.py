@@ -148,6 +148,11 @@ class ProcessingResult:
     planner_metrics: Optional[InferenceMetrics] = None
     executor_metrics: Optional[InferenceMetrics] = None
     evaluator_metrics: Optional[InferenceMetrics] = None
+    # Count of full executor cycles for this message: 1 means the executor
+    # ran once and the evaluator passed (or was off). >1 means the evaluator
+    # FAIL'd and the executor was re-invoked. Equivalent to (eval_cycle + 1)
+    # at loop exit. executor_retries == executor_cycles - 1.
+    executor_cycles: int = 1
     in_reply_to: Optional[str] = None  # sender of the message that was processed
     source_message_type: Optional[MessageType] = None  # type of the message that was processed
     depth_remaining: int = 10  # propagated from the processed message
