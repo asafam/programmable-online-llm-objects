@@ -317,7 +317,10 @@ _DATA_TOOL_RE = re.compile(r"call the `([a-z][a-z0-9_]*_data)` tool", re.IGNOREC
 
 
 def _add_mock_tools(llm, sample: Workflow) -> None:
-    """Post-process: generate mock tools for read-service objects (mutates sample.mock_tools).
+    """Post-process: generate mock tools for read-service objects.
+
+    Mutates sample.mock_tools (adds the tool def) AND obj.skills (adds the
+    tool name so the LNL runtime exposes it to the LLM).
 
     Read services are detected by the mandatory behavior phrase:
       "call the `{object_id}_data` tool to retrieve data"
@@ -325,16 +328,25 @@ def _add_mock_tools(llm, sample: Workflow) -> None:
     empty for read services (they hold no mutable state of their own).
     """
     step_texts = [s.text for s in sample.steps if s.text]
+    existing_tool_names = {t.tool_name for t in sample.mock_tools}
     for obj in sample.objects:
         match = _DATA_TOOL_RE.search(obj.behavior or "")
         if not match:
             continue
         tool_name = match.group(1)  # e.g. "org_directory_data"
+        # Ensure the skill is declared on the object so the runtime exposes
+        # the tool to the LLM. Without this, the object's behavior says to
+        # call the tool but the LLM doesn't actually have access to it.
+        if tool_name not in obj.skills:
+            obj.skills.append(tool_name)
+        if tool_name in existing_tool_names:
+            continue  # already generated for this sample
         # Use state_description if present, otherwise fall back to role
         description = (obj.state_description or "").strip() or obj.role
         tool = _generate_mock_tool_data(llm, tool_name, description, step_texts)
         if tool:
             sample.mock_tools.append(tool)
+            existing_tool_names.add(tool_name)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -446,6 +458,11 @@ def run(args: argparse.Namespace) -> Path:
                 fails += 1
                 continue
             sample = _assemble_sample(template, grounded, graph, sample_steps)
+            # Auto-generate mock tools for any read-service objects whose
+            # behavior contains the `call the \`{object_id}_data\` tool` phrase.
+            # Mutates sample.mock_tools + adds the _data skill to each matched
+            # object so the runtime can resolve the tool at eval time.
+            _add_mock_tools(llm, sample)
             results.append(sample)
         return results, fails
 

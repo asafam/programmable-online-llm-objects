@@ -948,6 +948,24 @@ Examples:
     else:
         modified_ids = set()
 
+    # --- Stage 1b': validate object graph (quality + health) ---
+    if not args.no_validate_workflow_objects and not skip_stage1:
+        print()
+        print("=" * 60)
+        print("STAGE 1b': Validate Object Graph")
+        print("=" * 60)
+        from src.data import validate_workflow_objects as _vwo
+        _vwo.main_with_args(argparse.Namespace(
+            workflows=workflows_path,
+            provider=args.workflow_step_judge_provider,
+            judge_model=args.workflow_step_judge_model,
+            workers=args.workers,
+            output=None,
+            limit=None,
+            filter=None,
+            no_fail=True,
+        ))
+
     # --- Stage 1d: validate grounded workflow steps vs templates.yaml ---
     if not args.no_validate_workflow_steps and not skip_stage1:
         print()
@@ -1006,6 +1024,24 @@ Examples:
         workers=args.workers,
     )
     samples_path = generate_samples.run(stage2_args)
+
+    # --- Stage 2': validate modifications (per-sample) ---
+    if not args.no_validate_modifications:
+        print()
+        print("=" * 60)
+        print("STAGE 2': Validate Modifications + Events")
+        print("=" * 60)
+        from src.data import validate_sample_modifications as _vsm
+        _vsm.main_with_args(argparse.Namespace(
+            samples=samples_path,
+            provider=args.workflow_step_judge_provider,
+            judge_model=args.workflow_step_judge_model,
+            workers=args.workers,
+            output=None,
+            limit=None,
+            filter=None,
+            no_fail=True,
+        ))
 
     # --- Stage 3 ---
     print()
