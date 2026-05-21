@@ -26,6 +26,32 @@ prompt: |
   - "a specific [thing]" → a concrete instance of that thing
   - Any other vague or generic reference → the specific concrete equivalent
 
+  **De-Zapifying — the benchmark must not bake in Zapier-specific vocabulary.**
+  Some templates were extracted from Zapier and use Zapier-platform terms.
+  Replace them with concrete real-world equivalents. Pick a different system
+  per workflow (don't always pick the same one) — diversity matters.
+
+  - "Zapier Tables" / "Zapier Table" / "the Zapier Tables" → a specific database
+    or table-store product: pick one of `Airtable`, `Snowflake`, `BigQuery`,
+    `Postgres`, `MySQL`, `MongoDB`, `Notion database`, `Google Sheets`,
+    `DynamoDB`. Use the same one consistently within ONE workflow's steps,
+    but vary across workflows.
+  - "Zapier Interfaces" / "Zapier Interface" → a specific form/portal product:
+    pick one of `Typeform`, `Tally`, `Jotform`, `Webflow form`, `Google Forms`,
+    `a custom React form`, `a Retool app`. Consistent within a workflow.
+  - "Zapier Chatbot" → a specific chatbot product or surface: pick one of
+    `Intercom bot`, `Drift bot`, `a custom Slack bot`, `Zendesk Answer Bot`.
+  - "Zapier Canvas" → `the workflow diagram` (drop the brand reference;
+    Canvas is just an internal visualization tool).
+  - "a Zap" / "the Zap" / "another Zap" → DROP the word. A "Zap" in the
+    template idiom just means "the next workflow step / the next automation
+    handoff". Reword: "trigger a Zap that does X" → "the workflow step that
+    does X is invoked"; "another Zap fires" → "the next automation step fires".
+    Do NOT introduce a new actor named "Zap" into the grounded text.
+  - The bare word "Zapier" (e.g., "uses Zapier to ...") → either drop it
+    or replace with the chosen concrete product from the bullets above
+    when it clearly refers to one of them.
+
   **Do not:**
   - Invent individual people's names unless the placeholder explicitly refers to a person
   - Add examples, parentheticals, or qualifications ("e.g.", "like", "such as")
@@ -33,6 +59,7 @@ prompt: |
   - Remove steps from the original
   - Change the meaning or intent of any step
   - Add implementation details or technical specifics not implied by the template
+  - Leave any Zapier-platform term in the grounded output
 
   **Output format:**
   - `name`: A concrete, specific name for this automation (update the template name if it contains placeholders; otherwise keep it as-is)
