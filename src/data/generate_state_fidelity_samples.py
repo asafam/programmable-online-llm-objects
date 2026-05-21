@@ -286,7 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Generate state-fidelity test cases from samples or test_cases JSONL."
     )
     parser.add_argument("--input", "-i", type=Path, required=True,
-                        help="Input JSONL: workflows.jsonl or samples.jsonl")
+                        help="Input JSONL: workflows.jsonl or workflows-mods.jsonl")
     parser.add_argument("--output", "-o", type=Path, default=None,
                         help="Output JSONL path (default: {input_stem}_state_fidelity.jsonl)")
     parser.add_argument("--depths", type=int, nargs="+", default=[5, 10, 20, 30], metavar="N",

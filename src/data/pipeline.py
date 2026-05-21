@@ -35,7 +35,7 @@ from src.data.validate_test_cases import (
 from src.data.utils import load_jsonl
 
 WORKFLOWS_FILENAME = "workflows.jsonl"
-SAMPLES_FILENAME = "samples.jsonl"
+WORKFLOWS_MODS_FILENAME = "workflows-mods.jsonl"
 
 
 def _blocking_issues(issues_by_validator: dict) -> dict:
@@ -702,7 +702,7 @@ Examples:
         default=None,
         help=(
             "Directory for all pipeline outputs. Stage 1 writes workflows.jsonl here; "
-            "stage 2 writes samples.jsonl here. If workflows.jsonl already exists, "
+            "stage 2 writes workflows-mods.jsonl here. If workflows.jsonl already exists, "
             "stage 1 is skipped automatically (continuation)."
         ),
     )
@@ -912,7 +912,7 @@ Examples:
     # Resolve stage 2 output path
     samples_output: Path | None = args.output
     if samples_output is None and args.target_dir is not None:
-        samples_output = args.target_dir / SAMPLES_FILENAME
+        samples_output = args.target_dir / WORKFLOWS_MODS_FILENAME
 
     # --- Stage 1 ---
     print("=" * 60)

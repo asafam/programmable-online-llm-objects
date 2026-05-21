@@ -7,7 +7,7 @@ type_match / ambiguity_match / events_test_mod axes.
 
 Usage:
     python -m src.data.validate_sample_modifications \\
-        --samples outputs/.../samples.jsonl \\
+        --samples outputs/.../workflows-mods.jsonl \\
         --provider azure --judge-model gpt-5.4 \\
         --workers 4 \\
         --output samples__modification_validation.jsonl

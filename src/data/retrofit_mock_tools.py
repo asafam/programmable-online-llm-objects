@@ -18,7 +18,7 @@ Usage:
         -i outputs/data/zapier/20260405_002306/samples.jsonl \\
         --model gpt-4o --dry-run
 
-    # Also patch workflows.jsonl alongside samples.jsonl:
+    # Also patch workflows.jsonl alongside workflows-mods.jsonl:
     python -m src.data.retrofit_mock_tools \\
         -i outputs/data/zapier/20260405_002306/samples.jsonl \\
         --workflows outputs/data/zapier/20260405_002306/workflows.jsonl \\
@@ -211,7 +211,7 @@ def run(args: argparse.Namespace) -> None:
             test_cases[i] = test_cases[i].model_copy(update={"mock_tools": tools})
             patched += 1
 
-    # Write updated samples.jsonl (in-place, same file)
+    # Write updated workflows-mods.jsonl (in-place, same file)
     out_path = args.output or args.input
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
@@ -245,14 +245,14 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m src.data.retrofit_mock_tools -i outputs/.../samples.jsonl --model gpt-4o
-  python -m src.data.retrofit_mock_tools -i outputs/.../samples.jsonl --model gpt-4o --dry-run
-  python -m src.data.retrofit_mock_tools -i outputs/.../samples.jsonl \\
+  python -m src.data.retrofit_mock_tools -i outputs/.../workflows-mods.jsonl --model gpt-4o
+  python -m src.data.retrofit_mock_tools -i outputs/.../workflows-mods.jsonl --model gpt-4o --dry-run
+  python -m src.data.retrofit_mock_tools -i outputs/.../workflows-mods.jsonl \\
       --workflows outputs/.../workflows.jsonl --model gpt-4o
 """,
     )
     parser.add_argument("--input", "-i", type=Path, required=True,
-                        help="Path to samples.jsonl to patch")
+                        help="Path to workflows-mods.jsonl to patch")
     parser.add_argument("--output", "-o", type=Path, default=None,
                         help="Output path (default: overwrites input)")
     parser.add_argument("--workflows", type=Path, default=None,

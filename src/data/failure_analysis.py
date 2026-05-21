@@ -174,7 +174,7 @@ class ExpectedComplexity:
 
 
 def _compute_expected_complexity_index(samples_path: Optional[Path]) -> dict[tuple[str, str], ExpectedComplexity]:
-    """Build {(tc_id, event_id) → ExpectedComplexity} from a samples.jsonl file.
+    """Build {(tc_id, event_id) → ExpectedComplexity} from a workflows-mods.jsonl file.
 
     expected_peer_hops: longest peer chain reachable from the event recipient.
     expected_unique_peers: total unique peers reachable transitively.
@@ -359,7 +359,7 @@ def _detect_format(first_record: dict) -> str:
 
 
 def _resolve_test_cases_path(first_record: dict, eval_path: Path) -> Optional[Path]:
-    """Try to find the source samples.jsonl that produced this results file."""
+    """Try to find the source workflows-mods.jsonl that produced this results file."""
     fmt = _detect_format(first_record)
     candidate: Optional[str] = None
     if fmt == "default":

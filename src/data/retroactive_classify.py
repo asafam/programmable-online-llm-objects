@@ -1,7 +1,7 @@
 """
 Retroactive event role classifier.
 
-Reads an _eval.jsonl file and a samples.jsonl file, then populates
+Reads an _eval.jsonl file and a workflows-mods.jsonl file, then populates
 EventResult.role for all non-step events based on:
 
   1. Explicit role from the test case Event.role (if set).
@@ -16,7 +16,7 @@ baseline setup events and are handled separately in summary metrics.
 Usage:
     python -m src.data.retroactive_classify \\
         --eval outputs/.../test_cases_eval_20260410_113327.jsonl \\
-        --samples outputs/.../samples.jsonl
+        --samples outputs/.../workflows-mods.jsonl
 
 The input file is updated in-place (a .orig backup is written first).
 """
@@ -287,7 +287,7 @@ Examples:
     parser.add_argument("--eval", type=Path, required=True, metavar="JSONL",
                         help="Path to _eval.jsonl file to update in-place")
     parser.add_argument("--samples", type=Path, required=True, metavar="JSONL",
-                        help="Path to samples.jsonl with event timing and role data")
+                        help="Path to workflows-mods.jsonl with event timing and role data")
     return parser
 
 

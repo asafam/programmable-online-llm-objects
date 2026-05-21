@@ -49,7 +49,7 @@ from src.data.evaluate_baseline import (
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 POOL_CONFIG = ROOT / "docker" / "worker-pool.yaml"
-TC_PATH = ROOT / "outputs" / "data" / "zapier" / "20260411_zapier_clean" / "samples.jsonl"
+TC_PATH = ROOT / "outputs" / "data" / "zapier" / "20260411_zapier_clean" / "workflows-mods.jsonl"
 AGENT_MODEL = "gpt-4o"
 AGENT_PROVIDER = "openai"
 

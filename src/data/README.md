@@ -127,7 +127,7 @@ product catalogs, etc.) that an LLM-object performs at evaluation time. The pipe
 these during Stage 1, but may miss lookups that are embedded in business logic objects rather
 than in explicit read-service objects.
 
-Two complementary scripts close this gap on an existing `samples.jsonl`:
+Two complementary scripts close this gap on an existing `workflows-mods.jsonl`:
 
 ### retrofit_mock_tools — static analysis
 
@@ -141,7 +141,7 @@ python -m src.data.retrofit_mock_tools \
     -i outputs/my-run/samples.jsonl \
     --dry-run --model gpt-4o
 
-# Patch samples.jsonl and workflows.jsonl in-place
+# Patch workflows-mods.jsonl and workflows.jsonl in-place
 python -m src.data.retrofit_mock_tools \
     -i outputs/my-run/samples.jsonl \
     --workflows outputs/my-run/workflows.jsonl \
@@ -162,7 +162,7 @@ python -m src.data.discover_mock_tools \
     -i outputs/my-run/samples.jsonl \
     --dry-run --model gpt-4o
 
-# Patch samples.jsonl and workflows.jsonl in-place
+# Patch workflows-mods.jsonl and workflows.jsonl in-place
 python -m src.data.discover_mock_tools \
     -i outputs/my-run/samples.jsonl \
     --workflows outputs/my-run/workflows.jsonl \

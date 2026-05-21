@@ -506,7 +506,7 @@ dispatch chain because there's a write-service peer downstream".
 - Production prompt: **`object_v20260512_1206`** (= drop "Secondary effects"
   rule). Accepted lift: ~+3.6pt over original baseline (single-run
   0.623 → 2-run 0.659).
-- Data: peer-fix applied to `workflows.jsonl` and `samples.jsonl`
+- Data: peer-fix applied to `workflows.jsonl` and `workflows-mods.jsonl`
   (227 records, 364 peers added). Aggregate-neutral; correctness only.
 - Runtime: clean (no Lever A, no Lever C).
 - Ceiling at gpt-5.4-mini: ~0.659 on full set, ~0.41 on hard subset.

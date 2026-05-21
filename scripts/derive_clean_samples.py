@@ -1,4 +1,4 @@
-"""Derive a clean workflows.jsonl from samples.jsonl.
+"""Derive a clean workflows.jsonl from workflows-mods.jsonl.
 
 For each sample_id, pick the test_case variant with the fewest peer-behavior
 mismatches, reduce it to a Workflow-shaped record (strip modifications/events,
@@ -42,7 +42,7 @@ def to_sample(tc: dict) -> dict:
 
     sample_id becomes id; modifications and events are dropped. raw_steps is
     empty (the source markdown that produced steps is not recoverable from
-    samples.jsonl). flagged/flag_reasons default to False/[].
+    workflows-mods.jsonl). flagged/flag_reasons default to False/[].
     """
     return {
         "id": tc.get("sample_id") or tc.get("id"),
@@ -97,7 +97,7 @@ def fix_peers_in_place(sample: dict) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--input", "-i", type=Path, required=True,
-                   help="samples.jsonl")
+                   help="workflows-mods.jsonl")
     p.add_argument("--out-dir", "-o", type=Path, required=True,
                    help="Output directory; workflows.jsonl and derive_log.md are written here.")
     args = p.parse_args(argv)
@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     # Match the eval's selection logic (evaluate.py:1106-1113 — steps-only mode):
     # for each sample_id, take the FIRST occurrence in file order. This makes
     # the derived workflows.jsonl evaluate-equivalent to running the eval on
-    # samples.jsonl with --steps-only, so peer-fix results are directly
+    # workflows-mods.jsonl with --steps-only, so peer-fix results are directly
     # comparable to prior eval runs.
     seen: set[str] = set()
     chosen: list[dict] = []

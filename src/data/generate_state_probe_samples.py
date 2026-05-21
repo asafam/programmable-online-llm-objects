@@ -200,9 +200,9 @@ def _format_probe_question_prompt(
 
 
 def _load_samples(input_path: Path) -> list[Workflow]:
-    """Load samples from JSONL — accepts both workflows.jsonl and samples.jsonl.
+    """Load samples from JSONL — accepts both workflows.jsonl and workflows-mods.jsonl.
 
-    When samples.jsonl is provided (detected by presence of 'modifications' and
+    When workflows-mods.jsonl is provided (detected by presence of 'modifications' and
     'events' fields), deduplicates by sample_id to reconstruct unique samples.
     """
     raw = load_jsonl(input_path)
@@ -321,7 +321,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input", "-i",
         type=Path,
         required=True,
-        help="Input JSONL: workflows.jsonl or samples.jsonl",
+        help="Input JSONL: workflows.jsonl or workflows-mods.jsonl",
     )
     parser.add_argument(
         "--output", "-o",

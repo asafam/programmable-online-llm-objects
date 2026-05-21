@@ -598,7 +598,7 @@ def _fmt_background_events(
 # ── Workflow loader (shared with generate_state_probe_samples.py) ──────────────────
 
 def _load_samples(input_path: Path) -> list[Workflow]:
-    """Load samples from JSONL — accepts both workflows.jsonl and samples.jsonl."""
+    """Load samples from JSONL — accepts both workflows.jsonl and workflows-mods.jsonl."""
     raw = load_jsonl(input_path)
     if not raw:
         return []
@@ -833,7 +833,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input", "-i",
         type=Path,
         required=True,
-        help="Input JSONL: workflows.jsonl (preferred) or samples.jsonl",
+        help="Input JSONL: workflows.jsonl (preferred) or workflows-mods.jsonl",
     )
     parser.add_argument(
         "--output", "-o",

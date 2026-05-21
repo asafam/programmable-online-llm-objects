@@ -749,15 +749,15 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--input", required=True, type=Path,
-                   help="Path to samples.jsonl")
+                   help="Path to workflows-mods.jsonl")
     p.add_argument("--output", default=None, type=Path,
                    help="Audit output JSONL (default: <input_dir>/expectation_audit.jsonl or event_expectation_audit.jsonl)")
     p.add_argument("--audit-events", action="store_true",
                    help="Audit event expectations (E001, E002, ...) instead of step expectations")
     p.add_argument("--repair", action="store_true",
-                   help="Apply corrected actions for 'wrong' verdicts back to samples.jsonl")
+                   help="Apply corrected actions for 'wrong' verdicts back to workflows-mods.jsonl")
     p.add_argument("--resolve-uncertain", action="store_true",
-                   help="Use LLM to resolve 'uncertain' verdicts and write strong expectations into samples.jsonl")
+                   help="Use LLM to resolve 'uncertain' verdicts and write strong expectations into workflows-mods.jsonl")
     p.add_argument("--workers", type=int, default=4)
     add_common_args(p)
     return p

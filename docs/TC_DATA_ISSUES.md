@@ -5,7 +5,7 @@
 ## Magnitude
 
 - **Evaluated subset (83 TCs):** 37 flagged (45%)
-- **Full samples.jsonl (498 TCs):** 227 flagged (46%)
+- **Full workflows-mods.jsonl (498 TCs):** 227 flagged (46%)
 
 ## By pass-rate band (evaluated, 2-run mean)
 

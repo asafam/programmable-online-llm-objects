@@ -1,7 +1,7 @@
 """
 Discovery pass: run each sample through the LNL runtime to find which _data tools
 are actually called but not yet mocked (falling through to PassthroughExecutor),
-then generate mock data for those tools and patch the samples.jsonl.
+then generate mock data for those tools and patch the workflows-mods.jsonl.
 
 Complements retrofit_mock_tools.py (static analysis) with dynamic discovery:
   - retrofit: infers needed tools from object descriptions  (no LNL runtime)
@@ -226,7 +226,7 @@ def run(args: argparse.Namespace) -> None:
         return
 
     if not new_tools_by_sample:
-        print("No new tools discovered. samples.jsonl is up to date.")
+        print("No new tools discovered. workflows-mods.jsonl is up to date.")
         return
 
     # Apply to all TC variants in each sample group
@@ -271,14 +271,14 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m src.data.discover_mock_tools -i outputs/.../samples.jsonl --model gpt-4o
-  python -m src.data.discover_mock_tools -i outputs/.../samples.jsonl --model gpt-4o --dry-run
-  python -m src.data.discover_mock_tools -i outputs/.../samples.jsonl \\
+  python -m src.data.discover_mock_tools -i outputs/.../workflows-mods.jsonl --model gpt-4o
+  python -m src.data.discover_mock_tools -i outputs/.../workflows-mods.jsonl --model gpt-4o --dry-run
+  python -m src.data.discover_mock_tools -i outputs/.../workflows-mods.jsonl \\
       --workflows outputs/.../workflows.jsonl --model gpt-4o
 """,
     )
     parser.add_argument("--input", "-i", type=Path, required=True,
-                        help="Path to samples.jsonl to patch")
+                        help="Path to workflows-mods.jsonl to patch")
     parser.add_argument("--output", "-o", type=Path, default=None,
                         help="Output path (default: overwrites input)")
     parser.add_argument("--workflows", type=Path, default=None,

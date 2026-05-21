@@ -2172,8 +2172,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""
 Examples:
   python -m src.data.evaluate -i outputs/data/zapier/20260322_120000/samples.jsonl
-  python -m src.data.evaluate -i samples.jsonl --runs 3 --model claude-sonnet-4-6
-  python -m src.data.evaluate -i samples.jsonl --model gpt-4o --judge-model claude-sonnet-4-6
+  python -m src.data.evaluate -i workflows-mods.jsonl --runs 3 --model claude-sonnet-4-6
+  python -m src.data.evaluate -i workflows-mods.jsonl --model gpt-4o --judge-model claude-sonnet-4-6
 """,
     )
     parser.add_argument(

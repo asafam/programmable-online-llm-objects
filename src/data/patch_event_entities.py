@@ -379,20 +379,20 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""
 Examples:
   # Dry-run: report gaps without patching
-  python -m src.data.patch_event_entities -i outputs/.../samples.jsonl --dry-run
+  python -m src.data.patch_event_entities -i outputs/.../workflows-mods.jsonl --dry-run
 
   # Patch in-place (overwrites input)
-  python -m src.data.patch_event_entities -i outputs/.../samples.jsonl --model gpt-4o
+  python -m src.data.patch_event_entities -i outputs/.../workflows-mods.jsonl --model gpt-4o
 
   # Patch to separate output file
   python -m src.data.patch_event_entities \\
-      -i outputs/.../samples.jsonl \\
+      -i outputs/.../workflows-mods.jsonl \\
       -o outputs/.../test_cases_patched.jsonl \\
       --model gpt-4o --workers 4
 """,
     )
     parser.add_argument("--input", "-i", type=Path, required=True,
-                        help="Path to samples.jsonl")
+                        help="Path to workflows-mods.jsonl")
     parser.add_argument("--output", "-o", type=Path, default=None,
                         help="Output path (default: overwrites input)")
     parser.add_argument("--dry-run", action="store_true", default=False,

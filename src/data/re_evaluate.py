@@ -7,7 +7,7 @@ only the LLM-as-judge step without re-executing the LNL runtime.
 
 Use cases:
   - Re-judge with a different model or judge panel
-  - Re-judge after correcting event expectations in samples.jsonl
+  - Re-judge after correcting event expectations in workflows-mods.jsonl
   - Add a second opinion judge to an existing evaluation run
 
 Usage:
@@ -19,7 +19,7 @@ Usage:
     # Re-judge with updated expectations
     python -m src.data.re_evaluate \\
         --from-eval outputs/.../test_cases_eval_20260410_113327.jsonl \\
-        --samples outputs/.../samples.jsonl \\
+        --samples outputs/.../workflows-mods.jsonl \\
         --judge-model claude-opus-4-6
 
     # Panel judge (multiple judges, majority vote)
@@ -399,7 +399,7 @@ Examples:
   # Re-judge with updated expectations
   python -m src.data.re_evaluate \\
       --from-eval outputs/.../test_cases_eval_20260410_113327.jsonl \\
-      --samples outputs/.../samples.jsonl --judge-model claude-opus-4-6
+      --samples outputs/.../workflows-mods.jsonl --judge-model claude-opus-4-6
 
   # Panel judge (majority vote across multiple models)
   python -m src.data.re_evaluate \\
@@ -420,7 +420,7 @@ Examples:
         type=Path,
         default=None,
         metavar="JSONL",
-        help="Optional updated samples.jsonl — event expectations override the stored values",
+        help="Optional updated workflows-mods.jsonl — event expectations override the stored values",
     )
     parser.add_argument(
         "--output", "-o",

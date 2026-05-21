@@ -1,5 +1,5 @@
 """
-Repair test case issues in an existing samples.jsonl file.
+Repair test case issues in an existing workflows-mods.jsonl file.
 
 Fixes:
   1. triggered_by=<modification_id>  →  triggered_by=None
@@ -213,7 +213,7 @@ def repair(
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--input", required=True, help="Path to samples.jsonl")
+    p.add_argument("--input", required=True, help="Path to workflows-mods.jsonl")
     p.add_argument("--workflows", default=None, help="Path to workflows.jsonl (used to build full context for expectations rewrite)")
     p.add_argument("--model", default="claude-sonnet-4-6")
     p.add_argument("--provider", default=None)

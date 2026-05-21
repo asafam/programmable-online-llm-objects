@@ -1,25 +1,25 @@
 """
 LLM-based event role classifier for existing test cases.
 
-For each non-step event in samples.jsonl:
+For each non-step event in workflows-mods.jsonl:
   - Events that fire BEFORE the first modification → "pre_mod" (no LLM needed)
   - Events that fire AFTER the first modification → ask LLM: "post_mod" or "irrelevant"
 
 "irrelevant" means the event tests automation logic that is NOT affected by the modification.
 "post_mod" means the event directly exercises the behavior that the modification changes.
 
-After classifying, writes updated roles back into samples.jsonl and (optionally)
+After classifying, writes updated roles back into workflows-mods.jsonl and (optionally)
 re-runs retroactive_classify.py on the specified eval files.
 
 Usage:
     python -m src.data.classify_event_roles \\
-        --samples outputs/.../samples.jsonl \\
+        --samples outputs/.../workflows-mods.jsonl \\
         --model gpt-4o-mini \\
         --workers 8
 
     # Also update eval files in-place:
     python -m src.data.classify_event_roles \\
-        --samples outputs/.../samples.jsonl \\
+        --samples outputs/.../workflows-mods.jsonl \\
         --eval outputs/.../test_cases_eval_*.jsonl \\
         --model gpt-4o-mini --workers 8
 """
@@ -328,7 +328,7 @@ def _apply_to_evals(args: argparse.Namespace, tc_path: Path) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="LLM-classify event roles (post_mod vs irrelevant) in samples.jsonl",
+        description="LLM-classify event roles (post_mod vs irrelevant) in workflows-mods.jsonl",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -344,7 +344,7 @@ Examples:
 """,
     )
     parser.add_argument("--samples", type=Path, required=True, metavar="JSONL",
-                        help="samples.jsonl to classify and update in-place")
+                        help="workflows-mods.jsonl to classify and update in-place")
     parser.add_argument("--eval", type=Path, action="append", default=None, metavar="JSONL",
                         help="Eval file(s) to update after classification (repeatable)")
     parser.add_argument("--model", default="gpt-4o-mini",

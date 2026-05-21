@@ -3329,7 +3329,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""
 Examples:
   python -m src.data.evaluate_baseline -i outputs/data/zapier/20260322_010211/samples.jsonl
-  python -m src.data.evaluate_baseline -i samples.jsonl --runs 3 --model gpt-4o
+  python -m src.data.evaluate_baseline -i workflows-mods.jsonl --runs 3 --model gpt-4o
 """,
     )
     parser.add_argument("--input", "-i", type=Path, default=None,

@@ -144,7 +144,7 @@ case "${CMD}" in
         done
         echo ""
         echo "Run evaluation with matching pool config, e.g.:"
-        echo "  python -m src.data.evaluate_baseline -i <samples.jsonl> --pool docker/worker-pool-${NUM_WORKERS}.yaml"
+        echo "  python -m src.data.evaluate_baseline -i <workflows-mods.jsonl> --pool docker/worker-pool-${NUM_WORKERS}.yaml"
         ;;
     down)
         echo "Stopping LNL OpenClaw worker pool..."
