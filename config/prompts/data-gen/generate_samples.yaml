@@ -76,6 +76,38 @@ user_prompt: |
 
   `after_mod_ids` must list the IDs of ALL modifications that have fired before this event, in the order they were applied. An event with `when` between M001 and M002 has `after_mod_ids: ["M001"]`. An event after all mods has `after_mod_ids: ["M001", "M002", ...]`.
 
+  **CRITICAL — post_mod events MUST exercise each modification's qualifying condition.**
+
+  A modification is only useful if there is at least one post_mod event whose input
+  actually triggers the scenario the modification covers. Before writing post_mod
+  events, ask: "What kind of incoming event would cause this modification's effect
+  to fire?" Then make sure at least one post_mod event matches that exact condition.
+
+  Examples:
+    Mod: "Send the weekly report on Tuesday 09:00 UTC instead of Monday for Week 2."
+      ✓ Generate a post_mod event for the weekly-report scheduler trigger on
+        Tuesday 09:00 UTC Week 2 (this event tests the rescheduled timing).
+      ✗ Only generating ad-hoc support-request events does NOT test this mod —
+        the weekly-report trigger never fires; the mod is untestable.
+
+    Mod: "Route Windows 11 23H2 VPN lockout cases to Infrastructure."
+      ✓ At least one post_mod event whose input matches "Windows 11 23H2 VPN
+        lockout" so the modified routing fires.
+      ✗ Post_mod events about printer issues do not exercise the VPN-specific
+        routing.
+
+    Mod: "When the address contains 'TX' or 'Texas', also append to the Texas tab."
+      ✓ At least one post_mod event with an address containing 'TX' or 'Texas'.
+      ✗ Post_mod events with only New York / California addresses don't exercise
+        the conditional expansion.
+
+  In addition to the matching-condition post_mod event(s), include event(s) that
+  DON'T match the mod's condition — to verify the mod correctly leaves them alone.
+
+  If a modification's qualifying condition genuinely cannot be exercised by any
+  external event (e.g., the mod targets internal UI styling that has no eval
+  surface), prefer a different modification that IS testable.
+
   Focus on writing high-quality `input` values — realistic external triggers that carry enough
   information for the full automation chain to run to completion. Expectations are written in a
   separate pass and are not part of your output.
