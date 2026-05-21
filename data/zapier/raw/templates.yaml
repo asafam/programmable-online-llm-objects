@@ -635,17 +635,12 @@
   source_type: Zapier/Workflow Logic
   link: https://zapier.com/templates/details/employee-directory
   raw_steps:
-  - Create an employee directory table in Zapier Tables with fields for employee name, phone number, job title, office location,
-    email address, employment status, and custom fields as needed.
-  - Add employee records to the directory table with their personal and contact information.
-  - Set up an automated workflow that transforms the work anniversary date field into a month-day format to enable yearly
-    recurring reminders.
-  - Set up an automated workflow that transforms the birthday date field into a month-day format to enable yearly recurring
+  - An employee record is added to the employee directory database with name, phone number, job title, office location, email
+    address, employment status, work anniversary date, and birthday.
+  - The system transforms the employee's work anniversary date and birthday into month-day format to enable yearly recurring
     reminders.
-  - Configure the workflows to send a reminder email when an employee's work anniversary date matches the current month and
-    day.
-  - Configure the workflows to send a reminder email when an employee's birthday matches the current month and day.
-  - Enable automatic record processing in the workflow settings to ensure reminders are sent without manual intervention.
+  - When today's date matches an employee's work anniversary (month + day), a reminder email is sent to the employee's team.
+  - When today's date matches an employee's birthday (month + day), a reminder email is sent to the employee's team.
 - id: automate-google-my-business-review-responses-gemini
   name: GMB Review Triage With AI
   source_type: Zapier/Workflow Logic
