@@ -59,6 +59,28 @@ def _format_all_raw_steps(raw_steps: list[str]) -> str:
     return "\n".join(f"  [{i+1}] {s}" for i, s in enumerate(raw_steps))
 
 
+def _health_check_step(workflow: Workflow, step_index: int) -> list[str]:
+    """Deterministic per-step structural checks. Returns list of issues (empty = OK)."""
+    issues: list[str] = []
+    step = workflow.steps[step_index]
+    if not (step.text or "").strip():
+        issues.append("text is empty")
+    if not (step.target or "").strip():
+        issues.append("target is empty")
+    else:
+        object_map = {o.object_id: o for o in workflow.objects}
+        target_obj = object_map.get(step.target)
+        if target_obj is None:
+            issues.append(f"target '{step.target}' does not exist in workflow.objects")
+        elif not target_obj.event_sources:
+            issues.append(
+                f"target '{step.target}' has no event_sources (not an entry-point object)"
+            )
+    if step.expect is None or not (step.expect.action or "").strip():
+        issues.append("expect.action is missing or empty")
+    return issues
+
+
 def _judge_step(
     llm,
     workflow: Workflow,
@@ -66,10 +88,12 @@ def _judge_step(
     step_index: int,
     prompt_template: str,
 ) -> StepVerdict:
-    """Call the LLM judge on one (raw_step, grounded_step) pair."""
+    """Call the LLM judge on one (raw_step, grounded_step) pair + deterministic health checks."""
     raw_step = template["raw_steps"][step_index]
     step = workflow.steps[step_index]
     expect_action = step.expect.action if step.expect else "(none)"
+
+    health_issues = _health_check_step(workflow, step_index)
 
     prompt = (
         prompt_template
@@ -89,7 +113,10 @@ def _judge_step(
         prompt=prompt,
         response_model=StepJudgement,
         item_id=f"{workflow.id}-step{step_index+1}",
-        validator=lambda r: r.verdict in ("FAITHFUL", "DRIFTED", "WRONG"),
+        validator=lambda r: (
+            r.verdict in ("FAITHFUL", "DRIFTED", "WRONG")
+            and r.quality in ("GOOD", "ADEQUATE", "POOR")
+        ),
     )
 
     if result is None:
@@ -102,6 +129,9 @@ def _judge_step(
             target=step.target,
             verdict="WRONG",
             reasoning="(judge failed — defaulting to WRONG)",
+            health_issues=health_issues,
+            quality="POOR",
+            quality_issues=["(judge failed; quality not assessed)"],
         )
 
     return StepVerdict(
@@ -113,11 +143,14 @@ def _judge_step(
         target=step.target,
         verdict=result.verdict,
         reasoning=result.reasoning,
+        health_issues=health_issues,
+        quality=result.quality,
+        quality_issues=list(result.quality_issues or []),
     )
 
 
 def _aggregate_verdict(step_verdicts: list[StepVerdict], count_mismatch: bool) -> str:
-    """Roll per-step verdicts up to a workflow-level aggregate."""
+    """Roll per-step fidelity verdicts up to a workflow-level aggregate."""
     has_wrong = any(v.verdict == "WRONG" for v in step_verdicts)
     n_drifted = sum(1 for v in step_verdicts if v.verdict == "DRIFTED")
 
@@ -128,6 +161,21 @@ def _aggregate_verdict(step_verdicts: list[StepVerdict], count_mismatch: bool) -
     if n_drifted == 1:
         return "MILD_DRIFT"
     return "CLEAN"
+
+
+def _aggregate_health(step_verdicts: list[StepVerdict]) -> str:
+    """OK iff no step has any health_issues."""
+    return "OK" if all(not v.health_issues for v in step_verdicts) else "ISSUES"
+
+
+def _aggregate_quality(step_verdicts: list[StepVerdict]) -> str:
+    """Worst per-step quality across non-unaligned steps."""
+    scores = [v.quality for v in step_verdicts if v.verdict != "UNALIGNED"]
+    if any(q == "POOR" for q in scores):
+        return "POOR"
+    if any(q == "ADEQUATE" for q in scores):
+        return "ADEQUATE"
+    return "GOOD" if scores else "ADEQUATE"
 
 
 def _validate_workflow(
@@ -145,6 +193,8 @@ def _validate_workflow(
             count_mismatch=True,
             step_verdicts=[],
             aggregate="WRONG",
+            aggregate_health="ISSUES",
+            aggregate_quality="POOR",
         )
 
     n_template = len(template["raw_steps"])
@@ -170,6 +220,7 @@ def _validate_workflow(
                 target=step.target,
                 verdict="UNALIGNED",
                 reasoning="Workflow has more steps than the template.",
+                quality="UNALIGNED",
             ))
     elif n_template > n_workflow:
         for i in range(n_workflow, n_template):
@@ -182,6 +233,7 @@ def _validate_workflow(
                 target="",
                 verdict="UNALIGNED",
                 reasoning="Template has more raw_steps than the workflow.",
+                quality="UNALIGNED",
             ))
 
     return WorkflowValidation(
@@ -191,33 +243,57 @@ def _validate_workflow(
         count_mismatch=count_mismatch,
         step_verdicts=step_verdicts,
         aggregate=_aggregate_verdict(step_verdicts, count_mismatch),
+        aggregate_health=_aggregate_health(step_verdicts),
+        aggregate_quality=_aggregate_quality(step_verdicts),
     )
 
 
 def _print_summary(results: list[WorkflowValidation]) -> None:
-    """Print counts + per-workflow flagged list."""
+    """Print fidelity / health / quality rollups + per-workflow flagged list."""
     from collections import Counter
     counts = Counter(r.aggregate for r in results)
+    health_counts = Counter(r.aggregate_health for r in results)
+    quality_counts = Counter(r.aggregate_quality for r in results)
 
     print("\n" + "=" * 70)
     print(f"Workflow step validation — {len(results)} workflows")
     print("=" * 70)
+    print("Fidelity (raw_step → grounded_step faithfulness):")
     print(f"  CLEAN:          {counts.get('CLEAN', 0):3d}")
     print(f"  MILD_DRIFT:     {counts.get('MILD_DRIFT', 0):3d}")
     print(f"  NOTABLE_DRIFT:  {counts.get('NOTABLE_DRIFT', 0):3d}")
     print(f"  WRONG:          {counts.get('WRONG', 0):3d}")
+    print("Health (deterministic structural checks):")
+    print(f"  OK:             {health_counts.get('OK', 0):3d}")
+    print(f"  ISSUES:         {health_counts.get('ISSUES', 0):3d}")
+    print("Quality (LLM grading of grounded text):")
+    print(f"  GOOD:           {quality_counts.get('GOOD', 0):3d}")
+    print(f"  ADEQUATE:       {quality_counts.get('ADEQUATE', 0):3d}")
+    print(f"  POOR:           {quality_counts.get('POOR', 0):3d}")
     print()
 
-    flagged = [r for r in results if r.aggregate in ("NOTABLE_DRIFT", "WRONG")]
+    # Flag if EITHER fidelity is bad OR health has issues OR quality is poor
+    flagged = [
+        r for r in results
+        if r.aggregate in ("NOTABLE_DRIFT", "WRONG")
+        or r.aggregate_health == "ISSUES"
+        or r.aggregate_quality == "POOR"
+    ]
     if flagged:
         print(f"Flagged for review ({len(flagged)}):")
         for r in flagged:
             n_drift = sum(1 for v in r.step_verdicts if v.verdict == "DRIFTED")
             n_wrong = sum(1 for v in r.step_verdicts if v.verdict == "WRONG")
             n_unal  = sum(1 for v in r.step_verdicts if v.verdict == "UNALIGNED")
-            print(f"  {r.workflow_id:<55} {r.aggregate:<14}  "
-                  f"(drifted={n_drift} wrong={n_wrong} unaligned={n_unal} "
-                  f"steps={r.n_workflow_steps}/{r.n_template_steps})")
+            n_health = sum(len(v.health_issues) for v in r.step_verdicts)
+            n_poor = sum(1 for v in r.step_verdicts if v.quality == "POOR")
+            print(
+                f"  {r.workflow_id:<55} "
+                f"fid={r.aggregate:<13} health={r.aggregate_health:<6} quality={r.aggregate_quality:<8} "
+                f"(drift={n_drift} wrong={n_wrong} unalign={n_unal} "
+                f"health_issues={n_health} poor_steps={n_poor} "
+                f"steps={r.n_workflow_steps}/{r.n_template_steps})"
+            )
         print()
 
 

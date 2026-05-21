@@ -66,10 +66,33 @@ prompt: |
 
   ---
 
+  ## Quality grading (independent of fidelity)
+
+  Also grade the **quality** of the grounded step text — independent of whether
+  it faithfully grounds the abstract raw_step. Even a FAITHFUL grounding can
+  be POOR quality if the values are vague or the writing leaks abstractions.
+
+  - **GOOD** — concrete realistic values everywhere (real-sounding names,
+    real product names, plausible numbers/dates); `expect.action` describes
+    a single observable outcome with specific names and destinations;
+    actors are named, not "the system" / "the workflow".
+  - **ADEQUATE** — readable and groundable but with one or two minor issues
+    (one vague phrase, a slightly artificial value).
+  - **POOR** — multiple quality issues such as: unresolved placeholders
+    (e.g., "Company A", "user-123", "form-1"), fake product names (e.g.,
+    "FormPlatform" instead of a real product like Jotform), `expect.action`
+    bundles multiple distinct outcomes into one sentence, "the system" /
+    "the workflow" hand-waving where a concrete actor would be clearer.
+
+  In `quality_issues`, list each specific complaint as a short string
+  (one per issue). Leave the list empty if quality is GOOD.
+
   ## Output
 
   Return strictly a JSON object matching the schema:
     {{
       "verdict": "FAITHFUL" | "DRIFTED" | "WRONG",
-      "reasoning": "<1-2 sentences explaining the verdict>"
+      "reasoning": "<1-2 sentences explaining the fidelity verdict>",
+      "quality": "GOOD" | "ADEQUATE" | "POOR",
+      "quality_issues": ["<short specific complaint>", ...]
     }}

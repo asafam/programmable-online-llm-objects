@@ -370,21 +370,46 @@ class Workflows(BaseModel):
 
 
 class StepJudgement(BaseModel):
-    """LLM judge output for one workflow step."""
+    """LLM judge output for one workflow step (fidelity + quality)."""
+    # Fidelity: how faithfully is the abstract raw_step grounded?
     verdict: Literal["FAITHFUL", "DRIFTED", "WRONG"]
     reasoning: str
+    # Quality: independent of fidelity, is the grounded text well-written?
+    quality: Literal["GOOD", "ADEQUATE", "POOR"] = "ADEQUATE"
+    quality_issues: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Specific quality complaints the judge found, e.g., 'placeholder "
+            "value Company-A not grounded', 'expect.action bundles multiple "
+            "observable outcomes', 'product name FormPlatform is not real'."
+        ),
+    )
 
 
 class StepVerdict(BaseModel):
-    """Per-step grounding verdict (one entry per workflow step)."""
+    """Per-step verdict combining deterministic health + LLM fidelity + LLM quality."""
     workflow_id: str
     step_index: int
     raw_step: str
     grounded_step: str
     expect_action: Optional[str] = None
     target: str = ""
+    # Fidelity: how well the grounded step matches the abstract raw_step (LLM)
     verdict: Literal["FAITHFUL", "DRIFTED", "WRONG", "UNALIGNED"]
     reasoning: str
+    # Health: deterministic structural checks (no LLM)
+    health_issues: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Structural problems detected without an LLM call. Empty list = "
+            "structurally healthy. Examples: 'text is empty', 'target does "
+            "not exist in workflow.objects', 'target has no event_sources', "
+            "'expect.action is missing'."
+        ),
+    )
+    # Quality: subjective LLM judgement on whether the grounded step is well-written
+    quality: Literal["GOOD", "ADEQUATE", "POOR", "UNALIGNED"] = "ADEQUATE"
+    quality_issues: list[str] = Field(default_factory=list)
     judge_input_tokens: int = 0
     judge_output_tokens: int = 0
 
@@ -396,7 +421,12 @@ class WorkflowValidation(BaseModel):
     n_workflow_steps: int
     count_mismatch: bool
     step_verdicts: list[StepVerdict] = Field(default_factory=list)
+    # Fidelity rollup (existing)
     aggregate: Literal["CLEAN", "MILD_DRIFT", "NOTABLE_DRIFT", "WRONG"]
+    # Health rollup: OK if zero health_issues across all steps; otherwise ISSUES.
+    aggregate_health: Literal["OK", "ISSUES"] = "OK"
+    # Quality rollup: worst per-step quality.
+    aggregate_quality: Literal["GOOD", "ADEQUATE", "POOR"] = "ADEQUATE"
 
 # Scenario generation schemas (LLM output before merging with instance metadata)
 class Scenario(BaseModel):
