@@ -252,7 +252,7 @@ def compute_table_row(path: Path) -> dict:
     # event_outcomes[(tc_id, event_id)] = [pass_run0, pass_run1, ...]
     event_outcomes: dict[tuple[str, str], list[bool]] = defaultdict(list)
     runs_per_tc:    dict[str, set]                    = defaultdict(set)
-    # Per (TC, run) totals — one entry per TestCaseResult line in the JSONL.
+    # Per (TC, run) totals — one entry per SampleResult line in the JSONL.
     # Per-TC convention (matches the paper format): each entry is the total
     # wall-clock or total tokens for one (TC, run) — the cost of running the
     # whole workflow once end-to-end. Judge tokens are NOT included (they're
@@ -261,6 +261,23 @@ def compute_table_row(path: Path) -> dict:
     tc_total_elapsed_s: list[float] = []
     tc_total_in:  list[int]         = []
     tc_total_out: list[int]         = []
+
+    # TCs that had ANY infra/timeout run are excluded from entropy (entropy
+    # requires uniform R per TC; mixed R biases H̄).
+    infra_tainted_tcs: set[str] = set()
+
+    # First pass: identify TCs with any infra/timeout run
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "tc_id" in d and d.get("error_type") in ("infra", "timeout"):
+                infra_tainted_tcs.add(d["tc_id"])
 
     with open(path) as f:
         for line in f:
@@ -281,16 +298,17 @@ def compute_table_row(path: Path) -> dict:
             runs_per_tc[tc_id].add(run_idx)
             events = d.get("events") or []
 
-            # Track per-event binary outcomes across runs (excluding infra-class
-            # failures so we measure agent-side non-determinism, not flakiness)
-            for e in events:
-                eid    = e.get("event_id")
-                passed = e.get("passed")
-                if eid is None or passed is None:
-                    continue
-                if _classify_event(e) in ("oc_eval", "infra_provider"):
-                    continue
-                event_outcomes[(tc_id, eid)].append(bool(passed))
+            # Track per-event binary outcomes across runs — but skip TCs that
+            # had any infra/timeout run, to keep R uniform per TC.
+            if tc_id not in infra_tainted_tcs:
+                for e in events:
+                    eid    = e.get("event_id")
+                    passed = e.get("passed")
+                    if eid is None or passed is None:
+                        continue
+                    if _classify_event(e) in ("oc_eval", "infra_provider"):
+                        continue
+                    event_outcomes[(tc_id, eid)].append(bool(passed))
 
             for role_key, role_value in (("base", None), ("on_mod", "post_mod"), ("off_mod", "irrelevant")):
                 role_events = [
@@ -350,30 +368,43 @@ def compute_table_row(path: Path) -> dict:
 
     def _mean(xs): return float(np.mean(xs)) if xs else 0.0
 
-    # Non-determinism metrics (T=0 reproducibility across identical re-runs)
+    # Non-determinism metrics (T=0 reproducibility across identical re-runs).
+    # Restricted to TCs with no infra/timeout in any run, so R is uniform.
     import math
     def _bern_entropy(p: float) -> float:
         if p <= 0.0 or p >= 1.0:
             return 0.0
         return -(p * math.log2(p) + (1 - p) * math.log2(1 - p))
 
-    tcs_multi_run = {tc for tc, runs in runs_per_tc.items() if len(runs) >= 2}
-    max_runs      = max((len(r) for r in runs_per_tc.values()), default=0)
-    unstable_tcs  = set()
+    eligible_tcs = {
+        tc for tc, runs in runs_per_tc.items()
+        if tc not in infra_tainted_tcs and len(runs) >= 2
+    }
+    max_runs    = max((len(r) for r in runs_per_tc.values()), default=0)
+    clean_runs  = {len(runs_per_tc[tc]) for tc in eligible_tcs}
+    uniform_R   = next(iter(clean_runs)) if len(clean_runs) == 1 else None
+
+    unstable_tcs   = set()
     entropies: list[float] = []
     flipped_groups = 0
     for (tc_id, _eid), outcomes in event_outcomes.items():
-        if tc_id not in tcs_multi_run or len(outcomes) < 2:
+        if tc_id not in eligible_tcs or len(outcomes) < 2:
             continue
         if len(set(outcomes)) > 1:
             unstable_tcs.add(tc_id)
             flipped_groups += 1
-        p = sum(outcomes) / len(outcomes)
-        entropies.append(_bern_entropy(p))
+        R = len(outcomes)
+        p = sum(outcomes) / R
+        h = _bern_entropy(p)
+        # Miller-Madow bias correction for binary alphabet (k=2): +1/(2R).
+        # Applied per event group since R may differ if uniform_R is None.
+        h += 1.0 / (2 * R)
+        # Clamp to [0, 1] since binary Bernoulli H ≤ 1 bit.
+        entropies.append(min(h, 1.0))
 
-    n_multi = len(tcs_multi_run)
-    wir     = (len(unstable_tcs) / n_multi) if n_multi else None
-    h_mean  = (sum(entropies) / len(entropies)) if entropies else None
+    n_multi = len(eligible_tcs)
+    wir       = (len(unstable_tcs) / n_multi) if n_multi else None
+    h_mean    = (sum(entropies) / len(entropies)) if entropies else None
     flip_frac = (flipped_groups / len(entropies)) if entropies else None
 
     return {
@@ -386,6 +417,8 @@ def compute_table_row(path: Path) -> dict:
         "step_flip_frac":   flip_frac,
         "n_multi_run_tcs":  n_multi,
         "max_runs":         max_runs,
+        "uniform_runs":     uniform_R,
+        "n_infra_tcs":      len(infra_tainted_tcs),
         "n_step_groups":    len(entropies),
         # Per-TC totals (averaged across all (TC, run) lines). Time is total
         # wall-clock per TC run; tokens are summed across all the TC's events
@@ -398,6 +431,23 @@ def compute_table_row(path: Path) -> dict:
 
 def _fmt_rate(mean: float, std: float) -> str:
     return f"{mean:>4.1f} $\\pm$ {std:>4.1f}"
+
+
+def _winners(items: list[tuple[str, float | None]], mode: str = "max") -> set[str]:
+    """Return labels of the best-performing rows for a metric (set handles ties).
+
+    items: [(label, value)]; None values are ignored.
+    mode:  'max' (higher = better) or 'min' (lower = better).
+    """
+    vals = [(lbl, v) for lbl, v in items if v is not None]
+    if not vals:
+        return set()
+    best = max(v for _, v in vals) if mode == "max" else min(v for _, v in vals)
+    return {lbl for lbl, v in vals if v == best}
+
+
+def _bf(s: str, winner: bool) -> str:
+    return rf"\textbf{{{s.strip()}}}" if winner else s
 
 
 def load_tc_object_counts(source_path: Path) -> dict[str, int]:
@@ -524,9 +574,9 @@ def plot_by_objects(
         print("  No by-object data to plot.")
         return
 
-    metrics = [("base_mean", "base_std", "Base"),
-               ("on_mod_mean", "on_mod_std", "On-Mod"),
-               ("off_mod_mean", "off_mod_std", "Off-Mod")]
+    metrics = [("base_mean",   "base_ci95",   "Base"),
+               ("on_mod_mean", "on_mod_ci95", "On-Mod"),
+               ("off_mod_mean","off_mod_ci95","Off-Mod")]
 
     fig, axes = plt.subplots(1, 3, figsize=(13, 4.0), sharey=True)
     fig.patch.set_facecolor(p["bg"])
@@ -591,17 +641,34 @@ def write_tex_table_by_objects(
         r"    \textbf{System} & \textbf{Objects} & \textbf{Base} & \textbf{On-Mod} & \textbf{Off-Mod} \\",
         r"    \hline",
     ]
+    # Per-bin winners (best system within each object-count bin, per role).
+    # Pass rates: higher is better.
+    win_by_bin: dict[str, dict[str, set[str]]] = {}
+    for b in _BIN_ORDER:
+        win_by_bin[b] = {
+            role: _winners(
+                [(sys_lbl, bins.get(b, {}).get(f"{role}_mean"))
+                 for sys_lbl, bins in all_data.items()
+                 if bins.get(b, {}).get("n_tcs", 0) > 0],
+                "max",
+            )
+            for role in ("base", "on_mod", "off_mod")
+        }
+
     for system, bins in all_data.items():
         first = True
         for b in _BIN_ORDER:
             if b not in bins or bins[b]["n_tcs"] == 0: continue
             r = bins[b]
             sys_cell = system if first else ""
+            base_cell = _bf(_fmt_rate(r['base_mean'],   r['base_ci95']),   system in win_by_bin[b]["base"])
+            on_cell   = _bf(_fmt_rate(r['on_mod_mean'], r['on_mod_ci95']), system in win_by_bin[b]["on_mod"])
+            off_cell  = _bf(_fmt_rate(r['off_mod_mean'],r['off_mod_ci95']),system in win_by_bin[b]["off_mod"])
             lines.append(
                 f"    {sys_cell:<24} & {b:<6}  ({r['n_tcs']:>3} TCs)"
-                + f"  & {_fmt_rate(r['base_mean'],   r['base_ci95']):<15}"
-                + f"  & {_fmt_rate(r['on_mod_mean'], r['on_mod_ci95']):<15}"
-                + f"  & {_fmt_rate(r['off_mod_mean'],r['off_mod_ci95']):<15} \\\\"
+                + f"  & {base_cell:<15}"
+                + f"  & {on_cell:<15}"
+                + f"  & {off_cell:<15} \\\\"
             )
             first = False
         lines.append(r"    \hline")
@@ -624,27 +691,47 @@ def write_tex_table(
 
     lines = [
         r"% Pass rates: mean across TCs $\pm$ 95\% CI (Student's t, across-TC variance).",
+        r"% $\bar{H}$ = mean step-level Shannon entropy per (TC, event) over runs.",
         r"% Time/Tokens: per-TC mean. Infra + wiring failures excluded.",
-        r"\begin{tabular}{l|c|c|c|c|c}",
+        r"\begin{tabular}{l|c|c|c|c|c|c}",
         r"    \hline",
         r"    \textbf{System}"
         + " " * (label_w - len("System"))
-        + r" & \textbf{Base}   & \textbf{On-Mod} & \textbf{Off-Mod} & \textbf{Time (s)} & \textbf{Tokens} \\",
+        + r" & \textbf{Base}   & \textbf{On-Mod} & \textbf{Off-Mod} "
+          r"& $\,\overline{\mathbf{H}}\,$ & \textbf{Time (s)} & \textbf{Tokens} \\",
         r"    \hline",
     ]
+    # Per-column winners (rate columns: max; cost/entropy: min)
+    win = {
+        "base_mean":      _winners([(lbl, r.get("base_mean"))      for lbl, r in rows], "max"),
+        "on_mod_mean":    _winners([(lbl, r.get("on_mod_mean"))    for lbl, r in rows], "max"),
+        "off_mod_mean":   _winners([(lbl, r.get("off_mod_mean"))   for lbl, r in rows], "max"),
+        "step_entropy":   _winners([(lbl, r.get("step_entropy"))   for lbl, r in rows], "min"),
+        "elapsed_s":      _winners([(lbl, r.get("elapsed_s"))      for lbl, r in rows], "min"),
+        "tokens_in_mean": _winners([(lbl, r.get("tokens_in_mean")) for lbl, r in rows], "min"),
+    }
+
     for label, r in rows:
         # Format tokens with thousands separators, "in/out" pattern
         tok_in = f"{int(r['tokens_in_mean']):,}"
         tok_out = f"{int(r['tokens_out_mean']):,}"
         tokens_str = f"{tok_in}/{tok_out}"
+        h_str   = f"{r['step_entropy']:>5.3f}" if r.get('step_entropy') is not None else "  --  "
+        base_cell = _bf(_fmt_rate(r['base_mean'],   r['base_ci95']),   label in win["base_mean"])
+        on_cell   = _bf(_fmt_rate(r['on_mod_mean'], r['on_mod_ci95']), label in win["on_mod_mean"])
+        off_cell  = _bf(_fmt_rate(r['off_mod_mean'],r['off_mod_ci95']),label in win["off_mod_mean"])
+        h_cell    = _bf(h_str,      label in win["step_entropy"])
+        time_cell = _bf(f"{r['elapsed_s']:.2f}", label in win["elapsed_s"])
+        tok_cell  = _bf(tokens_str, label in win["tokens_in_mean"])
         lines.append(
             "    "
             + label.ljust(label_w)
-            + f" & {_fmt_rate(r['base_mean'],   r['base_ci95']):<16}"
-            + f" & {_fmt_rate(r['on_mod_mean'], r['on_mod_ci95']):<16}"
-            + f" & {_fmt_rate(r['off_mod_mean'],r['off_mod_ci95']):<16}"
-            + f" & {r['elapsed_s']:>17.2f}"
-            + f" & {tokens_str:<15} \\\\"
+            + f" & {base_cell:<16}"
+            + f" & {on_cell:<16}"
+            + f" & {off_cell:<16}"
+            + f" & {h_cell:>7}"
+            + f" & {time_cell:>17}"
+            + f" & {tok_cell:<15} \\\\"
         )
     lines.append(r"    \hline")
     lines.append(r"\end{tabular}")
