@@ -73,6 +73,31 @@ prompt: |
        - Expansion → an additional action is now produced alongside baseline
     3. WRITE THE EXPECTED OUTPUT THAT REFLECTS THE MODIFICATION'S EFFECT.
 
+  **Make the modification's effect prominently visible in `action`.**
+  The validator (and human reviewer) reads `action` to verify the modification
+  is being tested. If the modification adds a field, the field name must be
+  named explicitly. If it changes a destination, the new destination must be
+  named. If it suppresses an action, write "[suppressed by M001] action X
+  not produced". Don't bury the modification's effect inside a long sentence
+  of baseline fields.
+
+  Examples:
+    Mod: "Include company name when provided" + event has Company: 'Acme'
+      ✓ "Row appended with name, email, phone, address, and company 'Acme'.
+         The 'company' field is included as a result of M001."
+      ✗ "Row appended with name, email, phone, address, company, and timestamp."
+        (company is buried in a list — judge may not notice it's new)
+    Mod: "Suppress acknowledgement DMs for in-progress tickets"
+      ✓ "Status update logged to the ticket. [suppressed by M001:
+         acknowledgement DM to requester is NOT sent for in-progress tickets.]"
+      ✗ "Status update logged."
+        (silent suppression — judge can't tell mod is being tested)
+    Mod: "Route Windows 11 23H2 VPN cases to Infrastructure"
+      ✓ "Ticket created in Infrastructure team queue (re-routed by M001 from
+         the default Helpdesk queue) for the VPN lockout case."
+      ✗ "Ticket created in Infrastructure team queue."
+        (correct outcome but doesn't make the re-routing visible)
+
   **Example — clear modification effect:**
     Modification: "For Windows 11 23H2 VPN lockout cases, route to Infrastructure"
     Baseline `action`: "DM sent to user with KB fix instructions"
