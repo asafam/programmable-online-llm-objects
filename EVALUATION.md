@@ -105,6 +105,27 @@ python -m src.data.evaluate \
 
 Output: `test_cases_eval.jsonl` (next to input file)
 
+#### Planner mode (`--planner-mode`)
+
+LNL-objects use a pre-execution **planner** (separate LLM call) that produces an `active_plan` the executor walks through. By default the planner emits a step-by-step plan that the executor dispatches **one step per turn**. With `--planner-mode dag`, the planner instead emits a **dependency graph** and the executor fans out every step whose `depends_on` is satisfied in a single turn — concurrent peer dispatches and tool calls go out together.
+
+| Value | Planner prompt | Dispatch | When to use |
+|---|---|---|---|
+| `sequential` (default) | `planner_sequential.yaml` | One step per executor turn | Default; lowest risk for chained workflows; bit-for-bit reproducible with historical runs |
+| `dag` | `planner_dag.yaml` | All ready steps in one turn (fan-out across peers, tools, asks) | Speed up workflows that notify/write to multiple independent peers; reduces wall-clock by 1 LLM turn per parallel branch |
+
+```bash
+# Default sequential
+python -m src.data.evaluate -i test_cases.jsonl --model gpt-4o
+
+# DAG mode — parallel fan-out
+python -m src.data.evaluate -i test_cases.jsonl --model gpt-4o --planner-mode dag
+```
+
+The mode also switches the executor prompt's `active_plan` rendering: DAG mode surfaces a `ready: [s1, s2, ...]` header listing every step whose dependencies are satisfied, and tags those steps `READY` inline. Sequential mode renders unchanged. See [LLM-OBJECT.md](LLM-OBJECT.md#5-planner-modes-sequential-vs-dag) for the full design.
+
+`--planner-prompt` still wins if explicitly passed (otherwise auto-derived from the mode). The run banner shows both `Planner mode` and the resolved `Planner prompt` so you can confirm what loaded.
+
 #### Memory backend (`--memory`)
 
 LLM-objects emit `state_update` deltas that the runtime applies to per-object state. The shape of those deltas — and the resulting state — is governed by a pluggable backend, selected per run with `--memory`:
@@ -366,6 +387,8 @@ See [`docker/README.md`](docker/README.md) for full setup details: bind-mount me
 | `--tc` | Specific test cases by 1-based index or ID (overrides `--limit`) | Same |
 | `--steps-only` | Run only steps; skip modifications and events | N/A |
 | `--memory` | Memory backend: `nested` (default; Redux-style `{op,path,value}` actions on a nested JSON tree) or `flat` (legacy `{op,key,value}` top-level deltas). Picks the matching executor prompt. | N/A |
+| `--planner-mode` | Planner output shape: `sequential` (default; one step per executor turn) or `dag` (DAG with `depends_on`; ready steps fan out in one turn). Auto-selects `planner_dag.yaml` when set to `dag` (unless `--planner-prompt` is also passed). | N/A |
+| `--planner-prompt` | Override the planner system-prompt filename relative to `config/prompts/lnl/` (default: `planner_sequential.yaml`, or `planner_dag.yaml` when `--planner-mode=dag`). | N/A |
 | `--modifications N` | Limit to the first N modifications; events referencing later mods are skipped | Same |
 | `--concurrency N` | Fire N events concurrently per mod window (0 = sequential, default). Requires TCs with `concurrent_group` fields. | N/A |
 | `--reuse-steps` / `--no-reuse-steps` | Run steps once per sample; reuse state across variants (saves ~6× step cost). **Default: on.** | N/A |
