@@ -69,7 +69,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v19): add --planner-mode {sequential,dag} flag for concurrent step dispatch
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v21): rename planner.yaml -> planner_sequential.yaml; --planner-prompt default updated
 
 from src.data.schema import (
     EvalSummary,
@@ -387,7 +387,7 @@ def _execute_test_case_inner(
     concurrency_seed: int = 42,
     max_modifications: Optional[int] = None,
     object_prompt: Optional[str] = None,
-    planner_prompt: str = "planner.yaml",
+    planner_prompt: str = "planner_sequential.yaml",
     max_history: Optional[int] = None,
     tracked_harness=None,
     enable_code_tool: bool = True,
@@ -486,7 +486,7 @@ def _execute_test_case_inner(
     # default (executor.yaml for flat, executor_nested.yaml for nested).
     if object_prompt is not None:
         rt.set_prompt_file(object_prompt)
-    if planner_prompt != "planner.yaml":
+    if planner_prompt != "planner_sequential.yaml":
         rt.set_planner_prompt_file(planner_prompt)
     if max_history is not None:
         rt.set_max_history(max_history)
@@ -1126,7 +1126,7 @@ def execute_test_case(
     concurrency_seed: int = 42,
     max_modifications: Optional[int] = None,
     object_prompt: Optional[str] = None,
-    planner_prompt: str = "planner.yaml",
+    planner_prompt: str = "planner_sequential.yaml",
     max_history: Optional[int] = None,
     tracked_harness=None,
     enable_code_tool: bool = True,
@@ -1498,8 +1498,8 @@ def run(args: argparse.Namespace) -> Path:
     else:
         evaluator_label = "(disabled)"
     planner_mode = getattr(args, "planner_mode", "sequential")
-    planner_prompt_display = getattr(args, "planner_prompt", "planner.yaml")
-    if planner_mode == "dag" and planner_prompt_display == "planner.yaml":
+    planner_prompt_display = getattr(args, "planner_prompt", "planner_sequential.yaml")
+    if planner_mode == "dag" and planner_prompt_display == "planner_sequential.yaml":
         # Mode auto-selects planner_dag.yaml unless --planner-prompt was explicit.
         planner_prompt_display = "planner_dag.yaml"
     extra_info = {
@@ -1755,7 +1755,7 @@ def run(args: argparse.Namespace) -> Path:
                 concurrency_seed=getattr(args, "seed", None) or 42,
                 max_modifications=getattr(args, "modifications", None),
                 object_prompt=getattr(args, "object_prompt", None),
-                planner_prompt=getattr(args, "planner_prompt", "planner.yaml"),
+                planner_prompt=getattr(args, "planner_prompt", "planner_sequential.yaml"),
                 memory_backend=getattr(args, "memory", "nested"),
                 max_history=getattr(args, "max_history", None),
                 tracked_harness=tracked_harness,
@@ -2484,8 +2484,8 @@ Examples:
     )
     parser.add_argument(
         "--planner-prompt",
-        default="planner.yaml",
-        help="Planner system-prompt template filename relative to config/prompts/lnl/ (default: planner.yaml).",
+        default="planner_sequential.yaml",
+        help="Planner system-prompt template filename relative to config/prompts/lnl/ (default: planner_sequential.yaml; auto-replaced by planner_dag.yaml when --planner-mode=dag).",
     )
     parser.add_argument(
         "--planner-mode",

@@ -298,7 +298,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v23): companion bump for evaluate.py v19 — no functional change to baseline
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v25): companion bump for evaluate.py v21 — planner.yaml -> planner_sequential.yaml rename
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
@@ -2492,7 +2492,7 @@ async def _run_all_tcs_concurrent(
                                 await _wait_for_gateway_restart(
                                     slot_gateway_url, None,
                                     drop_timeout_s=15.0,
-                                    ready_timeout_s=45.0,
+                                    ready_timeout_s=120.0,
                                     stable_for_s=5.0,
                                 )
                             # Delete BOOTSTRAP.md so the gateway doesn't run its
