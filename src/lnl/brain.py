@@ -217,27 +217,6 @@ LLM_REACT_SCHEMA: dict[str, Any] = {
                         "additionalProperties": False,
                     },
                 },
-                "updated_definition": {
-                    "type": "object",
-                    "description": "Optional. Only include when responding to an Admin message that changes your behavior. Include only the fields that change: role, behavior, peers.",
-                    "properties": {
-                        "role": {"type": "string"},
-                        "behavior": {"type": "string"},
-                        "peers": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "object_id": {"type": "string"},
-                                    "relationship": {"type": "string"},
-                                },
-                                "required": ["object_id", "relationship"],
-                                "additionalProperties": False,
-                            },
-                        },
-                    },
-                    "additionalProperties": False,
-                },
                 "knowledge_gap": {
                     "type": "object",
                     "description": (
@@ -437,6 +416,7 @@ def build_planner_prompt(
     current_state,  # str (from LLM) or dict (from mock scripts)
     message,  # Message
     prompt_file: str = "planner_sequential.yaml",
+    tools: str = "",
 ) -> str:
     """Build the planner system prompt from `planner_sequential.yaml` (the sequential default).
 
@@ -460,6 +440,7 @@ def build_planner_prompt(
         role=definition.role,
         behavior=definition.behavior or "(none)",
         peers=peers,
+        tools=tools or "(none)",
         current_state=state_str,
         sender=getattr(message, "sender", "(unknown)"),
         message_type=getattr(message, "type", "(unknown)").value if hasattr(getattr(message, "type", None), "value") else str(getattr(message, "type", "")),
@@ -621,6 +602,32 @@ def build_wait_matcher_prompt(
         event_source=sender,
         event_content=content,
         candidates=candidates_str,
+    )
+
+
+def build_admin_prompt(
+    definition: ObjectDefinition,
+    prompt_file: str = "object_admin.yaml",
+) -> str:
+    """Build the admin system prompt from `object_admin.yaml`.
+
+    The admin prompt is a single-shot transform: the LLM sees the current
+    definition and the administrator's NL instruction (passed separately as
+    the inbound user message), and returns a patch with only the changed
+    fields. No history, no tools, no React loop.
+    """
+    config = _load_prompt_config(prompt_file)
+    template = config["system_prompt"]
+
+    peers = "\n".join(f"- {p.object_id}: {p.relationship}" for p in definition.peers) or "(none)"
+    skills = "\n".join(f"- {s}" for s in definition.skills) or "(none)"
+
+    return template.format(
+        object_id=definition.object_id,
+        role=definition.role,
+        behavior=definition.behavior or "(none)",
+        peers=peers,
+        skills=skills,
     )
 
 
@@ -888,6 +895,49 @@ PLANNER_RESPONSE_SCHEMA: dict[str, Any] = {
 }
 
 
+ADMIN_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "thought": {"type": "string", "description": "Brief reasoning about which fields the admin's instruction changes."},
+        "finish": {
+            "type": "object",
+            "properties": {
+                "reply": {"type": "string", "description": "Short confirmation or clarifying question for the administrator."},
+                "updated_definition": {
+                    "type": "object",
+                    "description": "Patch with ONLY the changed fields. Omit entirely when asking for clarification.",
+                    "properties": {
+                        "role": {"type": "string"},
+                        "behavior": {"type": "string"},
+                        "peers": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "object_id": {"type": "string"},
+                                    "relationship": {"type": "string"},
+                                },
+                                "required": ["object_id", "relationship"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "skills": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["reply"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["thought", "finish"],
+    "additionalProperties": False,
+}
+
+
 WAIT_MATCHER_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -977,6 +1027,26 @@ class LLMBrain(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} does not implement evaluate_call. "
             "Use OpenAIBrain or AzureBrain, or override evaluate_call."
+        )
+
+    def admin_call(
+        self,
+        system_prompt: str,
+        admin_message: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        """One admin call: a single LLM transform that parses an admin
+        instruction and returns a definition patch.
+
+        Returns the raw dict matching ADMIN_RESPONSE_SCHEMA — caller extracts
+        `finish.reply` and the optional `finish.updated_definition` patch.
+        Subclasses override for efficiency.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement admin_call. "
+            "Use OpenAIBrain, AzureBrain, AnthropicBrain, or MockBrain, "
+            "or override admin_call."
         )
 
     def match_wait_call(
@@ -1166,6 +1236,45 @@ class OpenAIBrain(LLMBrain):
         if choice.finish_reason == "length":
             raise RuntimeError(
                 f"OpenAI evaluator response truncated for object {object_id}."
+            )
+        raw = _safe_json_loads(choice.message.content or "{}")
+        return raw, metrics
+
+    def admin_call(
+        self,
+        system_prompt: str,
+        admin_message: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"[Admin]: {admin_message}"},
+            ],
+            "temperature": self._temperature,
+            "max_completion_tokens": 4000,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "admin_response", "schema": ADMIN_RESPONSE_SCHEMA},
+            },
+        }
+        if self._seed is not None:
+            kwargs["seed"] = self._seed
+        t0 = time.time()
+        resp = self._client.chat.completions.create(**kwargs)
+        latency_ms = (time.time() - t0) * 1000
+        metrics = InferenceMetrics(
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                f"OpenAI admin response truncated for object {object_id}."
             )
         raw = _safe_json_loads(choice.message.content or "{}")
         return raw, metrics
@@ -1402,6 +1511,49 @@ class AzureBrain(LLMBrain):
         if choice.finish_reason == "length":
             raise RuntimeError(
                 f"Azure evaluator response truncated for object {object_id}."
+            )
+        raw = _safe_json_loads(choice.message.content or "{}")
+        return raw, metrics
+
+    def admin_call(
+        self,
+        system_prompt: str,
+        admin_message: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"[Admin]: {admin_message}"},
+            ],
+            "temperature": self._temperature,
+            "max_completion_tokens": 4000,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "admin_response", "schema": ADMIN_RESPONSE_SCHEMA},
+            },
+        }
+        if self._seed is not None:
+            kwargs["seed"] = self._seed
+        try:
+            t0 = time.time()
+            resp = self._client.chat.completions.create(**kwargs)
+            latency_ms = (time.time() - t0) * 1000
+        except Exception as exc:
+            self._raise_if_content_filter(exc, object_id)
+            raise
+        metrics = InferenceMetrics(
+            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
+            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        choice = resp.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                f"Azure admin response truncated for object {object_id}."
             )
         raw = _safe_json_loads(choice.message.content or "{}")
         return raw, metrics
@@ -1643,6 +1795,47 @@ class AnthropicBrain(LLMBrain):
             raw = {}
         return _parse_react_step(raw, self.memory_backend), metrics
 
+    def admin_call(
+        self,
+        system_prompt: str,
+        admin_message: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        strict_schema = json.loads(json.dumps(ADMIN_RESPONSE_SCHEMA))
+        self._enforce_strict_schema(strict_schema)
+
+        t0 = time.time()
+        resp = self._client.messages.create(
+            model=self.model,
+            max_tokens=4000,
+            temperature=self._temperature,
+            system=system_prompt,
+            messages=[{"role": "user", "content": f"[Admin]: {admin_message}"}],
+            output_config={
+                "format": {
+                    "type": "json_schema",
+                    "schema": strict_schema,
+                },
+            },
+            **self._thinking_kwargs(),
+        )
+        latency_ms = (time.time() - t0) * 1000
+
+        metrics = InferenceMetrics(
+            input_tokens=getattr(resp.usage, "input_tokens", 0) if resp.usage else 0,
+            output_tokens=getattr(resp.usage, "output_tokens", 0) if resp.usage else 0,
+            latency_ms=latency_ms,
+            model=self.model,
+        )
+        if resp.stop_reason == "max_tokens":
+            raise RuntimeError(
+                f"Anthropic admin response truncated for object {object_id}."
+            )
+        content_str = "".join(block.text for block in resp.content if hasattr(block, "text"))
+        raw = _safe_json_loads(content_str or "{}")
+        return raw, metrics
+
 
 class GeminiBrain(LLMBrain):
     """Brain backed by the Google Gemini API."""
@@ -1764,6 +1957,10 @@ class MockBrain(LLMBrain):
         # Wait-matcher queue: list of {'match': '<trace_id>:<step_index>' | None,
         # 'reasoning': '...'} payloads consumed in FIFO order.
         self._wait_match_queue: list[dict] = []
+        # Admin-call queue: dicts shaped per ADMIN_RESPONSE_SCHEMA, consumed FIFO.
+        # Per-object scripts take precedence over the global queue.
+        self._admin_scripts: dict[str, list[dict]] = {}
+        self._admin_queue: list[dict] = []
 
     def script(
         self,
@@ -1840,6 +2037,26 @@ class MockBrain(LLMBrain):
         '<trace_id>:<step_index>' or None."""
         self._wait_match_queue.append({"match": match, "reasoning": reasoning})
 
+    def script_admin(
+        self,
+        reply: str,
+        updated_definition: Optional[dict] = None,
+        object_id: Optional[str] = None,
+    ) -> None:
+        """Enqueue a scripted admin-call response shaped per ADMIN_RESPONSE_SCHEMA.
+
+        `updated_definition` is included only when non-None — None signals an
+        ambiguous/clarification turn where no patch is applied.
+        """
+        finish: dict[str, Any] = {"reply": reply}
+        if updated_definition is not None:
+            finish["updated_definition"] = updated_definition
+        payload = {"thought": "mock admin", "finish": finish}
+        if object_id:
+            self._admin_scripts.setdefault(object_id, []).append(payload)
+        else:
+            self._admin_queue.append(payload)
+
     def plan_call(
         self,
         system_prompt: str,
@@ -1866,6 +2083,24 @@ class MockBrain(LLMBrain):
         # No script: behave like "no match" — safe default that exercises
         # the fall-through path without forcing every test to script it.
         return {"match": None, "reasoning": "mock: no script"}, InferenceMetrics(model="mock")
+
+    def admin_call(
+        self,
+        system_prompt: str,
+        admin_message: str,
+        *,
+        object_id: str | None = None,
+    ) -> tuple[dict, InferenceMetrics]:
+        if object_id is not None:
+            entries = self._admin_scripts.get(object_id, [])
+            if entries:
+                return entries.pop(0), InferenceMetrics(model="mock")
+        if self._admin_queue:
+            return self._admin_queue.pop(0), InferenceMetrics(model="mock")
+        raise NotImplementedError(
+            "MockBrain.admin_call: no scripted admin response available "
+            f"(object_id={object_id})"
+        )
 
     def react_call(
         self,

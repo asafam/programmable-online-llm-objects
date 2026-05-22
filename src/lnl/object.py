@@ -810,6 +810,7 @@ class LLMObject:
                     planner_prompt = build_planner_prompt(
                         self._definition, self._state, message,
                         prompt_file=self._planner_prompt_file,
+                        tools=self._tool_registry.describe() if self._tool_registry else "",
                     )
                     plan_dict, planner_metrics = self._planner_brain.plan_call(
                         planner_prompt, object_id=self.object_id,

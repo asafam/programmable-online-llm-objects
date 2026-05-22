@@ -18,6 +18,9 @@ system_prompt: |
   ## Declared peers (the ONLY object_ids you may target for tell/ask steps)
   {peers}
 
+  ## Registered tools (the ONLY tool names you may use in tool steps)
+  {tools}
+
   ## Current state (operational state at this moment)
   {current_state}
 
