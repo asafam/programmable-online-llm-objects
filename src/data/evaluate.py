@@ -69,7 +69,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v13): label truncation component (planner/executor/evaluator); abort sample on infra-error; any-event infra-check (was all-events)
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v15): companion bump for analyze_results / plot_mod_types defensive event-level infra_error filtering (no behavior change in evaluate.py — already filtered via not e.infra_error)
 
 from src.data.schema import (
     EvalSummary,
@@ -1239,9 +1239,26 @@ def _print_verbose(tc_result: SampleResult, show_evidence: bool = False) -> None
         _print_event_result(ev, show_evidence=show_evidence)
 
 
+# ── Pricing ────────────────────────────────────────────────────────────────────
+
+# (input $/1M, output $/1M)
+_MODEL_PRICES: dict[str, tuple[float, float]] = {
+    "gpt-5.4-mini": (0.75, 1.5),
+    "gpt-5.4":      (2.5,  5.0),
+}
+
+
+def _compute_cost(in_tok: int, out_tok: int, model: str) -> Optional[float]:
+    prices = _MODEL_PRICES.get(model)
+    if prices is None:
+        return None
+    return in_tok / 1_000_000 * prices[0] + out_tok / 1_000_000 * prices[1]
+
+
 # ── Main runner ────────────────────────────────────────────────────────────────
 
-def _print_summary(summary, output_path=None, elapsed_s=None) -> None:
+def _print_summary(summary, output_path=None, elapsed_s=None,
+                   agent_model: str = None, judge_model: str = None) -> None:
     """Print a human-readable summary of evaluation results."""
     def _fmt(v) -> str:
         return f"{v:.4f}" if v is not None else "N/A"
@@ -1254,7 +1271,7 @@ def _print_summary(summary, output_path=None, elapsed_s=None) -> None:
     def _fmt_mod(conclusive, conclusive_me, all_val, all_me) -> str:
         if not has_inconclusive:
             return _fmts(conclusive, conclusive_me)
-        return f"{_fmts(conclusive, conclusive_me)}  ({summary.inconclusive_tcs} inconclusive TCs excluded; all: {_fmts(all_val, all_me)})"
+        return f"{_fmts(all_val, all_me)}  (conclusive only: {_fmts(conclusive, conclusive_me)}, {summary.inconclusive_tcs} inconclusive excluded)"
 
     if output_path:
         print(f"Complete. Output: {output_path}")
@@ -1299,6 +1316,14 @@ def _print_summary(summary, output_path=None, elapsed_s=None) -> None:
         print(f"  evaluator:         {summary.total_evaluator_input_tokens:,} in / {summary.total_evaluator_output_tokens:,} out")
     print(f"Judge tokens:        {summary.total_judge_input_tokens:,} in / {summary.total_judge_output_tokens:,} out"
           f"  (mean/event: {summary.total_judge_input_tokens/n_events:.0f} in / {summary.total_judge_output_tokens/n_events:.0f} out)")
+    agent_cost = _compute_cost(summary.total_agent_input_tokens, summary.total_agent_output_tokens, agent_model or "")
+    judge_cost = _compute_cost(summary.total_judge_input_tokens, summary.total_judge_output_tokens, judge_model or "")
+    if agent_cost is not None or judge_cost is not None:
+        agent_str = f"${agent_cost:.2f}" if agent_cost is not None else "unknown model"
+        judge_str = f"${judge_cost:.2f}" if judge_cost is not None else "unknown model"
+        total = (agent_cost or 0) + (judge_cost or 0)
+        print(f"Cost:                ${total:.2f} total  "
+              f"(agent: {agent_str}  judge: {judge_str})")
 
 
 def _warn_continuation_mismatch(output_path: Path, args: argparse.Namespace) -> None:
@@ -1900,7 +1925,8 @@ def run(args: argparse.Namespace) -> Path:
         f.write(summary.model_dump_json() + "\n")
 
     print()
-    _print_summary(summary, output_path=args.output, elapsed_s=time.monotonic() - eval_start)
+    _print_summary(summary, output_path=args.output, elapsed_s=time.monotonic() - eval_start,
+                   agent_model=args.model, judge_model=args.judge_model)
     if mock_server is not None:
         mock_server.stop()
     sys.stdout.flush()

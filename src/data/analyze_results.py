@@ -150,6 +150,7 @@ class FlatEvent:
     judge_output_tokens: int
     latency_ms: float
     observed_chain_depth: int = 0  # max peer-message hop depth extracted from evidence
+    infra_error: bool = False  # event hit a technical failure (timeout, content filter, post-error taint)
 
 
 @dataclass
@@ -240,12 +241,22 @@ def _extract_mod_type(tc_id: str) -> str:
     return "base"
 
 
-def build_analysis_data(bundles: list[ResultBundle]) -> AnalysisData:
+def build_analysis_data(bundles: list[ResultBundle], include_infra: bool = False) -> AnalysisData:
+    """Flatten event records across bundles for downstream analysis.
+
+    By default, events flagged `infra_error=True` are EXCLUDED from `flat_events`
+    so every aggregation (role pass rates, complexity charts, etc.) operates on
+    clean behavioral measurements. Set include_infra=True to retain them for
+    diagnostic purposes (e.g., counting infra rate per bundle).
+    """
     flat_events: list[FlatEvent] = []
     for bundle in bundles:
         for tc in bundle.tc_results:
             n_ev = len(tc.events)
             for ev in tc.events:
+                infra = bool(getattr(ev, "infra_error", False))
+                if infra and not include_infra:
+                    continue
                 metrics = _extract_interaction_metrics(ev.evidence or "")
                 flat_events.append(FlatEvent(
                     tc_id=tc.tc_id,
@@ -264,6 +275,7 @@ def build_analysis_data(bundles: list[ResultBundle]) -> AnalysisData:
                     judge_output_tokens=ev.judge_output_tokens,
                     latency_ms=ev.latency_ms,
                     observed_chain_depth=metrics.chain_depth,
+                    infra_error=infra,
                 ))
     return AnalysisData(bundles=bundles, flat_events=flat_events)
 

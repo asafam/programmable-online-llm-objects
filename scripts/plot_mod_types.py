@@ -175,7 +175,11 @@ def _extract_mod_type(tc_id: str) -> Optional[str]:
 def load_mod_rates(path: Path, metric: str) -> dict[str, tuple[float, float, int]]:
     """Return {mod_type: (mean_pass_rate, std_pass_rate, n_tcs)}.
 
-    Infra errors (infra_error=True on events) are excluded.
+    Excludes:
+      - TC-level infra/timeout failures (OC baseline sets `error_type`).
+      - Event-level infra failures via `infra_error=True` (LNL flags these on the
+        event, not the TC).
+      - Reasoning-pattern infra failures (older eval files without persisted flags).
     For 'mean': all non-step events count.
     For 'post_mod' / 'pre_mod' / 'irrelevant': only events with that role.
     """
@@ -206,10 +210,11 @@ def load_mod_rates(path: Path, metric: str) -> dict[str, tuple[float, float, int
                 # exclude step events (id matches S\d+) for mean metric
                 events = [e for e in events if not re.match(r"^S\d+$", e.get("event_id", ""))]
 
-            # Exclude infra+wiring failures (both oc_eval and infra_provider classes).
-            # Keeps passed + behavioral failures, which is the cleanest measure of
-            # agent quality. Works on both new (failure_class persisted) and old
-            # (reasoning-regex fallback) eval files.
+            # Defensive event-level infra filter (covers LNL records where TC-level
+            # error_type is unset but per-event infra_error is True).
+            events = [e for e in events if not e.get("infra_error", False)]
+
+            # Reasoning-pattern fallback for old eval files without persisted flags.
             events = [e for e in events if _classify_event(e) not in ("oc_eval", "infra_provider")]
 
             if not events:
@@ -266,7 +271,9 @@ def compute_table_row(path: Path) -> dict:
     # requires uniform R per TC; mixed R biases H̄).
     infra_tainted_tcs: set[str] = set()
 
-    # First pass: identify TCs with any infra/timeout run
+    # First pass: identify TCs with any infra/timeout run.
+    # A TC is tainted if EITHER the TC-level error_type is infra/timeout (OC baseline)
+    # OR any event in the TC has infra_error=True (LNL flags errors at the event level).
     with open(path) as f:
         for line in f:
             line = line.strip()
@@ -276,7 +283,12 @@ def compute_table_row(path: Path) -> dict:
                 d = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if "tc_id" in d and d.get("error_type") in ("infra", "timeout"):
+            if "tc_id" not in d:
+                continue
+            if d.get("error_type") in ("infra", "timeout"):
+                infra_tainted_tcs.add(d["tc_id"])
+                continue
+            if any(e.get("infra_error") for e in (d.get("events") or [])):
                 infra_tainted_tcs.add(d["tc_id"])
 
     with open(path) as f:
@@ -504,6 +516,7 @@ def compute_table_by_objects(path: Path, tc_objects: dict[str, int]) -> dict[str
 
             for e in (d.get("events") or []):
                 if e.get("passed") is None: continue
+                if e.get("infra_error"): continue  # LNL event-level infra flag
                 if _classify_event(e) in ("oc_eval", "infra_provider"): continue
                 role = e.get("role")
                 if role is None:
