@@ -916,5 +916,423 @@ export default definePluginEntry({
         return { content: [{ type: "text", text: result }], details: {} };
       },
     });
+
+    // ── OpenAI ───────────────────────────────────────────────────────────────
+    api.registerTool({
+      name: "openai_chat_completion",
+      label: "OpenAI: Chat Completion",
+      description: "Invoke the OpenAI/ChatGPT API to generate a text completion.",
+      parameters: Type.Object({
+        prompt: Type.String({ description: "The prompt or user message to send" }),
+        model: Type.Optional(Type.String({ description: "Model name (default: gpt-4o)" })),
+        system: Type.Optional(Type.String({ description: "System prompt" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("openai_chat_completion", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "openai_generate_audio",
+      label: "OpenAI: Generate Audio",
+      description: "Invoke the OpenAI voice/TTS API to generate an audio file from text.",
+      parameters: Type.Object({
+        text: Type.String({ description: "The text to convert to speech" }),
+        voice: Type.Optional(Type.String({ description: "Voice name (e.g. alloy, echo, nova)" })),
+        format: Type.Optional(Type.String({ description: "Output format: mp3, wav (default: mp3)" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("openai_generate_audio", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "openai_text_to_speech",
+      label: "OpenAI: Text to Speech",
+      description: "Convert text to speech using OpenAI TTS.",
+      parameters: Type.Object({
+        input: Type.String({ description: "Text to synthesize" }),
+        voice: Type.Optional(Type.String({ description: "Voice name" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("openai_text_to_speech", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    // ── Google Drive ─────────────────────────────────────────────────────────
+    api.registerTool({
+      name: "drive_upload_file",
+      label: "Google Drive: Upload File",
+      description: "Upload a file to Google Drive.",
+      parameters: Type.Object({
+        filename: Type.String({ description: "File name including extension" }),
+        content: Type.Optional(Type.String({ description: "File content or base64-encoded binary" })),
+        folder_id: Type.Optional(Type.String({ description: "Destination folder ID" })),
+        mime_type: Type.Optional(Type.String({ description: "MIME type of the file" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("drive_upload_file", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "drive_create_file",
+      label: "Google Drive: Create File",
+      description: "Create a new file in Google Drive.",
+      parameters: Type.Object({
+        filename: Type.String({ description: "File name" }),
+        content: Type.Optional(Type.String({ description: "File content" })),
+        folder_id: Type.Optional(Type.String({ description: "Parent folder ID" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("drive_create_file", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "drive_get_file",
+      label: "Google Drive: Get File",
+      description: "Get metadata for a Google Drive file.",
+      parameters: Type.Object({
+        file_id: Type.String({ description: "Google Drive file ID" }),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("drive_get_file", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "drive_list_files",
+      label: "Google Drive: List Files",
+      description: "List files in a Google Drive folder.",
+      parameters: Type.Object({
+        folder_id: Type.Optional(Type.String({ description: "Folder ID to list (default: root)" })),
+        query: Type.Optional(Type.String({ description: "Search query" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("drive_list_files", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    // ── Zendesk ──────────────────────────────────────────────────────────────
+    api.registerTool({
+      name: "zendesk_create_ticket",
+      label: "Zendesk: Create Ticket",
+      description: "Create a new Zendesk support ticket.",
+      parameters: Type.Object({
+        subject: Type.String({ description: "Ticket subject" }),
+        description: Type.String({ description: "Ticket description" }),
+        priority: Type.Optional(Type.String({ description: "Priority: low, normal, high, urgent" })),
+        requester_email: Type.Optional(Type.String({ description: "Requester email" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("zendesk_create_ticket", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "zendesk_update_ticket",
+      label: "Zendesk: Update Ticket",
+      description: "Update the status or fields of a Zendesk ticket.",
+      parameters: Type.Object({
+        ticket_id: Type.String({ description: "Zendesk ticket ID" }),
+        status: Type.Optional(Type.String({ description: "New status: open, pending, solved, closed" })),
+        comment: Type.Optional(Type.String({ description: "Comment to add" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("zendesk_update_ticket", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "zendesk_add_note",
+      label: "Zendesk: Add Internal Note",
+      description: "Add an internal note to a Zendesk ticket.",
+      parameters: Type.Object({
+        ticket_id: Type.String({ description: "Zendesk ticket ID" }),
+        note: Type.String({ description: "Internal note text" }),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("zendesk_add_note", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "zendesk_get_ticket",
+      label: "Zendesk: Get Ticket",
+      description: "Get details of a Zendesk ticket.",
+      parameters: Type.Object({
+        ticket_id: Type.String({ description: "Zendesk ticket ID" }),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("zendesk_get_ticket", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    // ── Intercom ─────────────────────────────────────────────────────────────
+    api.registerTool({
+      name: "intercom_send_message",
+      label: "Intercom: Send Message",
+      description: "Send a message in an Intercom conversation.",
+      parameters: Type.Object({
+        conversation_id: Type.String({ description: "Intercom conversation ID" }),
+        message: Type.String({ description: "Message text to send" }),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("intercom_send_message", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "intercom_reply_conversation",
+      label: "Intercom: Reply to Conversation",
+      description: "Reply to an Intercom conversation.",
+      parameters: Type.Object({
+        conversation_id: Type.String({ description: "Intercom conversation ID" }),
+        reply: Type.String({ description: "Reply text" }),
+        reply_type: Type.Optional(Type.String({ description: "Reply type: comment or note" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("intercom_reply_conversation", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "intercom_get_conversation",
+      label: "Intercom: Get Conversation",
+      description: "Get details of an Intercom conversation.",
+      parameters: Type.Object({
+        conversation_id: Type.String({ description: "Intercom conversation ID" }),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("intercom_get_conversation", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    // ── Pipedrive ─────────────────────────────────────────────────────────────
+    api.registerTool({
+      name: "pipedrive_create_deal",
+      label: "Pipedrive: Create Deal",
+      description: "Create a new deal in Pipedrive.",
+      parameters: Type.Object({
+        title: Type.String({ description: "Deal title" }),
+        value: Type.Optional(Type.Number({ description: "Deal value" })),
+        currency: Type.Optional(Type.String({ description: "Currency code (e.g. USD)" })),
+        stage: Type.Optional(Type.String({ description: "Pipeline stage name" })),
+        person_name: Type.Optional(Type.String({ description: "Associated person name" })),
+        organization: Type.Optional(Type.String({ description: "Associated organization name" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("pipedrive_create_deal", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "pipedrive_update_deal",
+      label: "Pipedrive: Update Deal",
+      description: "Update an existing Pipedrive deal.",
+      parameters: Type.Object({
+        deal_id: Type.String({ description: "Pipedrive deal ID" }),
+        title: Type.Optional(Type.String({ description: "New deal title" })),
+        stage: Type.Optional(Type.String({ description: "New stage" })),
+        status: Type.Optional(Type.String({ description: "New status" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("pipedrive_update_deal", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "pipedrive_get_deal",
+      label: "Pipedrive: Get Deal",
+      description: "Get details of a Pipedrive deal.",
+      parameters: Type.Object({
+        deal_id: Type.String({ description: "Pipedrive deal ID" }),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("pipedrive_get_deal", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    // ── Google Contacts ───────────────────────────────────────────────────────
+    api.registerTool({
+      name: "google_contacts_create",
+      label: "Google Contacts: Create Contact",
+      description: "Create a new Google Contact.",
+      parameters: Type.Object({
+        name: Type.String({ description: "Contact full name" }),
+        email: Type.Optional(Type.String({ description: "Email address" })),
+        phone: Type.Optional(Type.String({ description: "Phone number" })),
+        notes: Type.Optional(Type.String({ description: "Additional notes" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("google_contacts_create", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "google_contacts_update",
+      label: "Google Contacts: Update Contact",
+      description: "Update an existing Google Contact.",
+      parameters: Type.Object({
+        resource_name: Type.String({ description: "Contact resource name (e.g. people/123)" }),
+        name: Type.Optional(Type.String({ description: "New display name" })),
+        email: Type.Optional(Type.String({ description: "New email address" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("google_contacts_update", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "google_contacts_get",
+      label: "Google Contacts: Get Contact",
+      description: "Get a Google Contact by resource name.",
+      parameters: Type.Object({
+        resource_name: Type.String({ description: "Contact resource name" }),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("google_contacts_get", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    // ── ClickUp ───────────────────────────────────────────────────────────────
+    api.registerTool({
+      name: "clickup_create_task",
+      label: "ClickUp: Create Task",
+      description: "Create a new task in ClickUp.",
+      parameters: Type.Object({
+        name: Type.String({ description: "Task name" }),
+        space: Type.Optional(Type.String({ description: "Space or list name" })),
+        description: Type.Optional(Type.String({ description: "Task description" })),
+        priority: Type.Optional(Type.String({ description: "Priority: urgent, high, normal, low" })),
+        assignees: Type.Optional(Type.String({ description: "Comma-separated assignee names or IDs" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("clickup_create_task", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "clickup_update_task",
+      label: "ClickUp: Update Task",
+      description: "Update an existing ClickUp task.",
+      parameters: Type.Object({
+        task_id: Type.String({ description: "ClickUp task ID" }),
+        status: Type.Optional(Type.String({ description: "New status" })),
+        name: Type.Optional(Type.String({ description: "New task name" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("clickup_update_task", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "clickup_get_task",
+      label: "ClickUp: Get Task",
+      description: "Get details of a ClickUp task.",
+      parameters: Type.Object({
+        task_id: Type.String({ description: "ClickUp task ID" }),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("clickup_get_task", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "clickup_add_comment",
+      label: "ClickUp: Add Comment",
+      description: "Add a comment to a ClickUp task.",
+      parameters: Type.Object({
+        task_id: Type.String({ description: "ClickUp task ID" }),
+        comment: Type.String({ description: "Comment text" }),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("clickup_add_comment", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    // ── DocuSign ──────────────────────────────────────────────────────────────
+    api.registerTool({
+      name: "docusign_create_envelope",
+      label: "DocuSign: Create Envelope",
+      description: "Create and send a DocuSign envelope for signature.",
+      parameters: Type.Object({
+        subject: Type.String({ description: "Email subject for the envelope" }),
+        document_name: Type.Optional(Type.String({ description: "Document name" })),
+        signer_email: Type.Optional(Type.String({ description: "Signer email address" })),
+        signer_name: Type.Optional(Type.String({ description: "Signer name" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("docusign_create_envelope", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "docusign_generate_document",
+      label: "DocuSign: Generate Document",
+      description: "Generate a formatted document via DocuSign.",
+      parameters: Type.Object({
+        template: Type.String({ description: "Document template name" }),
+        fields: Type.Optional(Type.String({ description: "JSON object of field values to fill in" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("docusign_generate_document", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "docusign_create_review",
+      label: "DocuSign: Create Review Item",
+      description: "Create a review/approval item in DocuSign for a document.",
+      parameters: Type.Object({
+        envelope_id: Type.String({ description: "DocuSign envelope ID" }),
+        reviewer_email: Type.Optional(Type.String({ description: "Reviewer email address" })),
+        reviewer_name: Type.Optional(Type.String({ description: "Reviewer name" })),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("docusign_create_review", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
+
+    api.registerTool({
+      name: "docusign_get_envelope",
+      label: "DocuSign: Get Envelope",
+      description: "Get the status and details of a DocuSign envelope.",
+      parameters: Type.Object({
+        envelope_id: Type.String({ description: "DocuSign envelope ID" }),
+      }),
+      async execute(toolCallId, params) {
+        const result = await forwardToMockServer("docusign_get_envelope", params, toolCallId);
+        return { content: [{ type: "text", text: result }], details: {} };
+      },
+    });
   },
 });
