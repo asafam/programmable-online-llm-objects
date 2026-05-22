@@ -1,0 +1,28 @@
+# LNL OpenClaw Worker Pool — single-agent, 4 workers
+#
+# Use with: ./docker/start-pool.sh --type single --workers 4
+
+workers:
+  - name: single-worker-1
+    container_name: lnl-oc-single-worker-1
+    gateway_url: ws://localhost:19789
+    mock_server_url: http://localhost:19888
+    data_dir: /tmp/lnl-pool/single-worker-1
+
+  - name: single-worker-2
+    container_name: lnl-oc-single-worker-2
+    gateway_url: ws://localhost:19790
+    mock_server_url: http://localhost:19889
+    data_dir: /tmp/lnl-pool/single-worker-2
+
+  - name: single-worker-3
+    container_name: lnl-oc-single-worker-3
+    gateway_url: ws://localhost:19791
+    mock_server_url: http://localhost:19890
+    data_dir: /tmp/lnl-pool/single-worker-3
+
+  - name: single-worker-4
+    container_name: lnl-oc-single-worker-4
+    gateway_url: ws://localhost:19792
+    mock_server_url: http://localhost:19891
+    data_dir: /tmp/lnl-pool/single-worker-4

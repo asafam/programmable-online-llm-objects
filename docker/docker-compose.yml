@@ -1,52 +1,65 @@
-# LNL OpenClaw Worker Pool
+# LNL OpenClaw Worker Pool — docker-compose.yml
 #
-# Spin up N isolated evaluation containers, each with its own OpenClaw gateway
-# and mock server. No agent/label collisions between containers.
+# 48 services total:
+#   single-worker-1  .. single-worker-24  (single-agent evals)
+#   multi-worker-1   .. multi-worker-24   (multi-agent evals)
 #
-# Host ports are offset by +10000 from the default OpenClaw ports (18789/18888)
-# so Docker workers don't collide with a locally-running OpenClaw instance:
-#   worker-1: gateway 19789, mock server 19888
-#   worker-2: gateway 19790, mock server 19889
-#   worker-3: gateway 19791, mock server 19890
-#   worker-4: gateway 19792, mock server 19891
-#   worker-5: gateway 19793, mock server 19892
-#   worker-6: gateway 19794, mock server 19893
-#   worker-7: gateway 19795, mock server 19894
-#   worker-8: gateway 19796, mock server 19895
-#   worker-9: gateway 19797, mock server 19896
-#   worker-10: gateway 19798, mock server 19897
-#   worker-11: gateway 19799, mock server 19898
-#   worker-12: gateway 19800, mock server 19899
-#   worker-13: gateway 19801, mock server 19900
-#   worker-14: gateway 19802, mock server 19901
-#   worker-15: gateway 19803, mock server 19902
-#   worker-16: gateway 19804, mock server 19903
-#   worker-17: gateway 19805, mock server 19904
-#   worker-18: gateway 19806, mock server 19905
-#   worker-19: gateway 19807, mock server 19906
-#   worker-20: gateway 19808, mock server 19907
-#   worker-21: gateway 19809, mock server 19908
-#   worker-22: gateway 19810, mock server 19909
-#   worker-23: gateway 19811, mock server 19910
-#   worker-24: gateway 19812, mock server 19911
+# Port layout (host → container):
+#   18789 / 18888   : RESERVED — local LNL runtime + mock/server.py (do not bind here)
+#   single-worker-N : gateway 19788+N:18789 / mock 19887+N:18888
+#   multi-worker-N  : gateway 20788+N:18789 / mock 20887+N:18888
 #
-# Pool usage (recommended):
-#   docker compose up -d
-#   python -m src.data.evaluate_baseline \
-#     -i outputs/.../samples.jsonl \
-#     --pool docker/worker-pool.yaml
+# single-worker port table:
+#   single-worker-1  : 19789 / 19888
+#   single-worker-2  : 19790 / 19889
+#   single-worker-3  : 19791 / 19890
+#   single-worker-4  : 19792 / 19891
+#   single-worker-5  : 19793 / 19892
+#   single-worker-6  : 19794 / 19893
+#   single-worker-7  : 19795 / 19894
+#   single-worker-8  : 19796 / 19895
+#   single-worker-9  : 19797 / 19896
+#   single-worker-10 : 19798 / 19897
+#   single-worker-11 : 19799 / 19898
+#   single-worker-12 : 19800 / 19899
+#   single-worker-13 : 19801 / 19900
+#   single-worker-14 : 19802 / 19901
+#   single-worker-15 : 19803 / 19902
+#   single-worker-16 : 19804 / 19903
+#   single-worker-17 : 19805 / 19904
+#   single-worker-18 : 19806 / 19905
+#   single-worker-19 : 19807 / 19906
+#   single-worker-20 : 19808 / 19907
+#   single-worker-21 : 19809 / 19908
+#   single-worker-22 : 19810 / 19909
+#   single-worker-23 : 19811 / 19910
+#   single-worker-24 : 19812 / 19911
 #
-# Single-worker usage:
-#   docker compose up worker-1
-#   python -m src.data.evaluate_baseline \
-#     -i outputs/.../samples.jsonl \
-#     --gateway-url ws://localhost:19789 \
-#     --mock-server-url http://localhost:19888
-#
-# Bind mounts: each worker bind-mounts a host directory into /home/node/.openclaw
-# so evaluate_baseline.py can write agent workspace files that the gateway reads.
-# The host directories (LNL_POOL_DATA_DIR/worker-N) are created automatically.
-# Set LNL_POOL_DATA_DIR in .env or export it; defaults to /tmp/lnl-pool.
+# multi-worker port table:
+#   multi-worker-1   : 20789 / 20888
+#   multi-worker-2   : 20790 / 20889
+#   multi-worker-3   : 20791 / 20890
+#   multi-worker-4   : 20792 / 20891
+#   multi-worker-5   : 20793 / 20892
+#   multi-worker-6   : 20794 / 20893
+#   multi-worker-7   : 20795 / 20894
+#   multi-worker-8   : 20796 / 20895
+#   multi-worker-9   : 20797 / 20896
+#   multi-worker-10  : 20798 / 20897
+#   multi-worker-11  : 20799 / 20898
+#   multi-worker-12  : 20800 / 20899
+#   multi-worker-13  : 20801 / 20900
+#   multi-worker-14  : 20802 / 20901
+#   multi-worker-15  : 20803 / 20902
+#   multi-worker-16  : 20804 / 20903
+#   multi-worker-17  : 20805 / 20904
+#   multi-worker-18  : 20806 / 20905
+#   multi-worker-19  : 20807 / 20906
+#   multi-worker-20  : 20808 / 20907
+#   multi-worker-21  : 20809 / 20908
+#   multi-worker-22  : 20810 / 20909
+#   multi-worker-23  : 20811 / 20910
+#   multi-worker-24  : 20812 / 20911
 
 name: lnl-openclaw-pool
 
@@ -57,7 +70,7 @@ x-worker-base: &worker-base
     dockerfile: docker/Dockerfile
   restart: "no"
   env_file:
-    - ../.env                      # OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
+    - ../.env
   environment:
     LNL_MOCK_SERVER_URL: "http://localhost:18888"
   healthcheck:
@@ -68,410 +81,827 @@ x-worker-base: &worker-base
     start_period: 15s
 
 services:
-  worker-1:
+
+  # ---------------------------------------------------------------------------
+  # single-worker-1 .. single-worker-24
+  # ---------------------------------------------------------------------------
+
+  single-worker-1:
     <<: *worker-base
-    container_name: lnl-oc-worker-1
-    hostname: lnl-worker-1
+    container_name: lnl-oc-single-worker-1
+    hostname: lnl-single-worker-1
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_1:-changeme-worker-1}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_1:-changeme-single-worker-1}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
-      - "19789:18789"   # OpenClaw gateway  (--gateway-url ws://localhost:19789)
-      - "19888:18888"   # Mock server HTTP   (--mock-server-url http://localhost:19888)
+      - "19789:18789"
+      - "19888:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-1"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-1"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-2:
+  single-worker-2:
     <<: *worker-base
-    container_name: lnl-oc-worker-2
-    hostname: lnl-worker-2
+    container_name: lnl-oc-single-worker-2
+    hostname: lnl-single-worker-2
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_2:-changeme-worker-2}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_2:-changeme-single-worker-2}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19790:18789"
       - "19889:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-2"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-2"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-3:
+  single-worker-3:
     <<: *worker-base
-    container_name: lnl-oc-worker-3
-    hostname: lnl-worker-3
+    container_name: lnl-oc-single-worker-3
+    hostname: lnl-single-worker-3
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_3:-changeme-worker-3}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_3:-changeme-single-worker-3}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19791:18789"
       - "19890:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-3"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-3"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-4:
+  single-worker-4:
     <<: *worker-base
-    container_name: lnl-oc-worker-4
-    hostname: lnl-worker-4
+    container_name: lnl-oc-single-worker-4
+    hostname: lnl-single-worker-4
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_4:-changeme-worker-4}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_4:-changeme-single-worker-4}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19792:18789"
       - "19891:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-4"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-4"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-5:
+  single-worker-5:
     <<: *worker-base
-    container_name: lnl-oc-worker-5
-    hostname: lnl-worker-5
+    container_name: lnl-oc-single-worker-5
+    hostname: lnl-single-worker-5
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_5:-changeme-worker-5}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_5:-changeme-single-worker-5}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19793:18789"
       - "19892:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-5"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-5"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-6:
+  single-worker-6:
     <<: *worker-base
-    container_name: lnl-oc-worker-6
-    hostname: lnl-worker-6
+    container_name: lnl-oc-single-worker-6
+    hostname: lnl-single-worker-6
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_6:-changeme-worker-6}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_6:-changeme-single-worker-6}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19794:18789"
       - "19893:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-6"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-6"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-7:
+  single-worker-7:
     <<: *worker-base
-    container_name: lnl-oc-worker-7
-    hostname: lnl-worker-7
+    container_name: lnl-oc-single-worker-7
+    hostname: lnl-single-worker-7
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_7:-changeme-worker-7}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_7:-changeme-single-worker-7}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19795:18789"
       - "19894:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-7"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-7"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-8:
+  single-worker-8:
     <<: *worker-base
-    container_name: lnl-oc-worker-8
-    hostname: lnl-worker-8
+    container_name: lnl-oc-single-worker-8
+    hostname: lnl-single-worker-8
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_8:-changeme-worker-8}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_8:-changeme-single-worker-8}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19796:18789"
       - "19895:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-8"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-8"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-9:
+  single-worker-9:
     <<: *worker-base
-    container_name: lnl-oc-worker-9
-    hostname: lnl-worker-9
+    container_name: lnl-oc-single-worker-9
+    hostname: lnl-single-worker-9
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_9:-changeme-worker-9}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_9:-changeme-single-worker-9}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19797:18789"
       - "19896:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-9"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-9"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-10:
+  single-worker-10:
     <<: *worker-base
-    container_name: lnl-oc-worker-10
-    hostname: lnl-worker-10
+    container_name: lnl-oc-single-worker-10
+    hostname: lnl-single-worker-10
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_10:-changeme-worker-10}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_10:-changeme-single-worker-10}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19798:18789"
       - "19897:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-10"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-10"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-11:
+  single-worker-11:
     <<: *worker-base
-    container_name: lnl-oc-worker-11
-    hostname: lnl-worker-11
+    container_name: lnl-oc-single-worker-11
+    hostname: lnl-single-worker-11
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_11:-changeme-worker-11}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_11:-changeme-single-worker-11}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19799:18789"
       - "19898:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-11"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-11"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-12:
+  single-worker-12:
     <<: *worker-base
-    container_name: lnl-oc-worker-12
-    hostname: lnl-worker-12
+    container_name: lnl-oc-single-worker-12
+    hostname: lnl-single-worker-12
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_12:-changeme-worker-12}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_12:-changeme-single-worker-12}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19800:18789"
       - "19899:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-12"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-12"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-13:
+  single-worker-13:
     <<: *worker-base
-    container_name: lnl-oc-worker-13
-    hostname: lnl-worker-13
+    container_name: lnl-oc-single-worker-13
+    hostname: lnl-single-worker-13
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_13:-changeme-worker-13}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_13:-changeme-single-worker-13}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19801:18789"
       - "19900:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-13"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-13"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-14:
+  single-worker-14:
     <<: *worker-base
-    container_name: lnl-oc-worker-14
-    hostname: lnl-worker-14
+    container_name: lnl-oc-single-worker-14
+    hostname: lnl-single-worker-14
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_14:-changeme-worker-14}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_14:-changeme-single-worker-14}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19802:18789"
       - "19901:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-14"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-14"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-15:
+  single-worker-15:
     <<: *worker-base
-    container_name: lnl-oc-worker-15
-    hostname: lnl-worker-15
+    container_name: lnl-oc-single-worker-15
+    hostname: lnl-single-worker-15
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_15:-changeme-worker-15}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_15:-changeme-single-worker-15}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19803:18789"
       - "19902:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-15"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-15"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-16:
+  single-worker-16:
     <<: *worker-base
-    container_name: lnl-oc-worker-16
-    hostname: lnl-worker-16
+    container_name: lnl-oc-single-worker-16
+    hostname: lnl-single-worker-16
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_16:-changeme-worker-16}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_16:-changeme-single-worker-16}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19804:18789"
       - "19903:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-16"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-16"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-17:
+  single-worker-17:
     <<: *worker-base
-    container_name: lnl-oc-worker-17
-    hostname: lnl-worker-17
+    container_name: lnl-oc-single-worker-17
+    hostname: lnl-single-worker-17
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_17:-changeme-worker-17}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_17:-changeme-single-worker-17}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19805:18789"
       - "19904:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-17"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-17"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-18:
+  single-worker-18:
     <<: *worker-base
-    container_name: lnl-oc-worker-18
-    hostname: lnl-worker-18
+    container_name: lnl-oc-single-worker-18
+    hostname: lnl-single-worker-18
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_18:-changeme-worker-18}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_18:-changeme-single-worker-18}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19806:18789"
       - "19905:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-18"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-18"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-19:
+  single-worker-19:
     <<: *worker-base
-    container_name: lnl-oc-worker-19
-    hostname: lnl-worker-19
+    container_name: lnl-oc-single-worker-19
+    hostname: lnl-single-worker-19
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_19:-changeme-worker-19}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_19:-changeme-single-worker-19}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19807:18789"
       - "19906:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-19"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-19"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-20:
+  single-worker-20:
     <<: *worker-base
-    container_name: lnl-oc-worker-20
-    hostname: lnl-worker-20
+    container_name: lnl-oc-single-worker-20
+    hostname: lnl-single-worker-20
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_20:-changeme-worker-20}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_20:-changeme-single-worker-20}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19808:18789"
       - "19907:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-20"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-20"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-21:
+  single-worker-21:
     <<: *worker-base
-    container_name: lnl-oc-worker-21
-    hostname: lnl-worker-21
+    container_name: lnl-oc-single-worker-21
+    hostname: lnl-single-worker-21
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_21:-changeme-worker-21}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_21:-changeme-single-worker-21}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19809:18789"
       - "19908:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-21"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-21"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-22:
+  single-worker-22:
     <<: *worker-base
-    container_name: lnl-oc-worker-22
-    hostname: lnl-worker-22
+    container_name: lnl-oc-single-worker-22
+    hostname: lnl-single-worker-22
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_22:-changeme-worker-22}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_22:-changeme-single-worker-22}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19810:18789"
       - "19909:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-22"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-22"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-23:
+  single-worker-23:
     <<: *worker-base
-    container_name: lnl-oc-worker-23
-    hostname: lnl-worker-23
+    container_name: lnl-oc-single-worker-23
+    hostname: lnl-single-worker-23
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_23:-changeme-worker-23}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_23:-changeme-single-worker-23}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19811:18789"
       - "19910:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-23"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-23"
         target: /home/node/.openclaw
         bind:
           create_host_path: true
 
-  worker-24:
+  single-worker-24:
     <<: *worker-base
-    container_name: lnl-oc-worker-24
-    hostname: lnl-worker-24
+    container_name: lnl-oc-single-worker-24
+    hostname: lnl-single-worker-24
     environment:
-      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_24:-changeme-worker-24}"
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_24:-changeme-single-worker-24}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
     ports:
       - "19812:18789"
       - "19911:18888"
     volumes:
       - type: bind
-        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-24"
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/single-worker-24"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  # ---------------------------------------------------------------------------
+  # multi-worker-1 .. multi-worker-24
+  # ---------------------------------------------------------------------------
+
+  multi-worker-1:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-1
+    hostname: lnl-multi-worker-1
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_1:-changeme-multi-worker-1}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20789:18789"
+      - "20888:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-1"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-2:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-2
+    hostname: lnl-multi-worker-2
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_2:-changeme-multi-worker-2}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20790:18789"
+      - "20889:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-2"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-3:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-3
+    hostname: lnl-multi-worker-3
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_3:-changeme-multi-worker-3}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20791:18789"
+      - "20890:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-3"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-4:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-4
+    hostname: lnl-multi-worker-4
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_4:-changeme-multi-worker-4}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20792:18789"
+      - "20891:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-4"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-5:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-5
+    hostname: lnl-multi-worker-5
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_5:-changeme-multi-worker-5}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20793:18789"
+      - "20892:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-5"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-6:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-6
+    hostname: lnl-multi-worker-6
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_6:-changeme-multi-worker-6}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20794:18789"
+      - "20893:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-6"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-7:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-7
+    hostname: lnl-multi-worker-7
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_7:-changeme-multi-worker-7}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20795:18789"
+      - "20894:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-7"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-8:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-8
+    hostname: lnl-multi-worker-8
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_8:-changeme-multi-worker-8}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20796:18789"
+      - "20895:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-8"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-9:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-9
+    hostname: lnl-multi-worker-9
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_9:-changeme-multi-worker-9}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20797:18789"
+      - "20896:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-9"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-10:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-10
+    hostname: lnl-multi-worker-10
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_10:-changeme-multi-worker-10}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20798:18789"
+      - "20897:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-10"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-11:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-11
+    hostname: lnl-multi-worker-11
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_11:-changeme-multi-worker-11}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20799:18789"
+      - "20898:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-11"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-12:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-12
+    hostname: lnl-multi-worker-12
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_12:-changeme-multi-worker-12}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20800:18789"
+      - "20899:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-12"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-13:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-13
+    hostname: lnl-multi-worker-13
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_13:-changeme-multi-worker-13}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20801:18789"
+      - "20900:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-13"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-14:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-14
+    hostname: lnl-multi-worker-14
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_14:-changeme-multi-worker-14}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20802:18789"
+      - "20901:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-14"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-15:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-15
+    hostname: lnl-multi-worker-15
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_15:-changeme-multi-worker-15}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20803:18789"
+      - "20902:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-15"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-16:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-16
+    hostname: lnl-multi-worker-16
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_16:-changeme-multi-worker-16}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20804:18789"
+      - "20903:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-16"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-17:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-17
+    hostname: lnl-multi-worker-17
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_17:-changeme-multi-worker-17}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20805:18789"
+      - "20904:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-17"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-18:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-18
+    hostname: lnl-multi-worker-18
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_18:-changeme-multi-worker-18}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20806:18789"
+      - "20905:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-18"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-19:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-19
+    hostname: lnl-multi-worker-19
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_19:-changeme-multi-worker-19}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20807:18789"
+      - "20906:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-19"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-20:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-20
+    hostname: lnl-multi-worker-20
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_20:-changeme-multi-worker-20}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20808:18789"
+      - "20907:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-20"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-21:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-21
+    hostname: lnl-multi-worker-21
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_21:-changeme-multi-worker-21}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20809:18789"
+      - "20908:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-21"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-22:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-22
+    hostname: lnl-multi-worker-22
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_22:-changeme-multi-worker-22}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20810:18789"
+      - "20909:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-22"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-23:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-23
+    hostname: lnl-multi-worker-23
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_23:-changeme-multi-worker-23}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20811:18789"
+      - "20910:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-23"
+        target: /home/node/.openclaw
+        bind:
+          create_host_path: true
+
+  multi-worker-24:
+    <<: *worker-base
+    container_name: lnl-oc-multi-worker-24
+    hostname: lnl-multi-worker-24
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_24:-changeme-multi-worker-24}"
+      LNL_MOCK_SERVER_URL: "http://localhost:18888"
+    ports:
+      - "20812:18789"
+      - "20911:18888"
+    volumes:
+      - type: bind
+        source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/multi-worker-24"
         target: /home/node/.openclaw
         bind:
           create_host_path: true

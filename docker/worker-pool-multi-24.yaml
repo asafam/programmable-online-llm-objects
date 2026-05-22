@@ -1,0 +1,148 @@
+# LNL OpenClaw Worker Pool — multi-agent, 24 workers
+#
+# Use with: ./docker/start-pool.sh --type multi --workers 24
+
+workers:
+  - name: multi-worker-1
+    container_name: lnl-oc-multi-worker-1
+    gateway_url: ws://localhost:20789
+    mock_server_url: http://localhost:20888
+    data_dir: /tmp/lnl-pool/multi-worker-1
+
+  - name: multi-worker-2
+    container_name: lnl-oc-multi-worker-2
+    gateway_url: ws://localhost:20790
+    mock_server_url: http://localhost:20889
+    data_dir: /tmp/lnl-pool/multi-worker-2
+
+  - name: multi-worker-3
+    container_name: lnl-oc-multi-worker-3
+    gateway_url: ws://localhost:20791
+    mock_server_url: http://localhost:20890
+    data_dir: /tmp/lnl-pool/multi-worker-3
+
+  - name: multi-worker-4
+    container_name: lnl-oc-multi-worker-4
+    gateway_url: ws://localhost:20792
+    mock_server_url: http://localhost:20891
+    data_dir: /tmp/lnl-pool/multi-worker-4
+
+  - name: multi-worker-5
+    container_name: lnl-oc-multi-worker-5
+    gateway_url: ws://localhost:20793
+    mock_server_url: http://localhost:20892
+    data_dir: /tmp/lnl-pool/multi-worker-5
+
+  - name: multi-worker-6
+    container_name: lnl-oc-multi-worker-6
+    gateway_url: ws://localhost:20794
+    mock_server_url: http://localhost:20893
+    data_dir: /tmp/lnl-pool/multi-worker-6
+
+  - name: multi-worker-7
+    container_name: lnl-oc-multi-worker-7
+    gateway_url: ws://localhost:20795
+    mock_server_url: http://localhost:20894
+    data_dir: /tmp/lnl-pool/multi-worker-7
+
+  - name: multi-worker-8
+    container_name: lnl-oc-multi-worker-8
+    gateway_url: ws://localhost:20796
+    mock_server_url: http://localhost:20895
+    data_dir: /tmp/lnl-pool/multi-worker-8
+
+  - name: multi-worker-9
+    container_name: lnl-oc-multi-worker-9
+    gateway_url: ws://localhost:20797
+    mock_server_url: http://localhost:20896
+    data_dir: /tmp/lnl-pool/multi-worker-9
+
+  - name: multi-worker-10
+    container_name: lnl-oc-multi-worker-10
+    gateway_url: ws://localhost:20798
+    mock_server_url: http://localhost:20897
+    data_dir: /tmp/lnl-pool/multi-worker-10
+
+  - name: multi-worker-11
+    container_name: lnl-oc-multi-worker-11
+    gateway_url: ws://localhost:20799
+    mock_server_url: http://localhost:20898
+    data_dir: /tmp/lnl-pool/multi-worker-11
+
+  - name: multi-worker-12
+    container_name: lnl-oc-multi-worker-12
+    gateway_url: ws://localhost:20800
+    mock_server_url: http://localhost:20899
+    data_dir: /tmp/lnl-pool/multi-worker-12
+
+  - name: multi-worker-13
+    container_name: lnl-oc-multi-worker-13
+    gateway_url: ws://localhost:20801
+    mock_server_url: http://localhost:20900
+    data_dir: /tmp/lnl-pool/multi-worker-13
+
+  - name: multi-worker-14
+    container_name: lnl-oc-multi-worker-14
+    gateway_url: ws://localhost:20802
+    mock_server_url: http://localhost:20901
+    data_dir: /tmp/lnl-pool/multi-worker-14
+
+  - name: multi-worker-15
+    container_name: lnl-oc-multi-worker-15
+    gateway_url: ws://localhost:20803
+    mock_server_url: http://localhost:20902
+    data_dir: /tmp/lnl-pool/multi-worker-15
+
+  - name: multi-worker-16
+    container_name: lnl-oc-multi-worker-16
+    gateway_url: ws://localhost:20804
+    mock_server_url: http://localhost:20903
+    data_dir: /tmp/lnl-pool/multi-worker-16
+
+  - name: multi-worker-17
+    container_name: lnl-oc-multi-worker-17
+    gateway_url: ws://localhost:20805
+    mock_server_url: http://localhost:20904
+    data_dir: /tmp/lnl-pool/multi-worker-17
+
+  - name: multi-worker-18
+    container_name: lnl-oc-multi-worker-18
+    gateway_url: ws://localhost:20806
+    mock_server_url: http://localhost:20905
+    data_dir: /tmp/lnl-pool/multi-worker-18
+
+  - name: multi-worker-19
+    container_name: lnl-oc-multi-worker-19
+    gateway_url: ws://localhost:20807
+    mock_server_url: http://localhost:20906
+    data_dir: /tmp/lnl-pool/multi-worker-19
+
+  - name: multi-worker-20
+    container_name: lnl-oc-multi-worker-20
+    gateway_url: ws://localhost:20808
+    mock_server_url: http://localhost:20907
+    data_dir: /tmp/lnl-pool/multi-worker-20
+
+  - name: multi-worker-21
+    container_name: lnl-oc-multi-worker-21
+    gateway_url: ws://localhost:20809
+    mock_server_url: http://localhost:20908
+    data_dir: /tmp/lnl-pool/multi-worker-21
+
+  - name: multi-worker-22
+    container_name: lnl-oc-multi-worker-22
+    gateway_url: ws://localhost:20810
+    mock_server_url: http://localhost:20909
+    data_dir: /tmp/lnl-pool/multi-worker-22
+
+  - name: multi-worker-23
+    container_name: lnl-oc-multi-worker-23
+    gateway_url: ws://localhost:20811
+    mock_server_url: http://localhost:20910
+    data_dir: /tmp/lnl-pool/multi-worker-23
+
+  - name: multi-worker-24
+    container_name: lnl-oc-multi-worker-24
+    gateway_url: ws://localhost:20812
+    mock_server_url: http://localhost:20911
+    data_dir: /tmp/lnl-pool/multi-worker-24

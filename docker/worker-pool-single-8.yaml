@@ -1,0 +1,52 @@
+# LNL OpenClaw Worker Pool — single-agent, 8 workers
+#
+# Use with: ./docker/start-pool.sh --type single --workers 8
+
+workers:
+  - name: single-worker-1
+    container_name: lnl-oc-single-worker-1
+    gateway_url: ws://localhost:19789
+    mock_server_url: http://localhost:19888
+    data_dir: /tmp/lnl-pool/single-worker-1
+
+  - name: single-worker-2
+    container_name: lnl-oc-single-worker-2
+    gateway_url: ws://localhost:19790
+    mock_server_url: http://localhost:19889
+    data_dir: /tmp/lnl-pool/single-worker-2
+
+  - name: single-worker-3
+    container_name: lnl-oc-single-worker-3
+    gateway_url: ws://localhost:19791
+    mock_server_url: http://localhost:19890
+    data_dir: /tmp/lnl-pool/single-worker-3
+
+  - name: single-worker-4
+    container_name: lnl-oc-single-worker-4
+    gateway_url: ws://localhost:19792
+    mock_server_url: http://localhost:19891
+    data_dir: /tmp/lnl-pool/single-worker-4
+
+  - name: single-worker-5
+    container_name: lnl-oc-single-worker-5
+    gateway_url: ws://localhost:19793
+    mock_server_url: http://localhost:19892
+    data_dir: /tmp/lnl-pool/single-worker-5
+
+  - name: single-worker-6
+    container_name: lnl-oc-single-worker-6
+    gateway_url: ws://localhost:19794
+    mock_server_url: http://localhost:19893
+    data_dir: /tmp/lnl-pool/single-worker-6
+
+  - name: single-worker-7
+    container_name: lnl-oc-single-worker-7
+    gateway_url: ws://localhost:19795
+    mock_server_url: http://localhost:19894
+    data_dir: /tmp/lnl-pool/single-worker-7
+
+  - name: single-worker-8
+    container_name: lnl-oc-single-worker-8
+    gateway_url: ws://localhost:19796
+    mock_server_url: http://localhost:19895
+    data_dir: /tmp/lnl-pool/single-worker-8

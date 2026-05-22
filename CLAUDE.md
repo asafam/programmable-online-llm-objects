@@ -35,15 +35,18 @@ python -m src.data.pipeline --samples outputs/data/zapier/templates_samples_obje
 # Convenience scripts (activate venv, run, write log to logs/evaluate/<results-name>.log):
 ./scripts/run-eval.sh -i outputs/data/zapier/20260411_zapier_clean/test_cases.jsonl --model gpt-4o --runs 1
 ./scripts/run-eval-baseline.sh -i outputs/data/zapier/20260411_zapier_clean/test_cases.jsonl --model gpt-4o --runs 1
-./scripts/run-eval-baseline.sh -i outputs/data/zapier/20260411_zapier_clean/test_cases.jsonl --pool docker/worker-pool.yaml --model gpt-4o --runs 1
+./scripts/run-eval-baseline.sh -i outputs/data/zapier/20260411_zapier_clean/test_cases.jsonl --pool docker/worker-pool-single-8.yaml --model gpt-4o --runs 1
 
 # Or invoke directly:
 python -m src.data.evaluate -i outputs/data/zapier/20260322_120000/test_cases.jsonl --runs 3
 python -m src.data.evaluate_baseline -i outputs/data/zapier/20260322_010211/test_cases.jsonl --runs 3
 
 # Docker pool — start before running baseline with --pool:
-./docker/start-pool.sh       # start (reads operator token automatically)
-./docker/start-pool.sh down  # stop
+#   Ports: 18789/18888 reserved for local LNL; single=19789+; multi=20789+
+./docker/start-pool.sh --type single --workers 8   # start 8 single-agent workers
+./docker/start-pool.sh --type multi  --workers 8   # start 8 multi-agent workers (runs in parallel)
+./docker/start-pool.sh down                        # stop ALL workers
+# Pool YAMLs: worker-pool-single-{2,4,8,16,24}.yaml / worker-pool-multi-{2,4,8,16,24}.yaml
 ```
 
 ## Architecture

@@ -5,24 +5,39 @@
 # exports it as OPENCLAW_GATEWAY_TOKEN_1..N before bringing up docker-compose.
 #
 # Usage:
-#   ./docker/start-pool.sh                   # start 4 workers (default)
-#   ./docker/start-pool.sh --workers 8       # start 8 workers
-#   ./docker/start-pool.sh --workers 2       # start 2 workers
-#   ./docker/start-pool.sh down              # stop and remove containers
-#   ./docker/start-pool.sh restart           # restart (same worker count as last up)
-#   ./docker/start-pool.sh logs              # tail container logs
+#   ./docker/start-pool.sh                              # start 4 single-agent workers (default)
+#   ./docker/start-pool.sh --type single --workers 8   # start 8 single-agent workers
+#   ./docker/start-pool.sh --type multi --workers 8    # start 8 multi-agent workers
+#   ./docker/start-pool.sh --type single down          # stop single-agent workers
+#   ./docker/start-pool.sh --type multi down           # stop multi-agent workers
+#   ./docker/start-pool.sh down                        # stop ALL workers (both types)
+#   ./docker/start-pool.sh restart                     # restart (default: single, 4 workers)
+#   ./docker/start-pool.sh logs                        # tail all container logs
+#
+# Port layout:
+#   single-worker-N : gateway 19788+N  /  mock 19887+N   (e.g. worker-1 → 19789 / 19888)
+#   multi-worker-N  : gateway 20788+N  /  mock 20887+N   (e.g. worker-1 → 20789 / 20888)
+#
+# Run two evals in parallel (two terminal windows):
+#   ./docker/start-pool.sh --type single --workers 8
+#   ./docker/start-pool.sh --type multi  --workers 8
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 
-# ── Parse --workers flag ──────────────────────────────────────────────────────
+# ── Parse --type / --workers flags ───────────────────────────────────────────
 NUM_WORKERS=4
+WORKER_TYPE="single"
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --workers)
             NUM_WORKERS="$2"
+            shift 2
+            ;;
+        --type)
+            WORKER_TYPE="$2"
             shift 2
             ;;
         *)
@@ -34,6 +49,24 @@ done
 set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 CMD="${1:-up}"
+
+if [[ "${WORKER_TYPE}" != "single" && "${WORKER_TYPE}" != "multi" ]]; then
+    echo "ERROR: --type must be 'single' or 'multi'" >&2
+    exit 1
+fi
+
+# ── Type-specific settings ────────────────────────────────────────────────────
+if [[ "${WORKER_TYPE}" == "single" ]]; then
+    GW_BASE=19788
+    MOCK_BASE=19887
+    SERVICE_PREFIX="single-worker"
+    DATA_PREFIX="single-worker"
+else
+    GW_BASE=20788
+    MOCK_BASE=20887
+    SERVICE_PREFIX="multi-worker"
+    DATA_PREFIX="multi-worker"
+fi
 
 # ── Read operator token from local OpenClaw identity ─────────────────────────
 DEVICE_AUTH="${HOME}/.openclaw/identity/device-auth.json"
@@ -61,7 +94,7 @@ done
 POOL_DATA_DIR="${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}"
 HOST_DEVICE_JSON="${HOME}/.openclaw/identity/device.json"
 
-python3 - "${POOL_DATA_DIR}" "${DEVICE_AUTH}" "${HOST_DEVICE_JSON}" "${NUM_WORKERS}" <<'PYEOF'
+python3 - "${POOL_DATA_DIR}" "${DEVICE_AUTH}" "${HOST_DEVICE_JSON}" "${NUM_WORKERS}" "${DATA_PREFIX}" <<'PYEOF'
 import json, sys, base64, time, os
 from pathlib import Path
 
@@ -69,6 +102,7 @@ pool_dir = Path(sys.argv[1])
 device_auth = json.loads(Path(sys.argv[2]).read_text())
 host_device = json.loads(Path(sys.argv[3]).read_text())
 num_workers = int(sys.argv[4])
+data_prefix = sys.argv[5]
 
 import base64 as _b64
 pem = host_device["publicKeyPem"].strip()
@@ -106,55 +140,62 @@ paired_entry = {
 paired_json = json.dumps({device_id: paired_entry}, indent=2)
 
 for n in range(1, num_workers + 1):
-    worker_dir = pool_dir / f"worker-{n}"
+    worker_dir = pool_dir / f"{data_prefix}-{n}"
     (worker_dir / "identity").mkdir(parents=True, exist_ok=True)
     (worker_dir / "devices").mkdir(parents=True, exist_ok=True)
     (worker_dir / "identity" / "device-auth.json").write_text(json.dumps(device_auth, indent=2))
     (worker_dir / "devices" / "paired.json").write_text(paired_json)
 
-print(f"Seeded identity/device-auth.json and devices/paired.json for workers 1-{num_workers}")
+print(f"Seeded identity/device-auth.json and devices/paired.json for {data_prefix}-1..{num_workers}")
 PYEOF
 
-# Build list of service names for this pool size
+# Build list of service names for this type/size
 WORKER_SERVICES=""
 for n in $(seq 1 "${NUM_WORKERS}"); do
-    WORKER_SERVICES="${WORKER_SERVICES} worker-${n}"
+    WORKER_SERVICES="${WORKER_SERVICES} ${SERVICE_PREFIX}-${n}"
 done
 
 # ── Dispatch subcommand ───────────────────────────────────────────────────────
 case "${CMD}" in
     up)
-        echo "Cleaning worker data directories..."
+        echo "Cleaning worker data directories (${SERVICE_PREFIX} 1-${NUM_WORKERS})..."
         for n in $(seq 1 "${NUM_WORKERS}"); do
-            worker_dir="${POOL_DATA_DIR:-/tmp/lnl-pool}/worker-${n}"
+            worker_dir="${POOL_DATA_DIR:-/tmp/lnl-pool}/${DATA_PREFIX}-${n}"
             if [ -d "${worker_dir}" ]; then
                 find "${worker_dir}" -mindepth 1 -maxdepth 1 \
                     ! -name "identity" ! -name "devices" \
                     -exec rm -rf {} +
             fi
         done
-        echo "Starting LNL OpenClaw worker pool (${NUM_WORKERS} workers)..."
+        echo "Starting LNL OpenClaw worker pool (${WORKER_TYPE}-agent, ${NUM_WORKERS} workers)..."
         docker compose -f "${COMPOSE_FILE}" up -d --remove-orphans ${WORKER_SERVICES}
         echo ""
-        echo "Workers ready (${NUM_WORKERS}):"
+        echo "Workers ready (${WORKER_TYPE}-agent, ${NUM_WORKERS}):"
         for n in $(seq 1 "${NUM_WORKERS}"); do
-            gw_port=$((19788 + n))
-            mock_port=$((19887 + n))
-            echo "  worker-${n}  gateway=ws://localhost:${gw_port}  mock=http://localhost:${mock_port}"
+            gw_port=$((GW_BASE + n))
+            mock_port=$((MOCK_BASE + n))
+            echo "  ${SERVICE_PREFIX}-${n}  gateway=ws://localhost:${gw_port}  mock=http://localhost:${mock_port}"
         done
         echo ""
         echo "Run evaluation with matching pool config, e.g.:"
-        echo "  python -m src.data.evaluate_baseline -i <workflows-mods.jsonl> --pool docker/worker-pool-${NUM_WORKERS}.yaml"
+        echo "  ./scripts/run-eval-baseline.sh -i <input.jsonl> --pool docker/worker-pool-${WORKER_TYPE}-${NUM_WORKERS}.yaml"
         ;;
     down)
-        echo "Stopping LNL OpenClaw worker pool..."
-        docker compose -f "${COMPOSE_FILE}" down
+        if [ "${CMD}" = "down" ] && [ -z "${WORKER_TYPE+unset}" ]; then
+            echo "Stopping ALL LNL OpenClaw workers..."
+            docker compose -f "${COMPOSE_FILE}" down
+        else
+            echo "Stopping ${WORKER_TYPE}-agent workers (1-${NUM_WORKERS})..."
+            docker compose -f "${COMPOSE_FILE}" stop ${WORKER_SERVICES}
+            docker compose -f "${COMPOSE_FILE}" rm -f ${WORKER_SERVICES}
+        fi
         ;;
     restart)
-        echo "Restarting LNL OpenClaw worker pool (${NUM_WORKERS} workers)..."
-        docker compose -f "${COMPOSE_FILE}" down
+        echo "Restarting LNL OpenClaw worker pool (${WORKER_TYPE}-agent, ${NUM_WORKERS} workers)..."
+        docker compose -f "${COMPOSE_FILE}" stop ${WORKER_SERVICES}
+        docker compose -f "${COMPOSE_FILE}" rm -f ${WORKER_SERVICES}
         for n in $(seq 1 "${NUM_WORKERS}"); do
-            worker_dir="${POOL_DATA_DIR:-/tmp/lnl-pool}/worker-${n}"
+            worker_dir="${POOL_DATA_DIR:-/tmp/lnl-pool}/${DATA_PREFIX}-${n}"
             if [ -d "${worker_dir}" ]; then
                 find "${worker_dir}" -mindepth 1 -maxdepth 1 \
                     ! -name "identity" ! -name "devices" \
@@ -167,7 +208,7 @@ case "${CMD}" in
         docker compose -f "${COMPOSE_FILE}" logs -f "${@:2}"
         ;;
     *)
-        echo "Usage: $0 [--workers N] [up|down|restart|logs]" >&2
+        echo "Usage: $0 [--type single|multi] [--workers N] [up|down|restart|logs]" >&2
         exit 1
         ;;
 esac

@@ -148,9 +148,6 @@ def resolve_mock_configs(tc: Sample) -> Optional[MockScript]:
 
     # Also scan step and event expects so that systems demanded by expects are
     # covered even when object text doesn't explicitly name the system.
-    for step in tc.steps:
-        if step.expect and step.expect.action:
-            all_text.append(step.expect.action)
     for event in tc.events:
         if event.expect and event.expect.action:
             all_text.append(event.expect.action)

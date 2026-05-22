@@ -1,16 +1,31 @@
 # LNL OpenClaw Worker — Docker Pool
 
-Run parallel baseline evaluations without OpenClaw label collisions. Each container bundles an isolated OpenClaw gateway + mock server. Spinning up N containers = N independent evaluation slots.
+Run parallel baseline evaluations without OpenClaw label collisions. Each container bundles an isolated OpenClaw gateway + mock server. Two named worker types keep single-agent and multi-agent evals completely separate — each type has its own port range and can scale independently to 2, 4, 8, 16, or 24 workers.
 
 ## What's inside each container
 
-| Component | Container port | Host port (worker-1) | Purpose |
-|---|---|---|---|
-| OpenClaw gateway | `18789` | `19789` | WebSocket + HTTP gateway |
-| LNL mock server | `18888` | `19888` | Mock tool execution + callbacks |
-| `lnl-mock-external` plugin | — | — | Wired into gateway; forwards tool calls to mock server |
+| Component | Container port | Purpose |
+|---|---|---|
+| OpenClaw gateway | `18789` | WebSocket + HTTP gateway |
+| LNL mock server | `18888` | Mock tool execution + callbacks |
+| Azure usage proxy | `18800` | Proxies Azure OpenAI calls (not exposed to host) |
+| `lnl-mock-external` plugin | — | Wired into gateway; forwards tool calls to mock server |
 
-Host ports start at `19789`/`19888` for worker-1 and increment per worker (+1 per gateway, +1 per mock server). This avoids collisions with a locally-running OpenClaw instance on the default `18789`/`18888` ports — both can run simultaneously.
+---
+
+## Port layout
+
+Three non-overlapping zones on the host:
+
+| Zone | Gateway host ports | Mock host ports |
+|---|---|---|
+| **Local LNL** (reserved — do not bind) | `18789` | `18888` |
+| **single-agent workers** 1–24 | `19789`–`19812` | `19888`–`19911` |
+| **multi-agent workers** 1–24 | `20789`–`20812` | `20888`–`20911` |
+
+Formula: `single-worker-N` → gateway `19788+N`, mock `19887+N`. `multi-worker-N` → gateway `20788+N`, mock `20887+N`.
+
+This design lets you run a local non-Docker evaluation (on `18789`/`18888`) alongside two fully loaded Docker pools simultaneously without any port conflicts.
 
 ---
 
@@ -38,16 +53,32 @@ Takes ~2–3 minutes on first build; subsequent builds use the Docker layer cach
 
 ## Start the pool
 
-Use the provided script — it reads your local OpenClaw operator token automatically and starts the containers with the correct auth:
+Use `./docker/start-pool.sh` — it reads your local OpenClaw operator token automatically and starts the containers with the correct auth:
 
 ```bash
-./docker/start-pool.sh          # start (or recreate) the pool
-./docker/start-pool.sh down     # stop and remove containers
-./docker/start-pool.sh restart  # restart after config changes
-./docker/start-pool.sh logs     # tail container logs
+# Single-agent workers (ports 19789+/19888+)
+./docker/start-pool.sh --type single --workers 8
+
+# Multi-agent workers (ports 20789+/20888+) — can run at the same time
+./docker/start-pool.sh --type multi --workers 8
+
+# Stop a specific type
+./docker/start-pool.sh --type single down
+./docker/start-pool.sh --type multi  down
+
+# Stop ALL workers
+./docker/start-pool.sh down
+
+# Restart a pool
+./docker/start-pool.sh --type single --workers 8 restart
+
+# Tail logs
+./docker/start-pool.sh logs
 ```
 
-The script reads the operator token from `~/.openclaw/identity/device-auth.json` and exports it as `OPENCLAW_GATEWAY_TOKEN_1` (and `_2`/`_3`/`_4`) before calling `docker compose`. This token must match your local OpenClaw install — the containers authenticate as the same device.
+`--workers` accepts any value from 1 to 24. Matching pool YAMLs exist for `2`, `4`, `8`, `16`, and `24`.
+
+The script reads the operator token from `~/.openclaw/identity/device-auth.json` and exports it as `OPENCLAW_GATEWAY_TOKEN_1..N` before calling `docker compose up`. This token must match your local OpenClaw install — the containers authenticate as the same device.
 
 > **Why the operator token?** The OpenClaw SDK sends your local device's operator token when connecting to the gateway. The gateway only accepts connections that present the same token it was started with. Using a random secret would cause every SDK call to fail with an auth error.
 
@@ -56,22 +87,49 @@ The script reads the operator token from `~/.openclaw/identity/device-auth.json`
 ## Run an evaluation against the pool
 
 ```bash
+# Single-agent evaluation
 python -m src.data.evaluate_baseline \
   -i outputs/.../workflows-mods.jsonl \
-  --pool docker/worker-pool.yaml \
+  --pool docker/worker-pool-single-8.yaml \
+  --single-agent \
+  --model gpt-4o \
+  --runs 3
+
+# Multi-agent evaluation
+python -m src.data.evaluate_baseline \
+  -i outputs/.../workflows-mods.jsonl \
+  --pool docker/worker-pool-multi-8.yaml \
   --model gpt-4o \
   --runs 3
 ```
 
-`--pool` reads `docker/worker-pool.yaml`, distributes test cases across all workers using a work queue (each worker picks up the next TC as soon as it's free), and writes a single merged output file. No `--mock-server-url` or `--gateway-url` flags needed — the pool YAML supplies them.
+`--pool` reads the YAML, distributes test cases across all workers using a work queue (each worker picks up the next TC as soon as it's free), and writes a single merged output file. No `--mock-server-url` or `--gateway-url` flags needed — the pool YAML supplies them.
 
 Run a single test case for debugging:
 
 ```bash
 python -m src.data.evaluate_baseline \
   -i outputs/.../workflows-mods.jsonl \
-  --pool docker/worker-pool.yaml \
-  --model gpt-4o --tc 1 --verbose
+  --pool docker/worker-pool-single-8.yaml \
+  --single-agent --model gpt-4o --tc 1 --verbose
+```
+
+### Running single-agent and multi-agent in parallel
+
+Start each pool in its own terminal, then launch both evals simultaneously:
+
+```bash
+# Terminal 1
+./docker/start-pool.sh --type single --workers 8
+./scripts/run-eval-baseline.sh -i input.jsonl \
+    --pool docker/worker-pool-single-8.yaml \
+    --single-agent -o out_single.jsonl
+
+# Terminal 2 (at the same time)
+./docker/start-pool.sh --type multi --workers 8
+./scripts/run-eval-baseline.sh -i input.jsonl \
+    --pool docker/worker-pool-multi-8.yaml \
+    -o out_multi.jsonl
 ```
 
 ---
@@ -83,7 +141,8 @@ python -m src.data.evaluate_baseline \
 Each container bind-mounts a host directory into `/home/node/.openclaw`:
 
 ```
-/tmp/lnl-pool/worker-1  ←→  /home/node/.openclaw  (inside container)
+/tmp/lnl-pool/single-worker-1  ←→  /home/node/.openclaw  (inside container)
+/tmp/lnl-pool/multi-worker-1   ←→  /home/node/.openclaw  (inside container)
 ```
 
 `evaluate_baseline.py` writes agent workspace files (SOUL.md, AGENTS.md, state.md, etc.) into the host `data_dir`. The running gateway reads them through the mount. The host directory is created automatically on first `docker compose up`.
@@ -102,45 +161,24 @@ The gateway config is generated from `docker/openclaw-config.json` by the entryp
 
 ---
 
-## Port assignments
+## Pool YAML files
 
-| Worker | Gateway (`--gateway-url`) | Mock server (`--mock-server-url`) |
+Pre-built YAMLs for standard pool sizes:
+
+| File | Type | Workers |
 |---|---|---|
-| `worker-1` | `ws://localhost:19789` | `http://localhost:19888` |
-| `worker-2` | `ws://localhost:19790` | `http://localhost:19889` |
-| `worker-3` | `ws://localhost:19791` | `http://localhost:19890` |
-| `worker-4` | `ws://localhost:19792` | `http://localhost:19891` |
+| `worker-pool-single-2.yaml` | single-agent | 2 |
+| `worker-pool-single-4.yaml` | single-agent | 4 |
+| `worker-pool-single-8.yaml` | single-agent | 8 |
+| `worker-pool-single-16.yaml` | single-agent | 16 |
+| `worker-pool-single-24.yaml` | single-agent | 24 |
+| `worker-pool-multi-2.yaml` | multi-agent | 2 |
+| `worker-pool-multi-4.yaml` | multi-agent | 4 |
+| `worker-pool-multi-8.yaml` | multi-agent | 8 |
+| `worker-pool-multi-16.yaml` | multi-agent | 16 |
+| `worker-pool-multi-24.yaml` | multi-agent | 24 |
 
----
-
-## Enabling more workers
-
-Workers 2–4 are commented out in `docker-compose.yml` and `worker-pool.yaml`. To enable them:
-
-1. Uncomment the desired workers in both files
-2. Run `./docker/start-pool.sh restart`
-
-To add a fifth worker, duplicate a worker block in `docker-compose.yml` with the next port offset:
-
-```yaml
-worker-5:
-  <<: *worker-base
-  container_name: lnl-oc-worker-5
-  environment:
-    OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_5:-changeme-worker-5}"
-    LNL_MOCK_SERVER_URL: "http://localhost:18888"
-  ports:
-    - "19793:18789"
-    - "19892:18888"
-  volumes:
-    - type: bind
-      source: "${LNL_POOL_DATA_DIR:-/tmp/lnl-pool}/worker-5"
-      target: /home/node/.openclaw
-      bind:
-        create_host_path: true
-```
-
-Add the corresponding entry to `docker/worker-pool.yaml` and export `OPENCLAW_GATEWAY_TOKEN_5` in `start-pool.sh`.
+Pass any of these as `--pool docker/<file>` to `evaluate_baseline.py` or the convenience script.
 
 ---
 
@@ -159,6 +197,11 @@ GOOGLE_API_KEY=...
 ## Teardown
 
 ```bash
+# Stop one type
+./docker/start-pool.sh --type single down
+./docker/start-pool.sh --type multi  down
+
+# Stop everything
 ./docker/start-pool.sh down
 
 # Also remove the built image

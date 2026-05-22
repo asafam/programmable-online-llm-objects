@@ -7,8 +7,17 @@
 # Examples:
 #   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../workflows-mods.jsonl
 #   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../workflows-mods.jsonl --model gpt-4o --runs 3
-#   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../workflows-mods.jsonl --pool docker/worker-pool.yaml --model gpt-4o
+#   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../workflows-mods.jsonl --pool docker/worker-pool-8.yaml --model gpt-4o
 #   ./scripts/run-eval-baseline.sh -i outputs/data/zapier/.../workflows-mods.jsonl --tc 11 --verbose
+#
+# Parallel single + multi-agent runs (two terminal windows):
+#   # Terminal 1 — single-agent on dedicated workers
+#   ./docker/start-pool.sh --type single --workers 8
+#   ./scripts/run-eval-baseline.sh -i <input.jsonl> --pool docker/worker-pool-single-8.yaml --single-agent -o <out_single.jsonl>
+#
+#   # Terminal 2 — multi-agent on separate dedicated workers
+#   ./docker/start-pool.sh --type multi --workers 8
+#   ./scripts/run-eval-baseline.sh -i <input.jsonl> --pool docker/worker-pool-multi-8.yaml -o <out_multi.jsonl>
 #
 # All extra arguments are passed through to evaluate_baseline.py unchanged.
 # Log is written to logs/evaluate/<output_basename>.log (same name as the results file).

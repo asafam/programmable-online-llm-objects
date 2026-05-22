@@ -66,7 +66,7 @@ def generate_seed(llm, test_case: Sample, sample: Workflow) -> None:
       - Regex-detected tools from object behavior descriptions
     Mutates test_case in place.
     """
-    step_texts = [s.text for s in sample.steps if s.text]
+    step_texts = [s for s in sample.steps if s]
     event_texts = [e.input for e in test_case.events if getattr(e, "input", None)]
     all_texts = step_texts + event_texts
 

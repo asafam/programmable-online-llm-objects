@@ -101,7 +101,7 @@ def format_sample(sample: Workflow) -> str:
     objects_str = "\n".join(objects_lines)
 
     steps = "\n".join(
-        f"- [{step.target}] {step.text}" for step in sample.steps
+        f"- {s}" for s in sample.steps
     )
     return f"""ID: {sample.id}
 Name: {sample.name}
@@ -794,7 +794,7 @@ def _run_concurrent_events_pass(args: argparse.Namespace, samples: list[Workflow
         sample = sample_map.get(tc.sample_id) or Workflow(
             id=tc.sample_id or tc.id, name=tc.name, domain=tc.domain,
             source_type=tc.source_type, link=tc.link,
-            raw_steps=[s.text for s in tc.steps], objects=tc.objects,
+            raw_steps=tc.steps, objects=tc.objects,
             steps=tc.steps, tools=tc.tools,
         )
         _add_concurrent_events_to_tc(llm, sample, tc, n, workers=1)
