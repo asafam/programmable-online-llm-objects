@@ -74,21 +74,27 @@ def _load_prompt() -> str:
         return yaml.safe_load(f)["prompt"]
 
 
-def _build_context(tc: Sample) -> tuple[str, str, str]:
-    """Return (obj_lines, mock_lines, mod_lines) shared across events."""
+def _build_context(tc: Sample) -> tuple[str, str, str, str]:
+    """Return (obj_lines, mock_lines, write_tool_lines, mod_lines) shared across events."""
     obj_lines = "\n\n".join(
         f"[{o.object_id}]\nRole: {o.role}\nBehavior: {o.behavior}"
         for o in tc.objects
     )
+    read_tools  = [t for t in tc.tools if "_data" in t.tool_name.lower()]
+    write_tools = [t for t in tc.tools if "_data" not in t.tool_name.lower()]
     mock_lines = "\n\n".join(
         f"Tool: {t.tool_name}\n{t.response_template[:3000]}"
-        for t in tc.mock_tools
+        for t in read_tools
     ) or "(none)"
+    write_tool_lines = "\n".join(
+        f"- `{t.tool_name}`: {t.description}  args: {list(t.arguments_schema.get('properties', {}).keys())}"
+        for t in write_tools
+    ) or "(none — describe write actions by outcome)"
     mod_lines = "\n".join(
         f"{m.id} at {m.when} → {m.target}: {m.intent}"
         for m in tc.modifications
     ) or "(none)"
-    return obj_lines, mock_lines, mod_lines
+    return obj_lines, mock_lines, write_tool_lines, mod_lines
 
 
 def _evaluate_step(llm, tc: Sample, step_idx: int, prompt_template: str) -> ExpectationVerdict | None:
@@ -97,7 +103,7 @@ def _evaluate_step(llm, tc: Sample, step_idx: int, prompt_template: str) -> Expe
     if step.expect is None:
         return None
 
-    obj_lines, mock_lines, mod_lines = _build_context(tc)
+    obj_lines, mock_lines, write_tool_lines, mod_lines = _build_context(tc)
 
     # Steps run before any modifications — always baseline behavior
     event_line = f"S{step_idx+1:03d} | baseline (no modifications) | recipient={step.target} | input: {step.text}"
@@ -106,6 +112,7 @@ def _evaluate_step(llm, tc: Sample, step_idx: int, prompt_template: str) -> Expe
         prompt_template
         .replace("{OBJECTS}", obj_lines)
         .replace("{MOCK_DATA}", mock_lines)
+        .replace("{WRITE_TOOLS}", write_tool_lines)
         .replace("{MODIFICATIONS}", "(none — steps run before modifications)")
         .replace("{EVENT}", event_line)
         .replace("{ACTION}", step.expect.action)
@@ -322,12 +329,13 @@ class _ResolvedExpect(BaseModel):
 
 def _resolve_uncertain_step(llm, tc: Sample, step_idx: int, issue: str, prompt_template: str) -> EventExpect | None:
     step = tc.steps[step_idx]
-    obj_lines, mock_lines, _ = _build_context(tc)
+    obj_lines, mock_lines, write_tool_lines, _ = _build_context(tc)
     event_line = f"S{step_idx+1:03d} | baseline (no modifications) | recipient={step.target} | input: {step.text}"
     prompt = (
         prompt_template
         .replace("{OBJECTS}", obj_lines)
         .replace("{MOCK_DATA}", mock_lines)
+        .replace("{WRITE_TOOLS}", write_tool_lines)
         .replace("{MODIFICATIONS}", "(none — steps run before modifications)")
         .replace("{EVENT}", event_line)
         .replace("{ISSUE}", issue or "(no specific issue noted — derive the correct output from scratch)")
@@ -345,7 +353,7 @@ def _resolve_uncertain_step(llm, tc: Sample, step_idx: int, issue: str, prompt_t
 
 
 def _resolve_uncertain_event(llm, tc: Sample, evt, issue: str, prompt_template: str) -> EventExpect | None:
-    obj_lines, mock_lines, mod_lines = _build_context(tc)
+    obj_lines, mock_lines, write_tool_lines, mod_lines = _build_context(tc)
     active = _active_mods_for(evt.when, tc.modifications)
     mod_note = f" [active modifications: {', '.join(active)}]" if active else " [no modifications active — use baseline behavior]"
     event_line = f"{evt.id} | {evt.when}{mod_note} | recipient={evt.recipient} | input: {evt.input}"
@@ -353,6 +361,7 @@ def _resolve_uncertain_event(llm, tc: Sample, evt, issue: str, prompt_template: 
         prompt_template
         .replace("{OBJECTS}", obj_lines)
         .replace("{MOCK_DATA}", mock_lines)
+        .replace("{WRITE_TOOLS}", write_tool_lines)
         .replace("{MODIFICATIONS}", mod_lines)
         .replace("{EVENT}", event_line)
         .replace("{ISSUE}", issue or "(no specific issue noted — derive the correct output from scratch)")
@@ -376,7 +385,7 @@ def _evaluate_event(llm, tc: Sample, evt, prompt_template: str) -> ExpectationVe
     if evt.expect is None:
         return None
 
-    obj_lines, mock_lines, mod_lines = _build_context(tc)
+    obj_lines, mock_lines, write_tool_lines, mod_lines = _build_context(tc)
     active = _active_mods_for(evt.when, tc.modifications)
     mod_note = f" [active modifications: {', '.join(active)}]" if active else " [no modifications active — use baseline behavior]"
     event_line = f"{evt.id} | {evt.when}{mod_note} | recipient={evt.recipient} | input: {evt.input}"
@@ -385,6 +394,7 @@ def _evaluate_event(llm, tc: Sample, evt, prompt_template: str) -> ExpectationVe
         prompt_template
         .replace("{OBJECTS}", obj_lines)
         .replace("{MOCK_DATA}", mock_lines)
+        .replace("{WRITE_TOOLS}", write_tool_lines)
         .replace("{MODIFICATIONS}", mod_lines)
         .replace("{EVENT}", event_line)
         .replace("{ACTION}", evt.expect.action)

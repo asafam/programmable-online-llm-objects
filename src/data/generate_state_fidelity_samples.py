@@ -246,7 +246,7 @@ def _scenario_to_test_case(
         steps=sample.steps,
         modifications=[],
         events=all_events,
-        mock_tools=list(sample.mock_tools),
+        mock_tools=list(sample.tools),
     )
 
 

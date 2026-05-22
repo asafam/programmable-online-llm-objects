@@ -2504,7 +2504,7 @@ async def _run_all_tcs_concurrent(
 
                         if slot_mock_server is not None:
                             tc_mock_script = resolve_mock_configs(tc)
-                            tc_mock_script = merge_tc_mock_tools(tc_mock_script, tc.mock_tools)
+                            tc_mock_script = merge_tc_mock_tools(tc_mock_script, tc.tools)
                             if workers:
                                 # RemoteMockServer: stash script so configure() sends it in the POST body
                                 slot_mock_server._pending_mock_script = tc_mock_script
@@ -3276,7 +3276,7 @@ def run(args: argparse.Namespace) -> Path:
 
             if mock_server is not None:
                 tc_mock_script = resolve_mock_configs(tc)
-                tc_mock_script = merge_tc_mock_tools(tc_mock_script, tc.mock_tools)
+                tc_mock_script = merge_tc_mock_tools(tc_mock_script, tc.tools)
                 mock_server._state.mock_script = tc_mock_script
 
             for run_idx in range(args.runs):

@@ -70,7 +70,7 @@ prompt: |
 
   - `target` — the `object_id` of the object that receives the external trigger. MUST be an object with a non-empty `event_sources` list.
   - `source` — the external system sending this trigger (e.g., `"webhook"`, `"__external__"`). Use the actual system name if known.
-  - `text` — the natural language content of the trigger. Include only information that arrives with the external event — not data the objects will look up themselves. Use descriptive names for people and items (e.g., "James Brown, Account Executive" not "User #445").
+  - `text` — the natural language description of the trigger CLASS. Describe WHAT TYPE of event arrives and WHAT FIELDS it carries, using roles and field names — NOT specific instance values. Do not include quote IDs, person names, dollar amounts, dates, or any other concrete data values. Example: "A sales rep submits a new quote in HubSpot Quotes carrying the quote ID, submitting rep's identity and role, and the concession details (discount percentage, payment terms, add-ons)." — NOT "James Brown submits quote Q-2048 with 25% discount."
   - `expect` — what the system produces when run with no modifications:
     - `action` — an EXHAUSTIVE list of TERMINAL, externally-observable
       side effects the cascade produces. NOT a first-hop peer dispatch.
@@ -116,11 +116,7 @@ prompt: |
         ✗ "A notification is sent to the team."
         ✗ "The data is stored in the database."
 
-      Use **concrete names and destinations from the step `text` and
-      grounded scenario** — "notification sent to #channel mentioning
-      Alex Rivera" not "notification sent to the designated channel".
-      The judge verifies exact facts; abstract references cause false
-      failures.
+      Use **roles and field references, not instance values** — "approval-request email sent to the designated approvers" not "email sent to Maria Chen". Steps describe what the system DOES for any instance of this trigger class; concrete values (names, IDs, amounts) are supplied only at evaluation time via event payloads. Slack channel names from the object system's behavior descriptions are acceptable (they are structural, not instance data).
 
       Describe only natural-language messages and data writes — NOT
       interactive UI elements (buttons, dropdowns, forms, widgets). LNL
@@ -151,6 +147,6 @@ prompt: |
 
   **Consistency:** Names used in step `text` must be realistic and consistent — the pipeline will generate matching mock API data using these names.
 
-  **Carry all data the downstream chain needs.** The step `text` must include every piece of content that downstream objects will need to complete their work. If any object writes, stores, or forwards outcome data, that content must be present in the trigger — not invented mid-chain. Include conversation or thread identifiers for messaging platforms. Satisfy all conditions required by the expected output (e.g., if the expectation requires all approvers to have approved, the step must include all approvals; if a threshold must be met, the data must satisfy it).
+  **Steps are templates, not instances.** The `text` describes the trigger class abstractly — what fields arrive, not what their values are. Concrete values (quote IDs, names, amounts, thread IDs) belong in Events, not Steps. A step that reads "A sales rep submits a quote with concession details" is correct; one that reads "James Brown submits quote Q-2048 with 25% discount" is wrong.
 
   **Shared state:** Steps run sequentially on a shared runtime. Each step's side effects carry forward. Before writing `expect` for any step N, ask: "Have prior steps already resolved the state this step depends on?" If yes, omit `expect` — the outcome is no longer deterministic. Omit `expect` entirely for scheduled/heartbeat triggers.

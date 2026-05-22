@@ -182,10 +182,16 @@ def _rewrite_event_expectations(llm, test_case: Sample, sample: Workflow) -> Non
         f"[{obj.object_id}]\nRole: {obj.role}\nBehavior: {obj.behavior}"
         for obj in sample.objects
     )
+    read_tools  = [t for t in test_case.tools if "_data" in t.tool_name.lower()]
+    write_tools = [t for t in test_case.tools if "_data" not in t.tool_name.lower()]
     mock_lines = "\n\n".join(
         f"Tool: {t.tool_name}\n{t.response_template[:3000]}"
-        for t in test_case.mock_tools
+        for t in read_tools
     ) or "(none)"
+    write_tool_lines = "\n".join(
+        f"- `{t.tool_name}`: {t.description}  args: {list(t.arguments_schema.get('properties', {}).keys())}"
+        for t in write_tools
+    ) or "(none — describe write actions by outcome)"
     mod_lines = "\n".join(
         f"{m.id} at {m.when} → {m.target}: {m.intent}"
         for m in test_case.modifications
@@ -208,6 +214,7 @@ def _rewrite_event_expectations(llm, test_case: Sample, sample: Workflow) -> Non
     prompt = (raw_prompt
         .replace("{OBJECTS}", obj_lines)
         .replace("{MOCK_DATA}", mock_lines)
+        .replace("{WRITE_TOOLS}", write_tool_lines)
         .replace("{MODIFICATIONS}", mod_lines)
         .replace("{EVENTS}", event_lines)
     )
@@ -392,7 +399,7 @@ def scenario_to_test_case(
         steps=sample.steps,
         modifications=modifications,
         events=events,
-        mock_tools=list(sample.mock_tools),
+        tools=list(sample.tools),
     )
 
 
@@ -795,7 +802,7 @@ def _run_concurrent_events_pass(args: argparse.Namespace, samples: list[Workflow
             id=tc.sample_id or tc.id, name=tc.name, domain=tc.domain,
             source_type=tc.source_type, link=tc.link,
             raw_steps=[s.text for s in tc.steps], objects=tc.objects,
-            steps=tc.steps, mock_tools=tc.mock_tools,
+            steps=tc.steps, tools=tc.tools,
         )
         _add_concurrent_events_to_tc(llm, sample, tc, n, workers=1)
         _rewrite_event_expectations(llm, tc, sample)

@@ -62,7 +62,7 @@ def generate_seed(llm, test_case: Sample, sample: Workflow) -> None:
     its own events need — no cross-variant contamination.
 
     Tool discovery (union, not replacement):
-      - Pre-existing tools in tc.mock_tools (from retrofit/discover passes)
+      - Pre-existing tools in tc.tools (from retrofit/discover passes)
       - Regex-detected tools from object behavior descriptions
     Mutates test_case in place.
     """
@@ -72,7 +72,7 @@ def generate_seed(llm, test_case: Sample, sample: Workflow) -> None:
 
     # Build tool map: existing tools first, then regex-detected additions
     tool_map: dict[str, str] = {}  # tool_name → description
-    for tool in test_case.mock_tools:
+    for tool in test_case.tools:
         tool_map[tool.tool_name] = tool.description
     for obj in sample.objects:
         match = _DATA_TOOL_RE.search(obj.behavior or "")
@@ -87,7 +87,7 @@ def generate_seed(llm, test_case: Sample, sample: Workflow) -> None:
         tool = _generate_mock_tool_data(llm, tool_name, description, all_texts)
         if tool:
             mock_tools.append(tool)
-    test_case.mock_tools = mock_tools
+    test_case.tools = mock_tools
 
     _rewrite_event_expectations(llm, test_case, sample)
 

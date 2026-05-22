@@ -49,7 +49,7 @@ def find_mock_field_mismatches(tc: "Sample") -> list[str]:
     CHECKED_FIELDS = ("status", "priority", "stage", "type", "state")
 
     mock_field_values: dict[str, set[str]] = {}
-    for tool in tc.mock_tools:
+    for tool in tc.tools:
         for field in CHECKED_FIELDS:
             for m in re.finditer(rf'"{field}"\s*:\s*"([^"]+)"', tool.response_template, re.IGNORECASE):
                 mock_field_values.setdefault(field, set()).add(m.group(1).lower())
@@ -102,14 +102,14 @@ def find_read_write_misclassifications(tc: "Sample") -> list[str]:
                 continue
 
             has_event_sources = bool(target.event_sources)
-            has_data_skill    = any("_data" in s.lower() for s in target.skills)
+            has_any_skill     = bool(target.skills)
             is_write_only     = bool(WRITE_ONLY_BEHAVIOR.search(target.behavior))
 
-            if (not has_event_sources and not has_data_skill) or is_write_only:
+            if (not has_event_sources and not has_any_skill) or is_write_only:
                 issues.append(
                     f"Object '{obj.object_id}' queries '{target.object_id}' "
                     f"('{peer.relationship}') but '{target.object_id}' cannot respond"
-                    + (" — has write-only behavior" if is_write_only else " — no event_sources or _data skill")
+                    + (" — has write-only behavior" if is_write_only else " — no event_sources or skills")
                 )
     return issues
 
@@ -146,7 +146,7 @@ def find_sequential_confirmation_chains(tc: "Sample") -> list[str]:
     # the confirmation callback will fire, so the stall is resolved.
     patched_objects = {
         trigger.target_object_id
-        for tool in tc.mock_tools
+        for tool in tc.tools
         for trigger in tool.triggers
     }
     issues = []
@@ -179,7 +179,7 @@ def find_missing_step_data(tc: "Sample") -> list[str]:
     for o in tc.objects:
         if o.object_id.startswith("slack-"):
             available_text += f" #{o.object_id[len('slack-'):]}"
-    for tool in tc.mock_tools:
+    for tool in tc.tools:
         available_text += " " + tool.response_template
         for resp in tool.scripted_responses:
             available_text += " " + resp
@@ -296,7 +296,7 @@ def find_trigger_reference_errors(tc: "Sample") -> list[str]:
     event_ids  = {e.id for e in tc.events}
     issues: list[str] = []
 
-    for tool in tc.mock_tools:
+    for tool in tc.tools:
         valid_placeholders = (
             set(tool.arguments_schema.get("properties", {}).keys()) | {"call_index"}
         )
@@ -493,7 +493,7 @@ def find_missing_mock_tools(tc: "Sample") -> list[str]:
     PassthroughExecutor which returns '{}' — causing field-access failures and
     stalling request-reply chains.
     """
-    mocked = {t.tool_name for t in tc.mock_tools}
+    mocked = {t.tool_name for t in tc.tools}
     issues = []
     for obj in tc.objects:
         for skill in obj.skills:
@@ -527,7 +527,7 @@ def find_behavior_data_tool_references(tc: "Sample") -> list[str]:
     not actual tool calls.  False positives are rare because '_data' suffixes
     are a strong signal in this codebase.
     """
-    mocked = {t.tool_name for t in tc.mock_tools}
+    mocked = {t.tool_name for t in tc.tools}
     issues = []
     for obj in tc.objects:
         for match in _DATA_TOOL_RE.finditer(obj.behavior):
@@ -538,6 +538,54 @@ def find_behavior_data_tool_references(tc: "Sample") -> list[str]:
                     f"but no MockToolDef with that name exists — the call will return '{{}}' "
                     f"and the object will stall or proceed with empty data"
                 )
+    return issues
+
+
+# ── Validator: write-service objects with no tool skills ─────────────────────
+
+_WRITE_SERVICE_RE = re.compile(
+    r"\b(send|post|write|update|create|publish|notify|deliver|dispatch|log|record|"
+    r"insert|upsert|push|upload|submit|emit)\b",
+    re.IGNORECASE,
+)
+
+
+def find_write_service_without_tools(tc: "Sample") -> list[str]:
+    """
+    Return errors for objects whose behavior describes write-side API calls
+    but that have no corresponding MockToolDef registered for the test case.
+
+    Write-service objects (email sender, Slack poster, HubSpot writer, etc.)
+    must invoke external APIs to produce their observable side-effects.
+    Without a MockToolDef, the evaluation framework has nothing to assert
+    tool-invocation against — the object can claim success without ever
+    calling the API, and evaluations pass incorrectly.
+
+    Coverage is satisfied if:
+      - the object declares skills that map to mock tools, OR
+      - tc.tools contains at least one write-side tool (any tool whose
+        name does not end in '_data') — indicating write-side tools were
+        registered for this test case.
+    """
+    write_tools_registered = any(
+        "_data" not in t.tool_name.lower() for t in tc.tools
+    )
+    if write_tools_registered:
+        return []
+
+    issues = []
+    for obj in tc.objects:
+        if obj.skills:
+            continue
+        if obj.event_sources or obj.peers:
+            continue
+        if _WRITE_SERVICE_RE.search(obj.behavior):
+            issues.append(
+                f"Object '{obj.object_id}' appears to be a write-service "
+                f"(behavior contains write verbs) but no write-side MockToolDef "
+                f"is registered for this test case — no tool invocation can be "
+                f"asserted during evaluation; run retrofit_mock_tools to add them"
+            )
     return issues
 
 
@@ -719,7 +767,7 @@ def find_unnatural_identifiers(tc: "Sample") -> list[str]:
 
     mock_text = " ".join(
         tool.response_template + " " + " ".join(tool.scripted_responses)
-        for tool in tc.mock_tools
+        for tool in tc.tools
     )
     expectation_text = (
         " ".join(
@@ -793,12 +841,12 @@ def find_event_entity_mock_gaps(tc: "Sample") -> list[str]:
 
     Skipped if the test case has no mock tools (nothing to be inconsistent with).
     """
-    if not tc.mock_tools:
+    if not tc.tools:
         return []
 
     # Build full mock tool text corpus — every string the mock could return
     mock_parts: list[str] = []
-    for tool in tc.mock_tools:
+    for tool in tc.tools:
         mock_parts.append(tool.response_template)
         mock_parts.extend(tool.scripted_responses)
         for smr in tool.scripted_match_responses:
@@ -806,7 +854,7 @@ def find_event_entity_mock_gaps(tc: "Sample") -> list[str]:
             mock_parts.append(smr.response)
     mock_text = " ".join(mock_parts)
 
-    tool_names_str = ", ".join(f"'{t.tool_name}'" for t in tc.mock_tools)
+    tool_names_str = ", ".join(f"'{t.tool_name}'" for t in tc.tools)
 
     # Collect entity IDs and emails from ALL event inputs + expectations.
     # Deduplicate by entity so each gap is reported once regardless of how
@@ -869,6 +917,7 @@ BLOCKING_VALIDATORS = frozenset({
     "find_invalid_peer_declarations",        # dangling peer → sends silently dropped
     "find_missing_mock_tools",               # _data skill with no mock → stalls silently
     "find_behavior_data_tool_references",    # behavior references _data tool with no mock → stalls silently
+    "find_write_service_without_tools",      # write-service with no skills → no tool invocation to assert
     "find_read_write_misclassifications",    # PENDING forever stall
     "find_modification_target_errors",       # modification targets ghost → never applied
 })
@@ -900,6 +949,7 @@ _SAMPLE_VALIDATORS = [
     find_unreachable_objects,
     find_missing_mock_tools,
     find_behavior_data_tool_references,
+    find_write_service_without_tools,
 ]
 
 _TEST_CASE_VALIDATORS = [
@@ -916,6 +966,7 @@ _TEST_CASE_VALIDATORS = [
     find_unreachable_objects,
     find_missing_mock_tools,
     find_behavior_data_tool_references,
+    find_write_service_without_tools,
     find_unnatural_identifiers,
     find_modification_target_errors,
     find_modification_timeline_errors,
@@ -941,7 +992,7 @@ def validate_sample(sample: "Workflow") -> dict[str, list[str]]:
         source_type=sample.source_type,
         objects=sample.objects,
         steps=sample.steps,
-        mock_tools=sample.mock_tools,
+        tools=sample.tools,
         modifications=[],
         events=[],
     )

@@ -140,7 +140,7 @@ def repair(
                     raw_steps=[s.text for s in tc.steps],
                     objects=tc.objects,
                     steps=tc.steps,
-                    mock_tools=tc.mock_tools,
+                    mock_tools=tc.tools,
                 )
             _rewrite_event_expectations(llm, tc, sample)
             return idx, tc

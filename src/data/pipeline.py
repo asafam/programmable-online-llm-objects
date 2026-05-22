@@ -111,7 +111,7 @@ def _autopatch_sample(sample, blocking: dict) -> tuple[bool, dict]:
 
     # --- Patch: read_write_misclassifications ---
     if "find_read_write_misclassifications" in remaining:
-        existing_tool_names = {t.tool_name for t in sample.mock_tools}
+        existing_tool_names = {t.tool_name for t in sample.tools}
         unfixed = []
         for issue in remaining["find_read_write_misclassifications"]:
             m = re.search(r"'([^']+)' cannot respond", issue)
@@ -143,7 +143,7 @@ def _autopatch_sample(sample, blocking: dict) -> tuple[bool, dict]:
                 description = f"Query {target.object_id} for stored data."
                 if target.state_description:
                     description += f" {target.state_description}"
-                sample.mock_tools.append(MockToolDef(
+                sample.tools.append(MockToolDef(
                     tool_name=skill,
                     description=description.strip(),
                     arguments_schema={
@@ -178,7 +178,7 @@ def _autopatch_sample(sample, blocking: dict) -> tuple[bool, dict]:
             r"\b(confirm(?!ation)\w*|responds?\b|acknowledg\w*|repl(?:ies|ied|y\b)|complet(?:es?|ed)\b|send.?back\b|'s\s+(?:reply|response))",
             re.IGNORECASE,
         )
-        existing_tool_names = {t.tool_name for t in sample.mock_tools}
+        existing_tool_names = {t.tool_name for t in sample.tools}
         for issue in remaining["find_sequential_confirmation_chains"]:
             # Extract the object with the problematic behavior
             m = re.search(r"Object '([^']+)' behavior contains", issue)
@@ -195,7 +195,7 @@ def _autopatch_sample(sample, blocking: dict) -> tuple[bool, dict]:
                     continue
                 # Find or create a mock tool for this peer
                 peer_tool = next(
-                    (t for t in sample.mock_tools if peer.object_id in t.tool_name),
+                    (t for t in sample.tools if peer.object_id in t.tool_name),
                     None,
                 )
                 if peer_tool is None:
@@ -209,7 +209,7 @@ def _autopatch_sample(sample, blocking: dict) -> tuple[bool, dict]:
                             arguments_schema={"type": "object", "properties": {}, "required": []},
                             response_template=f"Delivered to {peer.object_id}.",
                         )
-                        sample.mock_tools.append(peer_tool)
+                        sample.tools.append(peer_tool)
                         existing_tool_names.add(tool_name)
                         changed = True
                 # Add a trigger that fires a confirmation back to the waiter

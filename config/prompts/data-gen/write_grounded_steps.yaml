@@ -1,0 +1,44 @@
+prompt: |
+  # Task: Write Grounded Workflow Steps
+
+  You are given a workflow's abstract template steps and the object system that implements them.
+  Rewrite each template step as a grounded description that names the objects involved,
+  the data that flows, and the conditions that apply.
+
+  ---
+
+  ## Template Steps (abstract)
+
+  {TEMPLATE}
+
+  ---
+
+  ## Object System
+
+  {OBJECTS}
+
+  ---
+
+  ## Instructions
+
+  For each template step, write one grounded sentence or short paragraph that:
+  - Names the specific objects from the Object System that act in this step
+  - Describes what data flows (field names, thresholds, conditions from object behaviors)
+  - States any conditions or branching logic (e.g. "if discount > 15%", "if all approvers have responded")
+  - Uses structural identifiers from the object behaviors (channel names, table names, tool names)
+    if they appear in the object system
+
+  Do NOT:
+  - Include instance-specific values (person names, IDs, dollar amounts, dates)
+  - Invent behavior not present in the object system
+  - Collapse multiple template steps into one
+  - Skip any template step — output exactly one entry per template step, in order
+
+  Keep each step concise: 1–3 sentences describing what the system does, not what triggers it.
+
+  ---
+
+  ## Output
+
+  Return strictly a JSON array of strings, one per template step, in the same order:
+  ["grounded description of step 1", "grounded description of step 2", ...]

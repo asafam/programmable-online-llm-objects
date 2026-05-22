@@ -421,7 +421,7 @@ def _execute_test_case_inner(
     # (the generate_workflows prompt marks them as "purely internal, no external system
     # calls"). Registering them as tools would tell the LLM to call them externally.
     # Triggered events are dispatched directly by the harness (no mock tool needed).
-    final_mock_tools = merge_mock_tools(global_mock_tools or [], tc.mock_tools)
+    final_mock_tools = merge_mock_tools(global_mock_tools or [], tc.tools)
 
     # When --mock-server is active, register this TC's mock tools with the HTTP
     # mock server under a per-(tc, run) slot, then route tool-call responses

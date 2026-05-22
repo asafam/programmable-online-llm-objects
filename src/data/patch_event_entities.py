@@ -81,7 +81,7 @@ def _assign_entities_to_tools(
     tools with email patterns, company names → tools with company patterns).  Falls
     back to the first mock tool when no better match is found.
     """
-    if not tc.mock_tools:
+    if not tc.tools:
         return {}
 
     # Collect entities from gap issues
@@ -107,7 +107,7 @@ def _assign_entities_to_tools(
 
     # Build affinity map: tool_name → (has_ids, has_emails, has_companies)
     tool_affinity: dict[str, tuple[bool, bool, bool]] = {}
-    for tool in tc.mock_tools:
+    for tool in tc.tools:
         text = tool.response_template
         tool_affinity[tool.tool_name] = (
             bool(_ENTITY_ID_RE.search(text)),
@@ -115,7 +115,7 @@ def _assign_entities_to_tools(
             bool(_COMPANY_NAME_RE.search(text)),
         )
 
-    first_tool = tc.mock_tools[0].tool_name
+    first_tool = tc.tools[0].tool_name
 
     def _best_tool(entity_type: str) -> str:
         idx = {"entity_id": 0, "email": 1, "company": 2}[entity_type]
@@ -284,13 +284,13 @@ def patch_entity_gaps(
     # Track updated tool maps per TC (may get multiple patch calls for the same TC)
     updated_tools: dict[int, dict[str, MockToolDef]] = defaultdict(dict)
     for idx, tc, _ in tc_gaps:
-        for tool in tc.mock_tools:
+        for tool in tc.tools:
             updated_tools[idx][tool.tool_name] = tool
 
     def _do_patch(unit: WorkUnit) -> tuple[int, str, MockToolDef]:
         idx, tool_name, entities = unit
         tc = result[idx]
-        tool = next((t for t in tc.mock_tools if t.tool_name == tool_name), None)
+        tool = next((t for t in tc.tools if t.tool_name == tool_name), None)
         if tool is None:
             return idx, tool_name, None  # type: ignore[return-value]
         patched = _patch_tool_with_entities(llm, tool, entities)
@@ -323,7 +323,7 @@ def patch_entity_gaps(
     patched_count = 0
     for idx, tool_map in updated_tools.items():
         tc = result[idx]
-        new_mock_tools = [tool_map.get(t.tool_name, t) for t in tc.mock_tools]
+        new_mock_tools = [tool_map.get(t.tool_name, t) for t in tc.tools]
         result[idx] = tc.model_copy(update={"mock_tools": new_mock_tools})
         patched_count += 1
 

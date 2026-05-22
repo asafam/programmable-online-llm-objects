@@ -87,7 +87,7 @@ def _discover_tool_calls(
 
     # Register existing mock tools so they respond correctly and don't appear
     # as false positives in the passthrough log.
-    for mock_tool in tc.mock_tools:
+    for mock_tool in tc.tools:
         executor = MockInProcessExecutor(mock_tool)
         tool_registry.register(mock_tool.tool_name, executor, spec=executor.spec)
 
@@ -183,7 +183,7 @@ def run(args: argparse.Namespace) -> None:
                 pbar.update(1)
                 continue
 
-            already_mocked = {t.tool_name for t in representative.mock_tools}
+            already_mocked = {t.tool_name for t in representative.tools}
             missing = [t for t in unmocked if t not in already_mocked]
 
             if not missing:
@@ -200,7 +200,7 @@ def run(args: argparse.Namespace) -> None:
 
             # Generate mock data for each newly discovered tool
             step_texts = [s.text for s in representative.steps if s.text]
-            tools: list[MockToolDef] = list(representative.mock_tools)
+            tools: list[MockToolDef] = list(representative.tools)
             for tool_name in missing:
                 # Derive description from the object whose behavior references this tool
                 description = next(
@@ -216,7 +216,7 @@ def run(args: argparse.Namespace) -> None:
                     tools.append(tool)
                     tqdm.write(f"    + generated {tool_name}")
 
-            if tools != list(representative.mock_tools):
+            if tools != list(representative.tools):
                 new_tools_by_sample[sid] = tools
 
             pbar.update(1)

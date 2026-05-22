@@ -1,9 +1,14 @@
 """
 Retrofit mock tools into existing test cases.
 
-For each sample group (TCs sharing the same sample_id) that has no mock_tools,
-uses an LLM to identify what external read-service data lookups are needed, generates
-realistic mock data for each, and patches the JSONL in-place.
+For each sample group (TCs sharing the same sample_id), uses an LLM to identify:
+  1. Missing READ-ONLY data tools (external data lookups needed by read-service objects).
+  2. Missing WRITE-SIDE tools (external API calls made by write-service objects such as
+     send_email, post_slack_message, update_crm_record, etc.).
+
+Both categories are registered as MockToolDefs so the evaluation harness can assert
+that the tools were called with the correct arguments.  Write-side tools use simple
+acknowledgement response templates; read-side tools use realistic scripted data.
 
 Mock tools are determined at the sample level (all 6 TC variants share the same objects
 and trigger steps), so the LLM is only called once per sample group.
@@ -39,7 +44,12 @@ from tqdm import tqdm
 
 load_dotenv()
 
-from src.data.generate_workflows import _generate_mock_tool_data
+from src.data.generate_workflows import (
+    _generate_mock_tool_data,
+    _identify_missing_write_tools,
+    _make_write_tool,
+    _parse_llm_tool_list,
+)
 from src.data.llm import create_llm
 from src.data.llm.base import ChatMessage
 from src.data.schema import MockToolDef, Sample
@@ -51,6 +61,7 @@ from src.data.utils import add_common_args, infer_provider, load_jsonl, print_ru
 _IDENTIFY_PROMPT = """\
 You are analyzing a distributed LLM-object automation system to identify what \
 external read-only data sources are required but missing from the mock tool configuration.
+# (write-tool functions moved to generate_workflows.py)
 
 ## Objects in this automation
 
@@ -78,9 +89,10 @@ Focus on:
 - Any other reference data an object needs to look up by name or ID
 
 Do NOT include:
-- Internal computations (formatting, validation, classification) — these are skills
+- Internal computations (formatting, validation, classification) — these are internal skills
 - Transactional data created during the automation run (approvals, tickets, logs)
 - Data that arrives in the trigger event payload itself
+- Write-side API calls (covered by a separate prompt)
 
 For each missing data source, return:
 - tool_name: snake_case ending in _data (e.g. org_directory_data, product_catalog_data)
@@ -90,7 +102,6 @@ For each missing data source, return:
 Return ONLY a JSON array. If no tools are missing, return [].
 Example: [{{"tool_name": "org_directory_data", "description": "Employee org chart with reporting chains and approval authorities.", "used_by": "approval-policy"}}]
 """
-
 
 def _identify_missing_tools(
     llm,
@@ -103,7 +114,7 @@ def _identify_missing_tools(
     )
     steps_text = "\n".join(f"  - {s.text}" for s in tc.steps)
     existing = (
-        "\n".join(f"  - {t.tool_name}: {t.description}" for t in tc.mock_tools)
+        "\n".join(f"  - {t.tool_name}: {t.description}" for t in tc.tools)
         or "  (none)"
     )
     prompt = (
@@ -114,12 +125,7 @@ def _identify_missing_tools(
     )
     messages = [ChatMessage(role="user", content=prompt)]
     try:
-        text = llm.generate_text(messages=messages).strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        result = json.loads(text)
-        if isinstance(result, list):
-            return [r for r in result if isinstance(r, dict) and "tool_name" in r]
+        return _parse_llm_tool_list(llm.generate_text(messages=messages))
     except Exception:
         pass
     return []
@@ -160,24 +166,46 @@ def run(args: argparse.Namespace) -> None:
 
     def _process_sample(sid: str, idxs: list[int]) -> tuple[str, list[MockToolDef] | None]:
         representative = test_cases[idxs[0]]
-        identified = _identify_missing_tools(llm, representative)
+        identified_read  = _identify_missing_tools(llm, representative)
+        identified_write = _identify_missing_write_tools(llm, representative)
+
         if args.dry_run:
-            if identified:
+            any_found = identified_read or identified_write
+            if any_found:
                 tqdm.write(f"\n  {representative.id}")
-                for t in identified:
-                    tqdm.write(f"    → {t['tool_name']}: {t.get('description', '')[:80]}")
+                for t in identified_read:
+                    tqdm.write(f"    [read]  → {t['tool_name']}: {t.get('description', '')[:80]}")
+                for t in identified_write:
+                    tqdm.write(f"    [write] → {t['tool_name']}: {t.get('description', '')[:80]}")
             return sid, None
+
         step_texts = [s.text for s in representative.steps if s.text]
-        tools: list[MockToolDef] = list(representative.mock_tools)
-        for entry in identified:
+        tools: list[MockToolDef] = list(representative.tools)
+        mocked = {t.tool_name for t in tools}
+
+        # Read-side tools: generate realistic scripted data
+        for entry in identified_read:
             tool_name = entry.get("tool_name", "").strip()
             description = entry.get("description", "").strip() or entry.get("used_by", "")
-            if not tool_name or any(t.tool_name == tool_name for t in tools):
+            if not tool_name or tool_name in mocked:
                 continue
             tool = _generate_mock_tool_data(llm, tool_name, description, step_texts)
             if tool:
                 tools.append(tool)
-                tqdm.write(f"  + {tool_name} ({representative.id[:40]})")
+                mocked.add(tool_name)
+                tqdm.write(f"  + [read]  {tool_name} ({representative.id[:40]})")
+
+        # Write-side tools: simple acknowledgement stubs
+        for entry in identified_write:
+            tool_name = entry.get("tool_name", "").strip()
+            if not tool_name or tool_name in mocked:
+                continue
+            tool = _make_write_tool(entry)
+            if tool:
+                tools.append(tool)
+                mocked.add(tool_name)
+                tqdm.write(f"  + [write] {tool_name} ({representative.id[:40]})")
+
         return sid, tools
 
     workers = getattr(args, "workers", 1)
@@ -208,7 +236,7 @@ def run(args: argparse.Namespace) -> None:
         if not tools:
             continue
         for i in idxs:
-            test_cases[i] = test_cases[i].model_copy(update={"mock_tools": tools})
+            test_cases[i] = test_cases[i].model_copy(update={"tools": tools})
             patched += 1
 
     # Write updated workflows-mods.jsonl (in-place, same file)
@@ -229,7 +257,7 @@ def run(args: argparse.Namespace) -> None:
             # sample_id may equal the sample's id
             if sid in sample_map:
                 idx = sample_map[sid]
-                samples[idx] = samples[idx].model_copy(update={"mock_tools": tools})
+                samples[idx] = samples[idx].model_copy(update={"tools": tools})
                 s_patched += 1
         if s_patched:
             samples_out = args.workflows_output or args.workflows

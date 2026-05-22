@@ -55,7 +55,7 @@ def _find_empty_data_tools(sample: Workflow) -> list[str]:
     """Return tool_names of _data tools with no real JSON data."""
     return [
         t.tool_name
-        for t in sample.mock_tools
+        for t in sample.tools
         if "_data" in t.tool_name and _is_empty_tool(t.response_template)
     ]
 
@@ -91,11 +91,11 @@ def _fill_sample(llm, sample: Workflow) -> tuple[Workflow, int]:
             continue
 
         # Replace the existing tool in-place
-        for i, t in enumerate(sample.mock_tools):
+        for i, t in enumerate(sample.tools):
             if t.tool_name == tool_name:
                 # Preserve existing triggers (added by sequential_confirmation auto-patch)
                 new_tool.triggers = t.triggers
-                sample.mock_tools[i] = new_tool
+                sample.tools[i] = new_tool
                 filled += 1
                 break
 

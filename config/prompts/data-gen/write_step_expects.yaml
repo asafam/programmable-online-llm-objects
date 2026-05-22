@@ -113,8 +113,12 @@ prompt: |
 
   Describe natural-language messages and data writes only — NOT interactive
   UI elements. Use product/destination names exactly as they appear in
-  the scenario / object behaviors. Include concrete payload data when it
-  would be visible at the terminal (names, IDs, message text).
+  the scenario / object behaviors (e.g. "HubSpot Quotes", "#deal-approvals").
+  Do NOT include instance-specific values (quote IDs, person names, dollar
+  amounts) — steps are templates; concrete values are supplied by events at
+  evaluation time. Describe roles: "the designated approvers", "the
+  submitting rep", "the required concession approver" — not "Maria Chen",
+  "Q-2048", "25%".
 
   `expect.reason` is one sentence naming the cascade path from trigger to
   terminal output (e.g., "the contact-verification object validates the

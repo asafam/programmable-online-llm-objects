@@ -18,6 +18,15 @@ prompt: |
 
   ---
 
+  ## Registered Write-Side Tools
+
+  These are the EXACT tool names the system must call to perform external write operations.
+  When writing `action`, you MUST use these exact names for any write-side assertion.
+
+  {WRITE_TOOLS}
+
+  ---
+
   ## Modifications
 
   {MODIFICATIONS}
@@ -123,13 +132,24 @@ prompt: |
   **Step 5 — Look up exact names from the Reference Data.**
   Use the Reference Data to find the actual entity that fills each role. Use exact names and identifiers.
 
-  **Step 6 — Only describe actions that objects in the Object System actually perform.**
+  **Step 6 — For each external write action, assert the registered tool call explicitly.**
+  Look up the matching tool in the "Registered Write-Side Tools" section above.
+  In `action`, name the tool and its key arguments:
+    ✓ "`send_approval_email` called with recipient=Sandra Okonkwo (sandra@co.com),
+       subject='Approval required: Q-3112', body containing deal and ARR."
+    ✓ "`post_slack_message` called on #deal-approvals with quote Q-3112 details and
+       approve/reject prompts."
+    ✗ "Email sent to Sandra Okonkwo." (no tool name — judge cannot verify invocation)
+  If the Registered Write-Side Tools section is empty, fall back to describing the
+  external action by outcome (email, Slack post, DB record) as before.
+
+  **Step 7 — Only describe actions that objects in the Object System actually perform.**
   Every output you include in `action` must be directly traceable to an object listed in the
   Object System above. If no object in the Object System sends Slack messages, do NOT include
   a Slack notification in the action. If no object sends email, do NOT include an email. Do not
   invent outputs for capabilities the system does not have.
 
-  **Step 7 — Only use identifiers that are present in the provided data.**
+  **Step 8 — Only use identifiers that are present in the provided data.**
   Any specific identifier you include in `action` — especially Slack channel names (`#channel`),
   ticket/record IDs (e.g., `PROJ-1042`), and email addresses — MUST appear verbatim in one of:
   the event's `input` text, another event's `input` text, the Object System behaviors above,
@@ -171,11 +191,15 @@ prompt: |
      Example: "Email sent to maya.patel@acme.com with subject
      'Welcome to Acme' and body containing the onboarding checklist link."
 
-  3. **Tool / API invocations** — calls to external systems (Stripe
-     charge, DocuSign envelope create, OpenAI completion, Bitly shorten…).
-     Include the tool/operation name + key args.
-     Example: "Stripe `charges.create` invoked with customer_id 'cus_8821',
-     amount $4900, currency 'usd'."
+  3. **Tool / API invocations** — calls to external systems (send_email,
+     post_slack_message, update_hubspot_record, create_jira_ticket…).
+     Use the EXACT tool name from the "Registered Write-Side Tools" section.
+     Include the key arguments the system must supply.
+     Example: "`send_approval_email` called with recipient=Sandra Okonkwo,
+     subject='Approval required: Q-3112', body containing deal name and ARR."
+     Example: "`post_slack_message` called on #deal-approvals with Q-3112
+     details and approve/reject/request-changes prompts."
+     If no registered tool covers this action, describe it by outcome.
 
   4. **File / artifact writes** — files uploaded to Drive, S3, etc.
      Example: "A PDF named 'invoice-1042.pdf' is uploaded to the

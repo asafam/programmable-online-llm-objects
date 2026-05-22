@@ -35,6 +35,7 @@ from tqdm import tqdm
 load_dotenv()
 
 from src.data.schema import (
+    Event,
     GroundedTemplate,
     MockToolDef,
     ObjectGraph,
@@ -62,12 +63,13 @@ _PROMPTS_DIR = Path("config/prompts/data-gen")
 _GROUND_PROMPT = _PROMPTS_DIR / "ground_template.yaml"
 _OBJECTS_PROMPT = _PROMPTS_DIR / "identify_objects.yaml"
 _STEPS_PROMPT = _PROMPTS_DIR / "write_steps.yaml"
+_GROUNDED_STEPS_PROMPT = _PROMPTS_DIR / "write_grounded_steps.yaml"
 
 
 # ── Stage helpers ─────────────────────────────────────────────────────────────
 
 def _format_template(template: dict) -> str:
-    steps = "\n".join(f"- {s}" for s in template["raw_steps"])
+    steps = "\n".join(f"- {s}" for s in (template.get("template") or template.get("raw_steps", [])))
     return (
         f"ID: {template['id']}\n"
         f"Name: {template['name']}\n"
@@ -292,6 +294,32 @@ def _generate_mock_tool_data(llm, tool_name: str, description: str, step_texts: 
         return None
 
 
+def _generate_grounded_steps(llm, template_steps: list[str], objects: list) -> list[str]:
+    """LLM call: ground each abstract template step using the object system."""
+    prompt_template = load_prompt_template(_GROUNDED_STEPS_PROMPT)["prompt"]
+    template_text = "\n".join(f"{i+1}. {s}" for i, s in enumerate(template_steps))
+    objects_text = "\n\n".join(
+        f"[{obj.object_id}] {obj.role}\n  behavior: {obj.behavior}"
+        for obj in objects
+    )
+    prompt = (
+        prompt_template
+        .replace("{TEMPLATE}", template_text)
+        .replace("{OBJECTS}", objects_text)
+    )
+    messages = [ChatMessage(role="user", content=prompt)]
+    try:
+        text = llm.generate_text(messages=messages).strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        result = json.loads(text)
+        if isinstance(result, list) and all(isinstance(s, str) for s in result):
+            return result
+    except Exception:
+        pass
+    return list(template_steps)  # fallback: return template as-is
+
+
 def _assemble_sample(template: dict, grounded: GroundedTemplate, graph: ObjectGraph, steps: WorkflowSteps) -> Workflow:
     """Combine stage outputs into a Workflow. Slugify ids. Mock tools generated separately."""
     for obj in graph.objects:
@@ -301,51 +329,170 @@ def _assemble_sample(template: dict, grounded: GroundedTemplate, graph: ObjectGr
     for step in steps.steps:
         step.target = slugify(step.target)
 
+    # Convert external-trigger steps to base events
+    base_events = [
+        Event(
+            id=f"S{i+1:03d}",
+            call_type="send",
+            source=s.source,
+            recipient=s.target,
+            input=s.text,
+            when="W00-1T00:00",
+            expect=s.expect,
+            role="base",
+        )
+        for i, s in enumerate(steps.steps)
+    ]
+
     return Workflow(
         id=template["id"],
         name=grounded.name,
         domain=grounded.domain,
         source_type=template["source_type"],
         link=template.get("link") or template.get("seed_utterance", ""),
-        raw_steps=template["raw_steps"],
+        template=template.get("raw_steps", []),
         objects=graph.objects,
-        steps=steps.steps,
+        steps=[],       # filled by _add_grounded_steps after assembly
+        events=base_events,
     )
 
 
 _DATA_TOOL_RE = re.compile(r"call the `([a-z][a-z0-9_]*_data)` tool", re.IGNORECASE)
 
+# ── Write-tool identification ─────────────────────────────────────────────────
+
+_IDENTIFY_WRITE_TOOLS_PROMPT = """\
+You are analyzing a distributed LLM-object automation system to identify what \
+external write-side API calls are required but missing from the mock tool configuration.
+
+## Objects in this automation
+
+{OBJECTS}
+
+## Already-defined mock tools
+
+{EXISTING_TOOLS}
+
+## Task
+
+Identify every external WRITE-SIDE API call that any object in this automation must \
+make to produce observable side-effects, but that is NOT already covered by the \
+existing mock tools.
+
+Focus on:
+- Sending emails (e.g. send_email, send_approval_email)
+- Posting to Slack or other messaging platforms (e.g. post_slack_message, send_slack_dm)
+- Writing records to a CRM or database (e.g. update_hubspot_record, create_salesforce_opportunity)
+- Creating tickets or tasks (e.g. create_jira_ticket, create_asana_task)
+- Logging or recording actions in external systems (e.g. log_audit_event, append_sheet_row)
+- Any other outbound API call that persists or transmits data externally
+
+Do NOT include:
+- Read-only data lookups (covered by _data tools)
+- Internal state updates within the object itself
+- Peer-to-peer message passing between objects in this system
+
+For each missing write-side tool, return:
+- tool_name: snake_case verb_noun (e.g. send_email, post_slack_message, update_hubspot_record)
+- description: one sentence — what external write operation this tool performs
+- used_by: the object_id that makes this call
+- arguments: list of argument names this tool requires (e.g. ["recipient", "subject", "body"])
+
+Return ONLY a JSON array. If no write-side tools are missing, return [].
+Example: [{"tool_name": "send_email", "description": "Send an email to the specified recipient.", "used_by": "email-notifications", "arguments": ["recipient", "subject", "body", "quote_id"]}]
+"""
+
+
+def _parse_llm_tool_list(text: str) -> list[dict]:
+    """Parse a JSON array from LLM output, stripping code fences."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    try:
+        result = json.loads(text)
+        if isinstance(result, list):
+            return [r for r in result if isinstance(r, dict) and "tool_name" in r]
+    except Exception:
+        pass
+    return []
+
+
+def _identify_missing_write_tools(llm, sample) -> list[dict]:
+    """Ask LLM what write-side API tools this sample's objects still need."""
+    objects_text = "\n".join(
+        f"[{obj.object_id}] {obj.role}\n  behavior: {obj.behavior[:300]}"
+        for obj in sample.objects
+    )
+    existing = (
+        "\n".join(f"  - {t.tool_name}: {t.description}" for t in sample.tools)
+        or "  (none)"
+    )
+    prompt = (
+        _IDENTIFY_WRITE_TOOLS_PROMPT
+        .replace("{OBJECTS}", objects_text)
+        .replace("{EXISTING_TOOLS}", existing)
+    )
+    messages = [ChatMessage(role="user", content=prompt)]
+    try:
+        return _parse_llm_tool_list(llm.generate_text(messages=messages))
+    except Exception:
+        pass
+    return []
+
+
+def _make_write_tool(entry: dict) -> "MockToolDef | None":
+    """Build a MockToolDef stub for a write-side tool from the LLM-identified entry."""
+    tool_name = entry.get("tool_name", "").strip()
+    if not tool_name:
+        return None
+    description = entry.get("description", "").strip() or f"Perform {tool_name}."
+    args = entry.get("arguments", [])
+    if isinstance(args, list) and args:
+        properties = {a: {"type": "string"} for a in args if isinstance(a, str)}
+        args_schema = {"type": "object", "properties": properties, "additionalProperties": True}
+    else:
+        args_schema = {"type": "object", "additionalProperties": True}
+    return MockToolDef(
+        tool_name=tool_name,
+        description=description,
+        arguments_schema=args_schema,
+        response_template=json.dumps({"status": "success", "tool": tool_name}),
+    )
+
 
 def _add_mock_tools(llm, sample: Workflow) -> None:
-    """Post-process: generate mock tools for read-service objects.
+    """Post-process: generate read-side mock tools and stub write-side tools.
 
-    Mutates sample.mock_tools (adds the tool def) AND obj.skills (adds the
-    tool name so the LNL runtime exposes it to the LLM).
-
-    Read services are detected by the mandatory behavior phrase:
-      "call the `{object_id}_data` tool to retrieve data"
-    This is more reliable than checking state_description, which is intentionally
-    empty for read services (they hold no mutable state of their own).
+    Mutates sample.tools AND obj.skills (adds the tool name so the runtime exposes it).
+    Read services are detected by: "call the `{object_id}_data` tool to retrieve data"
     """
     step_texts = [s.text for s in sample.steps if s.text]
-    existing_tool_names = {t.tool_name for t in sample.mock_tools}
+    existing_tool_names = {t.tool_name for t in sample.tools}
+
+    # Read-side: generate realistic mock data per read-service object
     for obj in sample.objects:
         match = _DATA_TOOL_RE.search(obj.behavior or "")
         if not match:
             continue
-        tool_name = match.group(1)  # e.g. "org_directory_data"
-        # Ensure the skill is declared on the object so the runtime exposes
-        # the tool to the LLM. Without this, the object's behavior says to
-        # call the tool but the LLM doesn't actually have access to it.
+        tool_name = match.group(1)
         if tool_name not in obj.skills:
             obj.skills.append(tool_name)
         if tool_name in existing_tool_names:
-            continue  # already generated for this sample
-        # Use state_description if present, otherwise fall back to role
+            continue
         description = (obj.state_description or "").strip() or obj.role
         tool = _generate_mock_tool_data(llm, tool_name, description, step_texts)
         if tool:
-            sample.mock_tools.append(tool)
+            sample.tools.append(tool)
+            existing_tool_names.add(tool_name)
+
+    # Write-side: identify and stub write-side API tools
+    for entry in _identify_missing_write_tools(llm, sample):
+        tool_name = entry.get("tool_name", "").strip()
+        if not tool_name or tool_name in existing_tool_names:
+            continue
+        tool = _make_write_tool(entry)
+        if tool:
+            sample.tools.append(tool)
             existing_tool_names.add(tool_name)
 
 
@@ -458,10 +605,9 @@ def run(args: argparse.Namespace) -> Path:
                 fails += 1
                 continue
             sample = _assemble_sample(template, grounded, graph, sample_steps)
-            # Auto-generate mock tools for any read-service objects whose
-            # behavior contains the `call the \`{object_id}_data\` tool` phrase.
-            # Mutates sample.mock_tools + adds the _data skill to each matched
-            # object so the runtime can resolve the tool at eval time.
+            # Ground the template steps using the object system.
+            sample.steps = _generate_grounded_steps(llm, sample.template, sample.objects)
+            # Auto-generate mock tools (read-side data + write-side API stubs).
             _add_mock_tools(llm, sample)
             results.append(sample)
         return results, fails
