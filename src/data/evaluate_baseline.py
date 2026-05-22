@@ -298,7 +298,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v28): companion bump for evaluate.py v24 — LNL async batch-collection (baseline unaffected; bump for run-config provenance)
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v27): companion bump for evaluate.py v23 — LNL async-path fixes (baseline unaffected; bump for run-config provenance)
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
