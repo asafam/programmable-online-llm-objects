@@ -99,14 +99,15 @@ def _build_context(tc: Sample) -> tuple[str, str, str, str]:
 
 def _evaluate_step(llm, tc: Sample, step_idx: int, prompt_template: str) -> ExpectationVerdict | None:
     """Evaluate a single step's expectation. Returns None if no expectation stored."""
-    step = tc.steps[step_idx]
+    base_events = [e for e in tc.events if e.role == "base"]
+    step = base_events[step_idx]
     if step.expect is None:
         return None
 
     obj_lines, mock_lines, write_tool_lines, mod_lines = _build_context(tc)
 
     # Steps run before any modifications — always baseline behavior
-    event_line = f"S{step_idx+1:03d} | baseline (no modifications) | recipient={step.target} | input: {step.text}"
+    event_line = f"{step.id} | baseline (no modifications) | recipient={step.recipient} | input: {step.input}"
 
     prompt = (
         prompt_template
@@ -123,11 +124,11 @@ def _evaluate_step(llm, tc: Sample, step_idx: int, prompt_template: str) -> Expe
         llm=llm,
         prompt=prompt,
         response_model=ExpectationVerdict,
-        item_id=f"{tc.id}-S{step_idx+1:03d}-audit",
+        item_id=f"{tc.id}-{step.id}-audit",
         validator=lambda r: r.verdict in ("correct", "wrong", "uncertain"),
     )
     if result:
-        result.event_id = f"S{step_idx+1:03d}"
+        result.event_id = step.id
     return result
 
 
@@ -135,7 +136,8 @@ def _evaluate_step(llm, tc: Sample, step_idx: int, prompt_template: str) -> Expe
 
 def _audit_tc(llm, tc: Sample, prompt_template: str) -> AuditResult:
     verdicts = []
-    for i in range(len(tc.steps)):
+    base_events = [e for e in tc.events if e.role == "base"]
+    for i in range(len(base_events)):
         v = _evaluate_step(llm, tc, i, prompt_template)
         if v is not None:
             verdicts.append(v)
@@ -157,7 +159,7 @@ def _load_test_cases(path: Path) -> list[tuple[int, Sample]]:
             try:
                 tc = Sample.model_validate(d)
                 # Only audit TCs that have at least one step with an expectation
-                if any(s.expect is not None for s in tc.steps):
+                if any(s.expect is not None for s in tc.events if s.role == "base"):
                     tcs.append((i, tc))
             except Exception:
                 pass
@@ -188,9 +190,8 @@ def _repair_tc(tc: Sample, audit: AuditResult) -> bool:
     """Apply corrected actions from audit verdicts to steps. Returns True if any change made."""
     changed = False
     verdict_map = {v.event_id: v for v in audit.wrong}
-    for i, step in enumerate(tc.steps):
-        step_id = f"S{i+1:03d}"
-        v = verdict_map.get(step_id)
+    for step in [e for e in tc.events if e.role == "base"]:
+        v = verdict_map.get(step.id)
         if v and v.corrected_action and step.expect is not None:
             step.expect = EventExpect(
                 action=v.corrected_action,
@@ -215,7 +216,7 @@ def audit(
     remaining = [(i, tc) for i, tc in tcs if tc.id not in completed]
 
     total_steps = sum(
-        sum(1 for s in tc.steps if s.expect is not None)
+        sum(1 for s in tc.events if s.role == "base" and s.expect is not None)
         for _, tc in tcs
     )
     print(f"TCs to audit: {len(remaining)} remaining of {len(tcs)} total ({total_steps} steps with expectations)")
@@ -285,8 +286,9 @@ def audit(
                 print(f"  [{r.tc_id}] {v.event_id}: {v.issue}")
                 tc = tc_map.get(r.tc_id)
                 if tc and shown < 3:
+                    _base = [e for e in tc.events if e.role == "base"]
                     step_num = int(v.event_id[1:]) - 1 if v.event_id.startswith("S") else -1
-                    stored = tc.steps[step_num].expect.action if 0 <= step_num < len(tc.steps) and tc.steps[step_num].expect else "?"
+                    stored = _base[step_num].expect.action if 0 <= step_num < len(_base) and _base[step_num].expect else "?"
                     print(f"    stored:    {stored[:120]}")
                     print(f"    corrected: {v.corrected_action[:120]}")
                 shown += 1
@@ -328,9 +330,10 @@ class _ResolvedExpect(BaseModel):
 
 
 def _resolve_uncertain_step(llm, tc: Sample, step_idx: int, issue: str, prompt_template: str) -> EventExpect | None:
-    step = tc.steps[step_idx]
+    base_events = [e for e in tc.events if e.role == "base"]
+    step = base_events[step_idx]
     obj_lines, mock_lines, write_tool_lines, _ = _build_context(tc)
-    event_line = f"S{step_idx+1:03d} | baseline (no modifications) | recipient={step.target} | input: {step.text}"
+    event_line = f"{step.id} | baseline (no modifications) | recipient={step.recipient} | input: {step.input}"
     prompt = (
         prompt_template
         .replace("{OBJECTS}", obj_lines)
@@ -725,11 +728,12 @@ def resolve_uncertain(
             if not step_id.startswith("S"):
                 continue
             step_idx = int(step_id[1:]) - 1
-            if step_idx < 0 or step_idx >= len(tc.steps):
+            _base = [e for e in tc.events if e.role == "base"]
+            if step_idx < 0 or step_idx >= len(_base):
                 continue
             expect = _resolve_uncertain_step(llm, tc, step_idx, issue, prompt_template)
             if expect:
-                tc.steps[step_idx].expect = expect
+                _base[step_idx].expect = expect
                 count += 1
         return i, tc, count
 

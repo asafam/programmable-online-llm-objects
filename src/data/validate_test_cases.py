@@ -171,7 +171,7 @@ def find_missing_step_data(tc: "Sample") -> list[str]:
     - Slack channel names (#channel) in expected actions
     - Quoted ticket/record IDs (e.g., "PROJ-1042") in expected actions
     """
-    available_text = " ".join(step.text for step in tc.steps)
+    available_text = " ".join(step.input for step in tc.events if step.role == "base")
     available_text += " " + " ".join(e.input for e in tc.events)
     available_text += " " + " ".join(o.behavior for o in tc.objects)
     available_text += " " + " ".join(m.intent for m in tc.modifications)
@@ -777,7 +777,7 @@ def find_unnatural_identifiers(tc: "Sample") -> list[str]:
         + " "
         + " ".join(
             (s.expect.action + " " + (s.expect.reason or ""))
-            for s in tc.steps if s.expect
+            for s in tc.events if s.role == "base" and s.expect
         )
     )
 

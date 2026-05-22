@@ -754,22 +754,23 @@ def _run_test_case_timeline(
             for ev in steps_snapshot.step_event_results:
                 on_event_result(ev, True)
 
-    for i, step in enumerate(tc.steps):
+    base_events = [e for e in tc.events if e.role == "base"]
+    for step in base_events:
         if steps_snapshot is not None:
             break  # already restored above
         log_snapshot = len(rt.message_log)
         exec_snap = _snapshot_logs(execs)
         t0 = time.monotonic()
-        step_payload = json.dumps({"system": step.source, "content": step.text})
+        step_payload = json.dumps({"system": step.source, "content": step.input})
         results, timed_out = _run_with_timeout(
-            lambda s=step, p=step_payload: gw.dispatch(s.target, p, source=s.source), timeout_s,
+            lambda s=step, p=step_payload: gw.dispatch(s.recipient, p, source=s.source), timeout_s,
         )
         latency_ms = (time.monotonic() - t0) * 1000
 
         if step.expect is not None:
             if timed_out:
                 event_results.append(EventResult(
-                    event_id=f"S{i+1:03d}",
+                    event_id=step.id,
                     passed=False,
                     reasoning=f"Timeout after {timeout_s}s",
                     expected=step.expect.action,
@@ -797,11 +798,11 @@ def _run_test_case_timeline(
                 infra_error = bool(cf_errors) or tc_had_infra_error
                 if infra_error:
                     tc_had_infra_error = True
-                evidence = gather_evidence(rt, results, step.target, bus_messages=bus_msgs, tool_calls=new_calls)
+                evidence = gather_evidence(rt, results, step.recipient, bus_messages=bus_msgs, tool_calls=new_calls)
                 condition = step.expect.action
                 passed, reasoning, votes, j_in_tok, j_out_tok = harness.evaluate_assertion(condition, evidence, prior_context)
                 event_results.append(EventResult(
-                    event_id=f"S{i+1:03d}",
+                    event_id=step.id,
                     passed=passed,
                     reasoning=reasoning,
                     expected=condition,
@@ -854,6 +855,8 @@ def _run_test_case_timeline(
     concurrent_event_ids: set[str] = set()
     if concurrency > 0:
         for evt in tc.events:
+            if evt.role == "base":
+                continue
             if evt.concurrent_group and _event_in_scope(evt):
                 group_map.setdefault(evt.concurrent_group, []).append(evt)
                 concurrent_event_ids.add(evt.id)
@@ -865,6 +868,8 @@ def _run_test_case_timeline(
     for mod in active_mods:
         timeline.append((parse_when(mod.when), "mod", mod))
     for evt in tc.events:
+        if evt.role == "base":
+            continue
         if evt.id not in concurrent_event_ids and _event_in_scope(evt):
             timeline.append((parse_when(evt.when), "event", evt))
     timeline.sort(key=lambda x: x[0])

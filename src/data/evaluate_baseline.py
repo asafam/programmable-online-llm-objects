@@ -1489,12 +1489,13 @@ async def _execute_tc_async(
 
     # Build ordered message list (identical logic to the old sync version)
     messages: list[dict[str, Any]] = []
-    for i, step in enumerate(tc.steps):
+    base_events = [e for e in tc.events if e.role == "base"]
+    for i, step in enumerate(base_events):
         messages.append({
             "kind": "step",
             "index": i,
-            "target": step.target,
-            "content": f"[Event from {step.source}]: {step.text}",
+            "target": step.recipient,
+            "content": f"[Event from {step.source}]: {step.input}",
             "expect": step.expect,
         })
 
@@ -1506,6 +1507,8 @@ async def _execute_tc_async(
     group_map: dict[str, list] = {}
     if event_concurrency > 0:
         for evt in tc.events:
+            if evt.role == "base":
+                continue
             if evt.concurrent_group:
                 group_map.setdefault(evt.concurrent_group, []).append(evt)
 
@@ -1513,6 +1516,8 @@ async def _execute_tc_async(
     for mod in active_mods:
         timeline.append((parse_when(mod.when), "mod", mod))
     for evt in tc.events:
+        if evt.role == "base":
+            continue
         if all(mid in allowed_mod_ids for mid in (evt.after_mod_ids or [])):
             if not evt.concurrent_group or event_concurrency == 0:
                 timeline.append((parse_when(evt.when), "event", evt))
@@ -2059,8 +2064,8 @@ def execute_test_case(
             collected_event_ids = {e.event_id for e in partial_events}
             # TC wall-clock timeout is OUR setting (--timeout, default 900s) so
             # classify these placeholders as oc_eval (factor out of pass-rate).
-            for i, step in enumerate(tc.steps):
-                eid = f"S{i+1:03d}"
+            for step in [e for e in tc.events if e.role == "base"]:
+                eid = step.id
                 if eid not in collected_event_ids and step.expect is not None:
                     partial_events.append(EventResult(
                         event_id=eid, passed=False,
@@ -2589,8 +2594,8 @@ async def _run_all_tcs_concurrent(
                                 # OpenClaw SDK-level peer timeout (also our integration's 90s
                                 # sessions_send setting). Both classify as oc_eval and are
                                 # factored out of pass-rate.
-                                for i, step in enumerate(tc.steps):
-                                    eid = f"S{i+1:03d}"
+                                for step in [e for e in tc.events if e.role == "base"]:
+                                    eid = step.id
                                     if eid not in collected_ev_ids and step.expect is not None:
                                         _partial_ev.append(EventResult(
                                             event_id=eid, passed=False,
@@ -2701,10 +2706,10 @@ async def _run_all_tcs_concurrent(
                 _err_elapsed_ms = (time.time() - tc_t0) * 1000
                 _err_is_infra = bool(_classify_error_type([_err_label]))
                 err_results: list[EventResult] = []
-                for i, step in enumerate(tc.steps):
+                for step in [e for e in tc.events if e.role == "base"]:
                     if step.expect is not None:
                         err_results.append(EventResult(
-                            event_id=f"S{i+1:03d}", passed=False, reasoning=_err_label,
+                            event_id=step.id, passed=False, reasoning=_err_label,
                             infra_error=_err_is_infra,
                         ))
                 _max_mods_err = getattr(args, "modifications", None)
