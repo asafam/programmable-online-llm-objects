@@ -69,7 +69,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v18): companion bump for evaluate_baseline.py v22 — token snapshot fallback to totalTokens
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v19): add --planner-mode {sequential,dag} flag for concurrent step dispatch
 
 from src.data.schema import (
     EvalSummary,
@@ -401,6 +401,7 @@ def _execute_test_case_inner(
     memory_backend: str = "nested",
     log_planner_output: bool = False,
     tool_dispatch: str = "async",
+    planner_mode: str = "sequential",
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single Sample and return event + modification results."""
     from src.lnl.gateway import EventGateway
@@ -470,6 +471,7 @@ def _execute_test_case_inner(
         enable_evaluator=enable_evaluator,
         memory_backend=memory_backend,
         tool_dispatch=tool_dispatch,
+        planner_mode=planner_mode,
     )
     rt = Runtime(
         brain,
@@ -1138,6 +1140,7 @@ def execute_test_case(
     memory_backend: str = "nested",
     log_planner_output: bool = False,
     tool_dispatch: str = "async",
+    planner_mode: str = "sequential",
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single Sample with a per-event timeout (seconds).
 
@@ -1187,6 +1190,7 @@ def execute_test_case(
         memory_backend=memory_backend,
         log_planner_output=log_planner_output,
         tool_dispatch=tool_dispatch,
+        planner_mode=planner_mode,
     )
 
 
@@ -1493,12 +1497,18 @@ def run(args: argparse.Namespace) -> Path:
         evaluator_label = f"{evaluator_provider}/{evaluator_model}"
     else:
         evaluator_label = "(disabled)"
+    planner_mode = getattr(args, "planner_mode", "sequential")
+    planner_prompt_display = getattr(args, "planner_prompt", "planner.yaml")
+    if planner_mode == "dag" and planner_prompt_display == "planner.yaml":
+        # Mode auto-selects planner_dag.yaml unless --planner-prompt was explicit.
+        planner_prompt_display = "planner_dag.yaml"
     extra_info = {
         "Planner": planner_label,
+        "Planner mode": planner_mode,
         "Evaluator": evaluator_label,
         "Judge": judge_label,
         "Object prompt": object_prompt,
-        "Planner prompt": getattr(args, "planner_prompt", "planner.yaml"),
+        "Planner prompt": planner_prompt_display,
         "Runs per test case": str(args.runs),
         "Timeout per event": f"{timeout_s}s" if timeout_s else "none",
     }
@@ -1759,6 +1769,7 @@ def run(args: argparse.Namespace) -> Path:
                 mock_slot_id=f"tc{tc_idx}-r{run_idx}",
                 log_planner_output=(getattr(args, "verbose", None) == "DEBUG"),
                 tool_dispatch=getattr(args, "tool_dispatch", "async"),
+                planner_mode=getattr(args, "planner_mode", "sequential"),
             )
         finally:
             # Always store snapshot and signal waiting workers — even on failure —
@@ -2475,6 +2486,19 @@ Examples:
         "--planner-prompt",
         default="planner.yaml",
         help="Planner system-prompt template filename relative to config/prompts/lnl/ (default: planner.yaml).",
+    )
+    parser.add_argument(
+        "--planner-mode",
+        choices=["sequential", "dag"],
+        default="sequential",
+        help=(
+            "Planner output shape (default: sequential). "
+            "'sequential' — planner emits steps the executor dispatches one per turn. "
+            "'dag' — planner emits a dependency graph; independent steps (empty "
+            "depends_on or all deps done) fan out in a single executor turn. "
+            "Selects planner_dag.yaml automatically when set to 'dag' unless "
+            "--planner-prompt is also passed explicitly."
+        ),
     )
     parser.add_argument(
         "--max-tool-rounds",

@@ -298,7 +298,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v22): fall back to totalTokens when inputTokens absent in session snapshot (running sessions)
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v23): companion bump for evaluate.py v19 — no functional change to baseline
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
