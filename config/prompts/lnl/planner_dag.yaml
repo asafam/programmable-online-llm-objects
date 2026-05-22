@@ -173,16 +173,25 @@ system_prompt: |
      end the plan with a step where `kind: "final"`, `target: "final"`, and
      reasoning that confirms why the workflow is now complete.
 
-  7. **Tools and peers MUST be exercised.** If this object has tools
-     listed above AND the behavior implies persisting, writing, sending,
-     posting, uploading, or creating ANY artifact, emit a `tool` step
-     calling the relevant tool with all required arguments. If the object
-     has declared peers AND the behavior implies notifying or forwarding,
-     emit `tell`/`ask` steps for each. **Do NOT emit a `reason`-only plan
-     for an object whose role mentions writing/storing/sending/notifying.**
-     "No action needed" is reserved for objects whose role is genuinely
-     stateless logging or passive observation — and even then, prefer
-     describing what the object DOES record in its own state.
+  7. **Tools and peers MUST be exercised — `reason`-only plans for
+     sinks with tools are FORBIDDEN.** If this object has ANY tools
+     listed above AND its role contains action verbs (write, send,
+     post, create, store, notify, persist, publish, append, update,
+     trigger, file, draft, log, deliver, schedule, upload), your plan
+     MUST include at least one `tool` step that calls the relevant
+     tool with concrete arguments. A plan that contains only `reason`
+     steps for such an object is a **bug**: the runtime will record
+     the event as "intent acknowledged" but no artifact will exist
+     and the workflow will fail verification. The judge / evaluator
+     reads actual tool-call evidence, not state notes.
+     Recipe to verify: scan the role text for action verbs; for each
+     verb that names something this object DOES (not something it
+     receives), there must be a corresponding `tool` step. If declared
+     peers exist AND the behavior requires notifying or forwarding,
+     emit `tell`/`ask` steps for each (covered by principle 9).
+     "No action needed" plans are reserved exclusively for objects
+     whose role is genuinely stateless logging or passive observation
+     AND that have no registered tools.
 
   8. **Do not execute.** You are planning, not acting. Do not write outgoing
      message content here — `description` is a short summary, not the full
@@ -196,7 +205,24 @@ system_prompt: |
      self-recording or tool invocations), but must NEVER replace dispatch
      steps when peers are declared.
 
-  10. **Sinks / terminal objects (zero declared peers):** Use `tool` steps
+  10. **Conditional steps must declare the condition in the description.**
+      If a behavior says "send the reorder ONLY IF stock is low" or "mark
+      rejected WHEN the reactor is unauthorized," and you choose to emit
+      the action as a step (rather than pre-evaluating the condition
+      yourself), the step's `description` must include the gating phrase
+      verbatim (use `if`, `when`, `only when`, `unless`, or `provided that`)
+      AND the step's `depends_on` must include the step whose result the
+      condition reads. The executor will evaluate the condition against
+      the captured dep results before dispatching — if false, the step is
+      skipped, not fired. Without an explicit condition clause the
+      executor treats the step as unconditional and dispatches it.
+      Example: `{{"id": "s3", "kind": "tell", "target": "supplier",
+      "depends_on": ["s1"], "description": "Send reorder request for
+      SKU IF s1.result.quantity <= s1.result.reorder_threshold."}}`.
+      DO NOT bury the condition in `reasoning` only — the executor reads
+      the description for the dispatch decision.
+
+  11. **Sinks / terminal objects (zero declared peers):** Use `tool` steps
       (when the object has tools — call the tool that performs the
       action, with all required arguments) or `reason` steps (when the
       object only needs to record state). Each step names a concrete

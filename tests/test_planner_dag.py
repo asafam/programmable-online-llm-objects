@@ -173,12 +173,26 @@ class TestExecutorPromptModeNote:
         note = _active_plan_mode_note("dag")
         assert "DAG mode" in note
         assert "ready:" in note
-        # The note must tell the executor to dispatch all ready steps at once.
-        # Accept either the literal phrase "every READY step" or "ALL ready" —
-        # both express the same fan-out requirement.
-        assert ("every READY step" in note) or ("ALL ready" in note)
+        # The note must instruct the executor to fan out unconditional ready steps
+        # in the same turn. Accept any of the historically-used phrasings.
+        assert any(p in note for p in (
+            "every UNCONDITIONAL ready step",
+            "every READY step",
+            "ALL ready",
+        ))
         # And must remind the executor that step-id order is not dispatch order.
         assert "identifiers" in note or "not an order" in note
+
+    def test_dag_note_addresses_conditional_steps(self):
+        """Regression guard for the conditional-dispatch fix: the addendum must
+        instruct the executor to skip conditional steps when the condition is
+        false, not to dispatch every ready step blindly. Without this, plans
+        with conditional dispatches (`if quantity <= threshold`) fire
+        unconditionally and break workflows."""
+        note = _active_plan_mode_note("dag")
+        assert "skipped" in note or "skip" in note.lower()
+        # Mentions at least one of the gating keywords
+        assert any(kw in note for kw in ("if", "when", "only when", "unless"))
 
     def test_build_system_prompt_dag_includes_note(self):
         prompt = build_system_prompt(
