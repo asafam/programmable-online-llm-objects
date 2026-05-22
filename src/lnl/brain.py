@@ -282,6 +282,8 @@ def _message_label(msg: Message) -> str:
         call_id = msg.reference or ""
         id_part = f" (call {call_id})" if call_id else ""
         return f"Tool result{id_part} from {tool_name}"
+    if msg.type == MessageType.REPLY and msg.sender == "__tool_batch__":
+        return "Tool results (batch)"
     if msg.type == MessageType.REPLY:
         return f"Reply from {msg.sender}"
     if msg.sender == "__user__":
@@ -754,21 +756,29 @@ def _is_tool_reply(msg: Message) -> bool:
     return (
         msg.type == MessageType.REPLY
         and isinstance(msg.sender, str)
-        and msg.sender.startswith("__tool__:")
+        and (msg.sender.startswith("__tool__:") or msg.sender == "__tool_batch__")
     )
 
 
 def _render_tool_reply(msg: Message) -> str:
-    """Render an async tool REPLY using the same framing sync mode produces
-    inline in the ReAct loop: '[Tool result (call X) from Y] (status=ok|failed): <content>'.
+    """Render a tool REPLY using the same framing sync mode produces inline:
+    '[Tool result (call X) from Y] (status=ok|failed): <content>'.
 
-    Sync builds this string directly in object._run_react_cycle and appends it
-    as the next user message. Async wraps the same content in a Message and
-    routes it via the mailbox; without this special-cased render the prompt
-    would prefix it with '[system time:...] [msg-id:...] [in-reply-to:...]'
-    making it visually identical to a peer reply — which empirically caused
-    the LLM to misread tool results as peer chatter.
+    Two shapes arrive here:
+      - sender='__tool_batch__': msg.content is already a pre-formatted
+        multi-line block (one line per tool in the batch). Pass it through.
+      - sender='__tool__:<name>': single-tool legacy path (no plan tracking).
+        Compute the framing from msg fields.
+
+    Sync builds this string directly in _run_react_cycle. Async wraps the
+    same content in a Message and routes it via the mailbox; without this
+    special-cased render the prompt would prefix it with '[system time:...]
+    [msg-id:...] [in-reply-to:...]' making tool results visually identical
+    to a peer reply — which empirically caused the LLM to misread tool
+    results as peer chatter.
     """
+    if msg.sender == "__tool_batch__":
+        return msg.content
     tool_name = msg.sender[len("__tool__:"):]
     call_id = msg.reference or ""
     id_part = f" (call {call_id})" if call_id else ""

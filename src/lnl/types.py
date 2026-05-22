@@ -257,6 +257,22 @@ class Plan:
     # when a turn ends with status="pending" (tools dispatched async) so the
     # evaluator in the continuation turn can verify tool steps were executed.
     accumulated_tools_called: list[str] = field(default_factory=list)
+    # Async batch tracking. When tools are dispatched in async mode the
+    # dispatched tc.id values are stored in pending_tool_batch_ids and each
+    # worker that completes pushes its (ToolCall, ToolResult) into
+    # pending_tool_results. The mailbox sees ONE combined REPLY when the set
+    # empties — so the continuation turn observes all tool results in a single
+    # user message, matching the sync inline-loop behaviour. Without batching,
+    # async fires one continuation per arriving REPLY, fragmenting the
+    # conversation across N process_message turns and confusing the LLM.
+    pending_tool_batch_ids: set[str] = field(default_factory=set)
+    pending_tool_results: list = field(default_factory=list)  # list[(ToolCall, ToolResult)]
+    # Set to True when the object's definition was modified by an admin
+    # message while this plan was active. The runtime re-plans this trace
+    # against the new definition on the next inbound message before
+    # dispatching, replacing plan.steps and clearing the flag. State and
+    # accumulated_deltas are preserved across the re-plan.
+    needs_replan: bool = False
 
 
 @dataclass

@@ -69,7 +69,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v23): async-path fixes — _execute_tool try/finally guarantees REPLY delivery, explicit Tool-result framing in chat messages, pending_tool_call_context preserved across batch replies
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v24): async batch-collection — N dispatched tools now produce ONE combined REPLY when the batch settles, so the continuation LLM call sees all tool results in a single user message (matches sync's behaviour, replaces N fragmented process_message turns with 1)
 
 from src.data.schema import (
     EvalSummary,

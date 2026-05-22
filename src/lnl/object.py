@@ -282,22 +282,95 @@ class LLMObject:
                     id=tc.id, output="",
                     error="Tool worker exited without producing a result.",
                 )
-            reply_msg = Message(
-                sender=f"__tool__:{tc.tool}",
+            self._deliver_tool_result(tc, result, trace_id, call_key)
+        return result
+
+    def _deliver_tool_result(
+        self,
+        tc: ToolCall,
+        result: ToolResult,
+        trace_id: Optional[str],
+        call_key: str,
+    ) -> None:
+        """Accumulate the tool result into the plan's pending batch; deliver a
+        combined REPLY when the batch settles. Falls back to a per-tool REPLY
+        when no plan is tracking the batch (legacy / no-planner runs).
+
+        Batching matches sync's behaviour: a single dispatched tool_call action
+        produces a single user-message containing every result, so the
+        continuation LLM call sees the same context shape as a sync inline
+        loop instead of N fragmented process_message turns.
+        """
+        plan = self.plan_for(trace_id)
+        fire_combined = False
+        batch_results: list = []  # list[(ToolCall, ToolResult)]
+        if plan is not None:
+            with self._plans_lock:
+                if tc.id in plan.pending_tool_batch_ids:
+                    plan.pending_tool_batch_ids.discard(tc.id)
+                    plan.pending_tool_results.append((tc, result))
+                    if not plan.pending_tool_batch_ids:
+                        batch_results = list(plan.pending_tool_results)
+                        plan.pending_tool_results = []
+                        fire_combined = True
+
+        if plan is not None and not fire_combined:
+            # Part of an in-flight batch — accumulated, nothing to deliver yet.
+            # Decrement _pending_tool_count so read() can see progress
+            # (without a mailbox message, the wait loop would stay parked
+            # waiting for a notify; here we notify to keep the contract).
+            with self._lock:
+                if self._pending_tool_count > 0:
+                    self._pending_tool_count -= 1
+                self._lock.notify()
+            return
+
+        if fire_combined:
+            # Batch complete — synthesize ONE combined REPLY.
+            parts: list[str] = []
+            for t, r in batch_results:
+                status_str = "failed" if r.error else "ok"
+                content = r.error if r.error else r.output
+                parts.append(
+                    f"[Tool result (call {t.id}) from {t.tool}] (status={status_str}): {content}"
+                )
+            combined_content = "\n".join(parts)
+            last_tc = batch_results[-1][0]
+            combined_reply = Message(
+                sender="__tool_batch__",
                 recipient=self.object_id,
                 type=MessageType.REPLY,
-                content=result.output if not result.error else result.error,
-                status="failed" if result.error else "ok",
-                error=result.error or None,
+                content=combined_content,
+                status="ok",
+                error=None,
                 trace_id=trace_id,
-                plan_step_index=tc.plan_step_index,
+                plan_step_index=last_tc.plan_step_index,
                 depth_remaining=0,
-                id=f"tool-reply-{call_key}",
+                id=f"tool-reply-batch-{call_key}",
                 in_reply_to=call_key,
-                reference=tc.id,  # original LLM-assigned tool call ID for conversation reconstruction
+                reference=last_tc.id,
             )
-            self.deliver(reply_msg, decrement_pending=True)
-        return result
+            # Deliver combined REPLY and decrement _pending_tool_count by 1
+            # (the other batch members already decremented above).
+            self.deliver(combined_reply, decrement_pending=True)
+            return
+
+        # Legacy path — no plan tracking the batch. Deliver individually.
+        reply_msg = Message(
+            sender=f"__tool__:{tc.tool}",
+            recipient=self.object_id,
+            type=MessageType.REPLY,
+            content=result.output if not result.error else result.error,
+            status="failed" if result.error else "ok",
+            error=result.error or None,
+            trace_id=trace_id,
+            plan_step_index=tc.plan_step_index,
+            depth_remaining=0,
+            id=f"tool-reply-{call_key}",
+            in_reply_to=call_key,
+            reference=tc.id,
+        )
+        self.deliver(reply_msg, decrement_pending=True)
 
     def _get_repl_namespace(self) -> dict:
         """Lazy accessor for the per-object Python REPL namespace.
@@ -830,15 +903,21 @@ class LLMObject:
         # Pre-execution planning (separate LLM call). Runs once per trace;
         # gated on DOMAIN message + no plan ever seen for this trace.
         # Subsequent internal self-correction cycles reuse the same plan.
+        # Exception: when an admin modification marked the active plan
+        # `needs_replan`, run the planner again against the new definition
+        # and replace plan.steps in place (state and accumulated_deltas are
+        # preserved).
         planner_metrics: Optional[InferenceMetrics] = None
+        existing_plan = self.plan_for(trace_id)
+        needs_replan = existing_plan is not None and existing_plan.needs_replan
         if (
             self._enable_planner
             and message.type == MessageType.DOMAIN
-            and self.plan_for(trace_id) is None
+            and (existing_plan is None or needs_replan)
         ):
             with self._planned_traces_lock:
                 already_planned = trace_id is not None and trace_id in self._planned_traces
-            if not already_planned:
+            if (not already_planned) or needs_replan:
                 try:
                     planner_prompt = build_planner_prompt(
                         self._definition, self._state, message,
@@ -857,13 +936,25 @@ class LLMObject:
                     # executor falls back to its own definition + behavior,
                     # which is the safer recovery path.
                     if plan.steps:
-                        plan.state = self._state  # snapshot master at plan creation
-                        with self._plans_lock:
+                        if needs_replan and existing_plan is not None:
+                            # Re-plan in place: keep plan-scoped state and
+                            # deltas, replace goal/steps/status with fresh
+                            # output from the planner.
+                            with self._plans_lock:
+                                existing_plan.goal = plan.goal
+                                existing_plan.steps = plan.steps
+                                existing_plan.status = "active"
+                                existing_plan.needs_replan = False
+                                existing_plan.last_progress_at = datetime.datetime.now(datetime.timezone.utc)
+                            plan = existing_plan
+                        else:
+                            plan.state = self._state  # snapshot master at plan creation
+                            with self._plans_lock:
+                                if trace_id is not None:
+                                    self._active_plans[trace_id] = plan
                             if trace_id is not None:
-                                self._active_plans[trace_id] = plan
-                        if trace_id is not None:
-                            with self._planned_traces_lock:
-                                self._planned_traces.add(trace_id)
+                                with self._planned_traces_lock:
+                                    self._planned_traces.add(trace_id)
                         logger.debug(
                             "  ◆ planner produced plan for %s: %d steps (goal=%s)",
                             self.object_id, len(plan.steps), plan.goal,
@@ -926,7 +1017,10 @@ class LLMObject:
         is_tool_reply = (
             message.type == MessageType.REPLY
             and isinstance(message.sender, str)
-            and message.sender.startswith("__tool__:")
+            and (
+                message.sender.startswith("__tool__:")
+                or message.sender == "__tool_batch__"
+            )
         )
         if is_tool_reply:
             _plan = self.plan_for(trace_id)
@@ -1266,6 +1360,12 @@ class LLMObject:
         patch = finish.get("updated_definition") or None
         if isinstance(patch, dict) and patch:
             self._apply_definition_update(patch)
+            # Mark every in-flight plan as needing a re-plan against the new
+            # definition. The next inbound message on that trace re-plans
+            # before dispatching; plan state and deltas are preserved.
+            with self._plans_lock:
+                for plan in self._active_plans.values():
+                    plan.needs_replan = True
 
         self._history.append(message)
         if len(self._history) > self._max_history:
@@ -1434,6 +1534,11 @@ class LLMObject:
                         for t in tcs
                     ],
                 })
+                # Track the batch so all N replies are accumulated before
+                # firing one combined continuation (sync-equivalent prompt).
+                with self._plans_lock:
+                    plan.pending_tool_batch_ids = {tc.id for tc in tcs}
+                    plan.pending_tool_results = []
             else:
                 # Fallback cross-turn counter when no plan exists.
                 key = trace_id or ""
