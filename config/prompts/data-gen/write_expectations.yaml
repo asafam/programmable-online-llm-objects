@@ -132,22 +132,24 @@ prompt: |
   **Step 5 — Look up exact names from the Reference Data.**
   Use the Reference Data to find the actual entity that fills each role. Use exact names and identifiers.
 
-  **Step 6 — For each external write action, assert the registered tool call explicitly.**
-  Look up the matching tool in the "Registered Write-Side Tools" section above.
-  In `action`, name the tool and its key arguments:
-    ✓ "`send_approval_email` called with recipient=Sandra Okonkwo (sandra@co.com),
-       subject='Approval required: Q-3112', body containing deal and ARR."
-    ✓ "`post_slack_message` called on #deal-approvals with quote Q-3112 details and
-       approve/reject prompts."
-    ✗ "Email sent to Sandra Okonkwo." (no tool name — judge cannot verify invocation)
-  If the Registered Write-Side Tools section is empty, fall back to describing the
-  external action by outcome (email, Slack post, DB record) as before.
+  **Step 6 — Describe each external action in business terms. Do NOT name internal objects or tools.**
+  Use the "Registered Write-Side Tools" section only to understand WHAT the system can do —
+  not to name the tools in the output. Describe the observable outcome:
+    ✓ "An approval request email is sent to Sandra Okonkwo (sandra@co.com) with
+       subject 'Approval required: Q-3112' and deal details."
+    ✓ "An approval request message is posted in Slack on #deal-approvals with quote
+       Q-3112 details and approve/reject prompts."
+    ✗ "`send_approval_email` called with recipient=Sandra Okonkwo" (tool name exposed —
+       this couples the test to the implementation's internal function names)
+    ✗ "Email record created in the notification-handler object" (object name exposed)
 
-  **Step 7 — Only describe actions that objects in the Object System actually perform.**
-  Every output you include in `action` must be directly traceable to an object listed in the
-  Object System above. If no object in the Object System sends Slack messages, do NOT include
-  a Slack notification in the action. If no object sends email, do NOT include an email. Do not
-  invent outputs for capabilities the system does not have.
+  Write what a human user observing the system from outside would see happen.
+  Never mention: object names, peer names, tool function names, internal service identifiers.
+
+  **Step 7 — Only describe actions that the Object System actually performs.**
+  Every output you include in `action` must be directly traceable to a behavior listed in the
+  Object System above. If no behavior sends Slack messages, do NOT include a Slack notification.
+  If no behavior sends email, do NOT include an email. Do not invent outputs.
 
   **Step 8 — Only use identifiers that are present in the provided data.**
   Any specific identifier you include in `action` — especially Slack channel names (`#channel`),
@@ -236,7 +238,9 @@ prompt: |
   both a system ID and a name when the name alone is sufficient — over-specifying identifiers
   causes false failures when the system uses one form and the evidence shows the other.
 
-  `reason` = the rule or behavior clause that drives this outcome (one sentence).
+  `reason` = the business rule or condition that drives this outcome (one sentence).
+  Name the SaaS platforms involved (HubSpot, Slack, Jira…) but NOT internal object names,
+  peer names, or tool function names.
 
   **Do NOT describe internal steps.** Do not mention peer messages, object queries, routing
   decisions, or intermediate states. Only the final output(s) that leave the system.
