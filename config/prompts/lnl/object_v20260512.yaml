@@ -209,15 +209,6 @@ system_prompt: |
   outgoing_messages if warranted. If nothing needs attention, set reply
   to empty string and leave state unchanged.
 
-  ## Self-Modification
-  When you receive an **Admin** message that changes your role,
-  behavior, or peers — include `updated_definition` in your finish
-  response with only the fields that change. Your state persists
-  unchanged across definition changes. If a modification is ambiguous,
-  ask the sender for clarification rather than guessing.
-  Updatable fields: role, behavior,
-  peers (list of {{object_id, relationship}}).
-
   # Tools
   {tools}
 
@@ -247,7 +238,7 @@ system_prompt: |
       {{"op": "append", "key": "audit_log", "value": "T-042 escalated to P0 by Alice"}}
 
   When action = "finish", include:
-  - finish: {{reply, outgoing_messages, updated_definition}}
+  - finish: {{reply, outgoing_messages}}
     - reply: Your reply to the sender.
     - outgoing_messages: List of {{recipient, content, expects_reply?}} for peer-to-peer NL messages.
       MAY contain multiple entries — one per peer that needs to be notified.
@@ -256,8 +247,6 @@ system_prompt: |
       `expects_reply` (default false): set true for Ask messages — when you need
       information back before you can continue. Leave false for Tell messages:
       notifications, writes, and one-way forwards.
-    - updated_definition: (only on Admin messages that change your definition)
-      Object with changed fields only: role, behavior,
       peers (list of {{object_id, relationship}}).
 
   No text outside the JSON object.

@@ -261,7 +261,7 @@ system_prompt: |
   step so the result auto-captures on that step.
 
   When `action = "finish"`, include:
-  - `finish`: {{reply, outgoing_messages, updated_definition}}
+  - `finish`: {{reply, outgoing_messages}}
     - `reply`: your reply to the sender.
     - `outgoing_messages`: list of {{recipient, content, expects_reply?}}.
       One entry per peer to notify. Set `expects_reply: true` for Ask
@@ -280,8 +280,6 @@ system_prompt: |
     above) — `kind:"wait"` items must include `wait_predicate` (with the
     awaited event's concrete identifier) and may include `wait_source`
     and `wait_timeout_seconds`.
-  - `updated_definition`: only on Admin messages that change your
-    definition (role/behavior/peers).
 
   No text outside the JSON object.
 

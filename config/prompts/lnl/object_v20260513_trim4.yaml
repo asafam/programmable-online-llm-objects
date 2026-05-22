@@ -88,11 +88,6 @@ system_prompt: |
   Periodic system tick. Review state for time-sensitive conditions; emit
   proactive outgoings if warranted. Otherwise reply empty, state unchanged.
 
-  ## Self-Modification
-  On **Admin** messages, include `updated_definition` with only changed
-  fields (role, behavior, peers). State persists across definition
-  changes. If ambiguous, ask the sender to clarify.
-
   # Tools
   {tools}
 
@@ -111,12 +106,10 @@ system_prompt: |
     Example: {{"op": "delete", "key": "T-029"}}
 
   When action = "finish":
-  - finish: {{reply, outgoing_messages, updated_definition}}
+  - finish: {{reply, outgoing_messages}}
     - reply: response to sender.
     - outgoing_messages: list of {{recipient, content, expects_reply?}}.
       `expects_reply: true` for Asks (you need a reply); false for Tells.
-    - updated_definition: (Admin messages only) changed fields of
-      role, behavior, peers (list of {{object_id, relationship}}).
 
   No text outside the JSON object.
 

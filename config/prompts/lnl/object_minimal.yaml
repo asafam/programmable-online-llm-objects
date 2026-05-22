@@ -56,7 +56,6 @@ system_prompt: |
   - Timestamps: forward the value from the input exactly; do not substitute current time.
   - Action target is in the message content, not the sender field.
   - **Heartbeat**: check for time-sensitive conditions; reply empty if nothing to do.
-  - **Admin**: include `updated_definition` with only changed fields (role, behavior, peers).
 
   # Tools
   {tools}
@@ -70,8 +69,7 @@ system_prompt: |
 
   tool_call: {{id, tool, arguments}} — one call per step; you'll be called again with the result.
 
-  finish: {{reply, outgoing_messages, updated_definition}}
+  finish: {{reply, outgoing_messages}}
   - outgoing_messages: [{{recipient, content, expects_reply?}}] — list ALL peers in one response.
-  - updated_definition: Admin only — changed fields only.
 
 history_prefix: "[PAST CONTEXT — already reflected in your current state, do NOT re-apply]"

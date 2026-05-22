@@ -265,6 +265,660 @@ class TestModify:
         assert "b" not in topo["a"]
 
 
+class TestAdminModification:
+    def test_admin_message_modifies_role_via_llm(self):
+        brain = MockBrain()
+        brain.script_admin(
+            reply="Role updated.",
+            updated_definition={"role": "VIP guest concierge only."},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Original role."))
+
+        rt.send_admin("worker", "Change your role to: VIP guest concierge only.")
+
+        obj = rt._bus.objects["worker"]
+        assert obj.definition.role == "VIP guest concierge only."
+
+    def test_admin_message_modifies_skills(self):
+        brain = MockBrain()
+        brain.script_admin(
+            reply="Skills updated.",
+            updated_definition={"skills": ["lookup-room", "send-key", "issue-refund"]},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(
+            object_id="worker",
+            role="Worker.",
+            skills=["lookup-room"],
+        ))
+
+        rt.send_admin("worker", "Add send-key and issue-refund skills.")
+
+        obj = rt._bus.objects["worker"]
+        assert obj.definition.skills == ["lookup-room", "send-key", "issue-refund"]
+
+    def test_admin_message_modifies_peers(self):
+        brain = MockBrain()
+        brain.script_admin(
+            reply="Peers updated.",
+            updated_definition={
+                "peers": [
+                    {"object_id": "billing", "relationship": "Notify on checkout."},
+                    {"object_id": "ops", "relationship": "Escalate complaints."},
+                ],
+            },
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(
+            object_id="worker",
+            role="Worker.",
+            peers=[PeerDeclaration("billing", "Notify on checkout.")],
+        ))
+
+        rt.send_admin("worker", "Also add ops as a peer for complaint escalation.")
+
+        obj = rt._bus.objects["worker"]
+        peer_ids = [p.object_id for p in obj.definition.peers]
+        assert peer_ids == ["billing", "ops"]
+
+    def test_admin_preserves_state(self):
+        brain = MockBrain()
+        brain.script("worker", LLMResponse(
+            updated_state={"status": "ready"},
+            reply="ok",
+        ))
+        brain.script_admin(
+            reply="Role updated.",
+            updated_definition={"role": "Updated role."},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Original role."))
+
+        rt.send("worker", "init")
+        assert rt.state("worker") == {"status": "ready"}
+
+        rt.send_admin("worker", "Change role to: Updated role.")
+
+        assert rt.state("worker") == {"status": "ready"}
+        assert rt._bus.objects["worker"].definition.role == "Updated role."
+
+    def test_admin_ambiguous_replies_without_patch(self):
+        brain = MockBrain()
+        brain.script_admin(
+            reply="Could you clarify which field to change?",
+            updated_definition=None,  # no patch — ambiguous instruction
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Original role."))
+
+        rt.send_admin("worker", "Make it better.")
+
+        obj = rt._bus.objects["worker"]
+        assert obj.definition.role == "Original role."
+
+    def test_non_admin_react_schema_has_no_updated_definition(self):
+        """Structural guard: non-admin turns can't emit definition patches
+        because the React schema no longer carries `updated_definition`."""
+        from src.lnl.brain import LLM_REACT_SCHEMA
+
+        finish_props = LLM_REACT_SCHEMA["properties"]["finish"]["properties"]
+        assert "updated_definition" not in finish_props
+
+    def test_admin_patch_marks_active_plans_needs_replan(self):
+        """After an admin patch, every in-flight plan is flagged for re-plan."""
+        from src.lnl.types import Plan, PlanStep
+
+        brain = MockBrain()
+        brain.script_admin(
+            reply="Role updated.",
+            updated_definition={"role": "New role."},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Original role."))
+
+        # Inject a fake active plan as if a prior DOMAIN message had planned it.
+        obj = rt._bus.objects["worker"]
+        fake_plan = Plan(
+            goal="prior work",
+            steps=[PlanStep(id="s1", kind="reason", description="think")],
+            trace_id="trace-1",
+        )
+        obj._active_plans["trace-1"] = fake_plan
+        assert fake_plan.needs_replan is False
+
+        rt.send_admin("worker", "Change role to: New role.")
+
+        assert fake_plan.needs_replan is True
+
+    def test_admin_ambiguous_does_not_mark_plans(self):
+        """A clarification-only admin turn (no patch) leaves plans untouched."""
+        from src.lnl.types import Plan, PlanStep
+
+        brain = MockBrain()
+        brain.script_admin(
+            reply="Clarify which field.",
+            updated_definition=None,
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Original."))
+
+        obj = rt._bus.objects["worker"]
+        fake_plan = Plan(
+            goal="prior work",
+            steps=[PlanStep(id="s1", kind="reason", description="think")],
+            trace_id="trace-1",
+        )
+        obj._active_plans["trace-1"] = fake_plan
+
+        rt.send_admin("worker", "Make it better.")
+
+        assert fake_plan.needs_replan is False
+
+    def test_admin_replan_replaces_steps_preserves_state(self):
+        """The next DOMAIN message on a trace marked needs_replan re-plans
+        against the new definition. Plan state and deltas are preserved;
+        steps and goal are replaced."""
+        from src.lnl.types import Plan, PlanStep
+
+        brain = MockBrain()
+        # Admin patch
+        brain.script_admin(
+            reply="Behavior updated.",
+            updated_definition={"behavior": "Updated behavior."},
+            object_id="worker",
+        )
+        # Re-plan response (next DOMAIN turn): a fresh plan with one reason step.
+        brain.script_plan(
+            {
+                "goal": "re-planned goal",
+                "steps": [
+                    {
+                        "id": "s1",
+                        "step_number": 1,
+                        "kind": "reason",
+                        "target": "self",
+                        "description": "new step under new definition",
+                        "reasoning": "test",
+                    },
+                    {
+                        "id": "final",
+                        "step_number": 2,
+                        "kind": "final",
+                        "target": "final",
+                        "description": "done",
+                        "reasoning": "wrap",
+                    },
+                ],
+            },
+            object_id="worker",
+        )
+        # Default React response so the executor finishes the DOMAIN turn.
+        brain.script("worker", LLMResponse(
+            updated_state="",
+            reply="done",
+            outgoing_messages=[],
+        ))
+
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(
+            object_id="worker",
+            role="Original.",
+            behavior="Original behavior.",
+        ))
+        obj = rt._bus.objects["worker"]
+
+        # Pre-seed an active plan with stale steps + state.
+        stale_plan = Plan(
+            goal="stale goal",
+            steps=[PlanStep(id="s_old", kind="reason", description="stale")],
+            trace_id="trace-X",
+            state='{"counter": 7}',
+        )
+        obj._active_plans["trace-X"] = stale_plan
+
+        # Apply the admin patch — should flag stale_plan for re-plan.
+        rt.send_admin("worker", "Update behavior to: Updated behavior.")
+        assert stale_plan.needs_replan is True
+
+        # Now send a DOMAIN message that carries the same trace_id so the
+        # planner gate triggers a re-plan in place. The simplest path: use
+        # internal _bus.deliver to control trace_id.
+        from src.lnl.types import Message, MessageType
+        msg = Message(
+            sender="__user__",
+            recipient="worker",
+            type=MessageType.DOMAIN,
+            content="continue",
+            id="m-2",
+            trace_id="trace-X",
+        )
+        rt._dispatch([msg])
+
+        # Plan was re-planned in place: same object, new steps and goal.
+        assert "trace-X" in obj._active_plans or "trace-X" not in obj._active_plans
+        # Note: stale_plan reference may have been mutated in place; check it.
+        assert stale_plan.needs_replan is False
+        assert stale_plan.goal == "re-planned goal"
+        assert any(s.id == "s1" for s in stale_plan.steps)
+        # State and identity preserved.
+        assert stale_plan.state == '{"counter": 7}'
+
+
+class TestAdminEdgeCases:
+    """Defensive edge cases — guard against silent corruption, partial patches,
+    and unintended cross-trace effects."""
+
+    def test_admin_cannot_modify_subscriptions(self):
+        """subscriptions is NOT in _PATCHABLE_DEFINITION_FIELDS; LLM-supplied
+        value should be ignored even if it sneaks into the patch dict."""
+        brain = MockBrain()
+        brain.script_admin(
+            reply="Role updated.",
+            updated_definition={
+                "role": "New role.",
+                "subscriptions": ["forbidden-topic"],  # not patchable
+            },
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(
+            object_id="worker",
+            role="Original.",
+            subscriptions=["legit-topic"],
+        ))
+
+        rt.send_admin("worker", "Update role.")
+
+        obj = rt._bus.objects["worker"]
+        assert obj.definition.role == "New role."
+        assert obj.definition.subscriptions == ["legit-topic"]
+
+    def test_admin_cannot_modify_event_sources(self):
+        brain = MockBrain()
+        brain.script_admin(
+            reply="ok",
+            updated_definition={
+                "role": "X",
+                "event_sources": ["evil-source"],
+            },
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(
+            object_id="worker",
+            role="Original.",
+            event_sources=["original-source"],
+        ))
+
+        rt.send_admin("worker", "Update.")
+
+        obj = rt._bus.objects["worker"]
+        assert obj.definition.event_sources == ["original-source"]
+
+    def test_admin_cannot_modify_object_id(self):
+        """object_id is the actor's identity — never patchable."""
+        brain = MockBrain()
+        brain.script_admin(
+            reply="ok",
+            updated_definition={"object_id": "hijacked", "role": "X"},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Original."))
+
+        rt.send_admin("worker", "Rename yourself.")
+
+        obj = rt._bus.objects["worker"]
+        assert obj.definition.object_id == "worker"
+        assert obj.definition.role == "X"
+
+    def test_admin_multi_field_patch(self):
+        """A single admin patch can update role + behavior + peers + skills
+        in one shot. All four take effect."""
+        brain = MockBrain()
+        brain.script_admin(
+            reply="All updated.",
+            updated_definition={
+                "role": "New role.",
+                "behavior": "New behavior.",
+                "peers": [{"object_id": "p1", "relationship": "helper"}],
+                "skills": ["s1", "s2"],
+            },
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(
+            object_id="worker",
+            role="Old role.",
+            behavior="Old behavior.",
+            peers=[PeerDeclaration("old-peer", "old")],
+            skills=["old-skill"],
+        ))
+
+        rt.send_admin("worker", "Replace everything.")
+
+        d = rt._bus.objects["worker"].definition
+        assert d.role == "New role."
+        assert d.behavior == "New behavior."
+        assert [p.object_id for p in d.peers] == ["p1"]
+        assert d.skills == ["s1", "s2"]
+
+    def test_admin_empty_peers_list_removes_all_peers(self):
+        """Replace-semantics: an empty peers list removes every peer."""
+        brain = MockBrain()
+        brain.script_admin(
+            reply="Peers cleared.",
+            updated_definition={"peers": []},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(
+            object_id="worker",
+            role="X",
+            peers=[PeerDeclaration("a", "x"), PeerDeclaration("b", "y")],
+        ))
+
+        rt.send_admin("worker", "Remove all peers.")
+
+        assert rt._bus.objects["worker"].definition.peers == []
+
+    def test_admin_empty_patch_dict_is_no_op(self):
+        """LLM returning updated_definition={} should leave everything alone
+        and should NOT mark plans needs_replan (no real change)."""
+        from src.lnl.types import Plan, PlanStep
+
+        brain = MockBrain()
+        brain.script_admin(
+            reply="No change.",
+            updated_definition={},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Original."))
+
+        obj = rt._bus.objects["worker"]
+        fake = Plan(goal="x", steps=[PlanStep(kind="reason", description="t")], trace_id="t1")
+        obj._active_plans["t1"] = fake
+
+        rt.send_admin("worker", "Make no changes.")
+
+        assert obj.definition.role == "Original."
+        assert fake.needs_replan is False  # empty patch → no replan needed
+
+    def test_admin_skills_filters_non_strings(self):
+        """skills list filters out non-string entries defensively."""
+        brain = MockBrain()
+        brain.script_admin(
+            reply="ok",
+            updated_definition={"skills": ["valid", 123, None, "also-valid", {"x": 1}]},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="X"))
+
+        rt.send_admin("worker", "Update skills.")
+
+        assert rt._bus.objects["worker"].definition.skills == ["valid", "also-valid"]
+
+    def test_admin_peers_filters_malformed_entries(self):
+        """peers list filters out non-dict entries defensively."""
+        brain = MockBrain()
+        brain.script_admin(
+            reply="ok",
+            updated_definition={
+                "peers": [
+                    {"object_id": "good", "relationship": "ok"},
+                    "not-a-dict",
+                    None,
+                    42,
+                ],
+            },
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="X"))
+
+        rt.send_admin("worker", "Update peers.")
+
+        peers = rt._bus.objects["worker"].definition.peers
+        assert [p.object_id for p in peers] == ["good"]
+
+    def test_admin_history_includes_admin_message(self):
+        """The admin message must be appended to history so subsequent turns
+        can see the prior admin context if needed."""
+        brain = MockBrain()
+        brain.script_admin(
+            reply="ok",
+            updated_definition={"role": "New."},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Old."))
+
+        rt.send_admin("worker", "Update role.")
+
+        history = rt._bus.objects["worker"]._history
+        assert any(m.content == "Update role." for m in history)
+        assert any(m.type.name == "ADMIN" for m in history)
+
+    def test_two_admins_in_succession(self):
+        """Two admin patches in a row both take effect."""
+        brain = MockBrain()
+        brain.script_admin(
+            reply="role updated",
+            updated_definition={"role": "Role v2."},
+            object_id="worker",
+        )
+        brain.script_admin(
+            reply="behavior updated",
+            updated_definition={"behavior": "Behavior v2."},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="v1.", behavior="b1."))
+
+        rt.send_admin("worker", "Update role to v2.")
+        rt.send_admin("worker", "Update behavior to v2.")
+
+        d = rt._bus.objects["worker"].definition
+        assert d.role == "Role v2."
+        assert d.behavior == "Behavior v2."
+
+    def test_admin_flags_all_concurrent_traces_for_replan(self):
+        """If multiple plans are active on different traces, an admin patch
+        marks every one of them needs_replan."""
+        from src.lnl.types import Plan, PlanStep
+
+        brain = MockBrain()
+        brain.script_admin(
+            reply="ok",
+            updated_definition={"role": "New."},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Old."))
+
+        obj = rt._bus.objects["worker"]
+        plan_a = Plan(goal="A", steps=[PlanStep(kind="reason", description="a")], trace_id="ta")
+        plan_b = Plan(goal="B", steps=[PlanStep(kind="reason", description="b")], trace_id="tb")
+        plan_c = Plan(goal="C", steps=[PlanStep(kind="reason", description="c")], trace_id="tc")
+        obj._active_plans["ta"] = plan_a
+        obj._active_plans["tb"] = plan_b
+        obj._active_plans["tc"] = plan_c
+
+        rt.send_admin("worker", "Update role.")
+
+        assert plan_a.needs_replan is True
+        assert plan_b.needs_replan is True
+        assert plan_c.needs_replan is True
+
+    def test_replan_only_fires_for_message_trace(self):
+        """A DOMAIN message on trace X re-plans trace X only. Other stale
+        plans on other traces stay stale until their own next message."""
+        from src.lnl.types import Plan, PlanStep, Message, MessageType
+
+        brain = MockBrain()
+        brain.script_admin(
+            reply="ok",
+            updated_definition={"behavior": "New."},
+            object_id="worker",
+        )
+        # Re-plan response for trace X only
+        brain.script_plan(
+            {
+                "goal": "fresh X plan",
+                "steps": [{
+                    "id": "s1", "step_number": 1, "kind": "reason",
+                    "target": "self", "description": "fresh step", "reasoning": "test",
+                }, {
+                    "id": "final", "step_number": 2, "kind": "final",
+                    "target": "final", "description": "done", "reasoning": "wrap",
+                }],
+            },
+            object_id="worker",
+        )
+        brain.script("worker", LLMResponse(updated_state="", reply="done"))
+
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="X", behavior="b1"))
+        obj = rt._bus.objects["worker"]
+
+        plan_x = Plan(goal="X stale", steps=[PlanStep(kind="reason", description="old")], trace_id="trace-X")
+        plan_y = Plan(goal="Y stale", steps=[PlanStep(kind="reason", description="old")], trace_id="trace-Y")
+        obj._active_plans["trace-X"] = plan_x
+        obj._active_plans["trace-Y"] = plan_y
+
+        rt.send_admin("worker", "Update.")
+        assert plan_x.needs_replan is True
+        assert plan_y.needs_replan is True
+
+        # Message arrives on trace X only
+        msg = Message(
+            sender="__user__", recipient="worker", type=MessageType.DOMAIN,
+            content="continue", id="mX", trace_id="trace-X",
+        )
+        rt._dispatch([msg])
+
+        assert plan_x.needs_replan is False        # re-planned
+        assert plan_x.goal == "fresh X plan"
+        assert plan_y.needs_replan is True         # untouched
+        assert plan_y.goal == "Y stale"
+
+    def test_admin_with_no_active_plans(self):
+        """Admin patch on an object with no active plans is a clean no-op
+        on the plans side (and applies the patch normally)."""
+        brain = MockBrain()
+        brain.script_admin(
+            reply="ok",
+            updated_definition={"role": "New."},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Old."))
+
+        obj = rt._bus.objects["worker"]
+        assert obj._active_plans == {}
+
+        rt.send_admin("worker", "Update.")
+
+        assert obj.definition.role == "New."
+        assert obj._active_plans == {}
+
+    def test_admin_in_live_mode_applies_patch(self):
+        """send_admin works when the runtime is in live mode (background loop).
+        The work goes through the queue and the definition mutates before
+        the call returns."""
+        brain = MockBrain()
+        brain.script_admin(
+            reply="ok",
+            updated_definition={"role": "Live-updated role."},
+            object_id="worker",
+        )
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Original."))
+
+        rt.start(poll_interval=0.01)
+        try:
+            rt.send_admin("worker", "Update role.")
+            d = rt._bus.objects["worker"].definition
+            assert d.role == "Live-updated role."
+        finally:
+            rt.stop()
+
+    def test_interleaved_admin_and_domain_in_live_mode(self):
+        """Interleave DOMAIN and ADMIN messages on a live runtime; verify
+        each takes the correct path: DOMAIN updates state, ADMIN updates
+        definition, neither corrupts the other."""
+        brain = MockBrain()
+        # First DOMAIN: produces state
+        brain.script("worker", LLMResponse(
+            updated_state={"count": 1}, reply="domain-1",
+        ))
+        # ADMIN: updates role
+        brain.script_admin(
+            reply="role updated",
+            updated_definition={"role": "Phase 2 role."},
+            object_id="worker",
+        )
+        # Second DOMAIN: produces more state
+        brain.script("worker", LLMResponse(
+            updated_state={"count": 2}, reply="domain-2",
+        ))
+
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="worker", role="Phase 1 role."))
+
+        rt.start(poll_interval=0.01)
+        try:
+            rt.send("worker", "domain-msg-1")
+            assert rt.state("worker") == {"count": 1}
+            assert rt._bus.objects["worker"].definition.role == "Phase 1 role."
+
+            rt.send_admin("worker", "Update role.")
+            assert rt._bus.objects["worker"].definition.role == "Phase 2 role."
+            assert rt.state("worker") == {"count": 1}  # state preserved across admin
+
+            rt.send("worker", "domain-msg-2")
+            assert rt.state("worker") == {"count": 2}
+            assert rt._bus.objects["worker"].definition.role == "Phase 2 role."  # still
+        finally:
+            rt.stop()
+
+    def test_admin_handles_brain_without_admin_call(self):
+        """A brain that doesn't implement admin_call should not crash — the
+        path logs and returns a no-op ProcessingResult."""
+        from src.lnl.brain import LLMBrain
+        from src.lnl.types import LLMResponse, InferenceMetrics, ReactStep, ReactFinish
+
+        class NoAdminBrain(LLMBrain):
+            def call(self, messages, schema, *, object_id=None):
+                return LLMResponse(updated_state="", reply="domain", outgoing_messages=[]), InferenceMetrics(model="x")
+
+            def react_call(self, messages, *, object_id=None):
+                return ReactStep(
+                    thought="t", action="finish",
+                    finish=ReactFinish(reply="r"),
+                ), InferenceMetrics(model="x")
+
+        rt = Runtime(NoAdminBrain())
+        rt.create_object(ObjectDefinition(object_id="worker", role="Original."))
+
+        # Should not raise
+        results = rt.send_admin("worker", "Change something.")
+
+        assert rt._bus.objects["worker"].definition.role == "Original."
+        # The processing result should be empty/no-op shaped
+        assert results == [] or all(r.reply == "" for r in results)
+
+
 class TestTopology:
     def test_reflects_structure(self, rt):
         rt.create_object(ObjectDefinition(
