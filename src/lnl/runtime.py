@@ -129,15 +129,18 @@ class SystemConfig:
     # "flat" reverts to the legacy {op, key, value} top-level deltas (kept for
     # A/B comparison and back-compat with pre-refactor runs).
     memory_backend: str = "nested"
-    # Tool dispatch mode: "async" (default) — tools submit to the per-object
-    # pool and the result arrives as a mailbox REPLY processed in a new
-    # process_message turn (non-blocking actor semantics; the object can
-    # service peer/heartbeat messages while a tool runs). "sync" — tools
-    # execute inline in the ReAct loop, result fed back immediately as the
-    # next user message (single multi-turn LLM call; blocks the object
-    # thread until tools complete). Sync was a temporary default while we
-    # closed sync↔async behaviour gaps; async is the architectural default.
-    tool_dispatch: str = "async"
+    # Tool dispatch mode: "sync" (default) — tools execute inline in the ReAct
+    # loop, result fed back immediately as the next user message (single
+    # multi-turn LLM call; blocks the object thread until tools complete).
+    # "async" — tools submit to the per-object pool and the result arrives
+    # as a mailbox REPLY processed in a new process_message turn (non-blocking
+    # actor semantics; the object can service peer/heartbeat messages while
+    # a tool runs). Sync is the default because the per-turn async LLM call
+    # empirically loses pass rate on the Zapier multistep eval (each turn
+    # rebuilds the prompt without the LLM's own prior tool_call action in
+    # context, leading to lost-intent / re-dispatch patterns). Async remains
+    # available via --tool-dispatch async for actor-style production runs.
+    tool_dispatch: str = "sync"
     # Planner mode: "dag" (default) — planner emits a dependency graph and
     # independent steps (empty depends_on or all deps done) fan out concurrently
     # in a single executor turn. "sequential" — planner emits a step-by-step
