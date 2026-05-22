@@ -173,14 +173,16 @@ def _load_pool_config(path: Path) -> list[WorkerConfig]:
 def _clean_pool_worker_dirs(workers: list[WorkerConfig]) -> None:
     """Wipe accumulated workspace/config/log files from each worker data_dir.
 
-    Preserves identity/, devices/ (auth files written by start-pool.sh) and
-    openclaw.json (gateway config containing the auth token + agent list).
+    Preserves identity/, devices/ (auth files written by start-pool.sh),
+    openclaw.json (gateway config containing the auth token + agent list), and
+    extensions/ (plugin JS files copied into the bind-mount by the entrypoint).
     Deleting openclaw.json causes every worker to look like it has a token mismatch
-    on the next run, triggering unnecessary container restarts.
+    on the next run, triggering unnecessary container restarts.  Deleting extensions/
+    causes the gateway to lose the lnl-mock-external plugin after a forced restart.
     Called once at the start of every pool-mode eval run so workers start clean.
     """
     import shutil
-    _KEEP = {"identity", "devices", "openclaw.json"}
+    _KEEP = {"identity", "devices", "openclaw.json", "extensions"}
     for w in workers:
         if not w.data_dir.is_dir():
             continue
@@ -296,7 +298,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v20): increase default peer_message_timeout 90→150s so 3-hop A2A chains complete before entry-agent times out
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v21): preserve extensions/ in _clean_pool_worker_dirs so lnl-mock-external survives gateway restart
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
