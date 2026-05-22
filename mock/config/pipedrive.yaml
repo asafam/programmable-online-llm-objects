@@ -1,0 +1,25 @@
+system: pipedrive
+tools:
+  - method: pipedrive_create_deal
+    immediate:
+      template: "id: {tool_call_id}, title: '{title}', value: {value}, stage: '{stage}', status: 'open', created: true"
+
+  - method: pipedrive_update_deal
+    immediate:
+      template: "id: {deal_id}, updated: true"
+
+  - method: pipedrive_get_deal
+    immediate:
+      template: "id: {deal_id}, title: 'Deal', value: 0, stage: 'Qualified', status: 'open'"
+
+  - method: pipedrive_create_person
+    immediate:
+      template: "id: {tool_call_id}, name: '{name}', created: true"
+
+  - method: pipedrive_create_organization
+    immediate:
+      template: "id: {tool_call_id}, name: '{name}', created: true"
+
+  - method: pipedrive_list_deals
+    immediate:
+      template: "[]"

@@ -1,0 +1,17 @@
+system: google_contacts
+tools:
+  - method: google_contacts_create
+    immediate:
+      template: "resource_name: people/{tool_call_id}, display_name: '{name}', created: true"
+
+  - method: google_contacts_update
+    immediate:
+      template: "resource_name: people/{resource_name}, updated: true"
+
+  - method: google_contacts_get
+    immediate:
+      template: "resource_name: people/{resource_name}, display_name: '(contact)', email: ''"
+
+  - method: google_contacts_list
+    immediate:
+      template: "[]"

@@ -1,0 +1,21 @@
+system: clickup
+tools:
+  - method: clickup_create_task
+    immediate:
+      template: "id: TKT-{tool_call_id}, name: '{name}', status: 'open', space: '{space}', created: true"
+
+  - method: clickup_update_task
+    immediate:
+      template: "id: {task_id}, updated: true"
+
+  - method: clickup_get_task
+    immediate:
+      template: "id: {task_id}, name: 'Task', status: 'open', priority: 'normal'"
+
+  - method: clickup_list_tasks
+    immediate:
+      template: "[]"
+
+  - method: clickup_add_comment
+    immediate:
+      template: "id: {tool_call_id}, task_id: {task_id}, comment_added: true"

@@ -1,0 +1,21 @@
+system: zendesk
+tools:
+  - method: zendesk_create_ticket
+    immediate:
+      template: "ticket_id: TKT-{tool_call_id}, subject: '{subject}', status: 'open', created: true"
+
+  - method: zendesk_update_ticket
+    immediate:
+      template: "ticket_id: {ticket_id}, status: '{status}', updated: true"
+
+  - method: zendesk_add_note
+    immediate:
+      template: "ticket_id: {ticket_id}, comment_id: {tool_call_id}, type: 'internal_note', created: true"
+
+  - method: zendesk_get_ticket
+    immediate:
+      template: "ticket_id: {ticket_id}, subject: 'Support Ticket', status: 'open', priority: 'normal'"
+
+  - method: zendesk_list_tickets
+    immediate:
+      template: "[]"

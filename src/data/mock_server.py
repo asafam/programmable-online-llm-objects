@@ -76,6 +76,15 @@ _SYSTEM_KEYWORDS: dict[str, str] = {
     "asana": "asana.yaml",
     "notion": "notion.yaml",
     "twilio": "twilio.yaml",
+    "openai": "openai.yaml",
+    "chatgpt": "openai.yaml",
+    "google drive": "google_drive.yaml",
+    "zendesk": "zendesk.yaml",
+    "intercom": "intercom.yaml",
+    "pipedrive": "pipedrive.yaml",
+    "google contacts": "google_contacts.yaml",
+    "clickup": "clickup.yaml",
+    "docusign": "docusign.yaml",
 }
 
 # Canonical source of truth lives in mock/config/
@@ -118,11 +127,11 @@ def resolve_orchestration(tc: Sample, time_scale: float = 1.0) -> Optional[Orche
 
 
 def resolve_mock_configs(tc: Sample) -> Optional[MockScript]:
-    """Scan a Sample's object fields for known system keywords.
+    """Scan a Sample's object fields and expects for known system keywords.
 
-    Scans skills, event_sources, behavior, and role so that systems referenced
-    only in free-text behavior descriptions (e.g. "store in Zapier Table",
-    "post to Slack channel") are included in the mock script.
+    Scans skills, event_sources, behavior, role, and step/event expect.action
+    so that systems demanded by expects (even if not named in object text) are
+    included in the mock script.
 
     Returns a merged MockScript if any matching config files exist, else None.
     """
@@ -136,6 +145,15 @@ def resolve_mock_configs(tc: Sample) -> Optional[MockScript]:
             all_text.append(obj.behavior)
         if obj.role:
             all_text.append(obj.role)
+
+    # Also scan step and event expects so that systems demanded by expects are
+    # covered even when object text doesn't explicitly name the system.
+    for step in tc.steps:
+        if step.expect and step.expect.action:
+            all_text.append(step.expect.action)
+    for event in tc.events:
+        if event.expect and event.expect.action:
+            all_text.append(event.expect.action)
 
     combined = " ".join(all_text).lower()
 

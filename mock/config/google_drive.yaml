@@ -1,0 +1,21 @@
+system: google_drive
+tools:
+  - method: drive_upload_file
+    immediate:
+      template: "file_id: {tool_call_id}, name: '{filename}', mime_type: '{mime_type}', url: https://drive.google.com/file/d/{tool_call_id}/view"
+
+  - method: drive_create_file
+    immediate:
+      template: "file_id: {tool_call_id}, name: '{filename}', url: https://drive.google.com/file/d/{tool_call_id}/view"
+
+  - method: drive_get_file
+    immediate:
+      template: "file_id: {file_id}, name: '(file)', url: https://drive.google.com/file/d/{file_id}/view"
+
+  - method: drive_list_files
+    immediate:
+      template: "[]"
+
+  - method: drive_share_file
+    immediate:
+      template: "file_id: {file_id}, shared: true, permission_id: perm_{tool_call_id}"

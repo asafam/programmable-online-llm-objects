@@ -1,0 +1,17 @@
+system: openai
+tools:
+  - method: openai_chat_completion
+    immediate:
+      template: "id: chatcmpl-{tool_call_id}, model: 'gpt-4o', content: '(AI-generated response for: {prompt})'"
+
+  - method: openai_generate_audio
+    immediate:
+      template: "file_id: file_{tool_call_id}, filename: 'audio-{tool_call_id}.mp3', format: 'mp3', duration_seconds: 30"
+
+  - method: openai_text_to_speech
+    immediate:
+      template: "file_id: file_{tool_call_id}, filename: 'tts-{tool_call_id}.mp3', format: 'mp3', status: 'completed'"
+
+  - method: openai_create_embedding
+    immediate:
+      template: "id: embedding-{tool_call_id}, dimensions: 1536, status: 'completed'"

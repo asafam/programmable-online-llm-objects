@@ -1,0 +1,21 @@
+system: docusign
+tools:
+  - method: docusign_create_envelope
+    immediate:
+      template: "envelope_id: env_{tool_call_id}, status: 'sent', created: true"
+
+  - method: docusign_get_envelope
+    immediate:
+      template: "envelope_id: {envelope_id}, status: 'sent', recipients: []"
+
+  - method: docusign_generate_document
+    immediate:
+      template: "document_id: doc_{tool_call_id}, envelope_id: env_{tool_call_id}, status: 'created'"
+
+  - method: docusign_create_review
+    immediate:
+      template: "review_id: rev_{tool_call_id}, envelope_id: env_{tool_call_id}, status: 'pending_approval'"
+
+  - method: docusign_update_envelope
+    immediate:
+      template: "envelope_id: {envelope_id}, updated: true"

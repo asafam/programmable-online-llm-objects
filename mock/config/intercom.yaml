@@ -1,0 +1,21 @@
+system: intercom
+tools:
+  - method: intercom_send_message
+    immediate:
+      template: "message_id: {tool_call_id}, conversation_id: '{conversation_id}', delivered: true"
+
+  - method: intercom_reply_conversation
+    immediate:
+      template: "reply_id: {tool_call_id}, conversation_id: '{conversation_id}', status: 'sent'"
+
+  - method: intercom_get_conversation
+    immediate:
+      template: "id: '{conversation_id}', state: 'open', messages: []"
+
+  - method: intercom_create_conversation
+    immediate:
+      template: "conversation_id: conv_{tool_call_id}, created: true"
+
+  - method: intercom_update_conversation
+    immediate:
+      template: "conversation_id: '{conversation_id}', updated: true"
