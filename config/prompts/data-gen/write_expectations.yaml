@@ -2,11 +2,28 @@ prompt: |
   # Task: Write Event Expectations
 
   For each event, write the **terminal observable output** — the final external action the system
-  produces. Use the reference data to name exact people and channels.
+  produces, in implementation-agnostic business terms.
+
+  ## CRITICAL RULE — apply before writing a single word of `action` or `reason`
+
+  The `action` and `reason` fields must be readable by any team testing their own workflow system.
+  They must NEVER reference implementation internals. Specifically:
+
+  - **NO object names / peer names** — do NOT write "email-notifications", "quote-approval-policy",
+    "slack-approvals", or any other identifier from the Object System. Use "the system", "the workflow",
+    or passive voice instead: "An email is sent" NOT "email-notifications sends an email".
+  - **NO internal tool function names** — do NOT write `` `post_slack_message` ``, `` `log_audit_event` ``,
+    or any other function identifier from the Registered Write-Side Tools. Describe what happens:
+    "A Slack message is posted" NOT `` `post_slack_message` called ``.
+  - **YES SaaS platform names** — HubSpot, Slack, Jira, Salesforce, Airtable etc. are fine; they
+    are part of the workflow's identity, not implementation details.
+
+  Use the Object System and Write-Side Tools sections ONLY to understand WHAT the system does.
+  Never copy their identifiers into `action` or `reason`.
 
   ---
 
-  ## Object System
+  ## Object System (for understanding behavior only — do NOT copy object names into action/reason)
 
   {OBJECTS}
 
@@ -18,10 +35,7 @@ prompt: |
 
   ---
 
-  ## Registered Write-Side Tools
-
-  These are the EXACT tool names the system must call to perform external write operations.
-  When writing `action`, you MUST use these exact names for any write-side assertion.
+  ## Registered Write-Side Tools (for understanding capabilities only — do NOT name tools in action/reason)
 
   {WRITE_TOOLS}
 
