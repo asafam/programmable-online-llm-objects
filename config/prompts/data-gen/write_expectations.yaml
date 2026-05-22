@@ -1,43 +1,20 @@
 prompt: |
   # Task: Write Event Expectations
 
-  For each event, write the **terminal observable output** — the final external action the system
-  produces, in implementation-agnostic business terms.
-
-  ## CRITICAL RULE — apply before writing a single word of `action` or `reason`
-
-  The `action` and `reason` fields must be readable by any team testing their own workflow system.
-  They must NEVER reference implementation internals. Specifically:
-
-  - **NO object names / peer names** — do NOT write "email-notifications", "quote-approval-policy",
-    "slack-approvals", or any other identifier from the Object System. Use "the system", "the workflow",
-    or passive voice instead: "An email is sent" NOT "email-notifications sends an email".
-  - **NO internal tool function names** — do NOT write `` `post_slack_message` ``, `` `log_audit_event` ``,
-    or any other function identifier from the Registered Write-Side Tools. Describe what happens:
-    "A Slack message is posted" NOT `` `post_slack_message` called ``.
-  - **YES SaaS platform names** — HubSpot, Slack, Jira, Salesforce, Airtable etc. are fine; they
-    are part of the workflow's identity, not implementation details.
-
-  Use the Object System and Write-Side Tools sections ONLY to understand WHAT the system does.
-  Never copy their identifiers into `action` or `reason`.
+  For each event, write the **terminal observable output** — what the workflow
+  produces, described in business terms that any team could verify.
 
   ---
 
-  ## Object System (for understanding behavior only — do NOT copy object names into action/reason)
+  ## Workflow Steps (what the system does, in order)
 
-  {OBJECTS}
+  {STEPS}
 
   ---
 
-  ## Reference Data (exact values the read services will return)
+  ## Reference Data (exact values the read services will return at eval time)
 
   {MOCK_DATA}
-
-  ---
-
-  ## Registered Write-Side Tools (for understanding capabilities only — do NOT name tools in action/reason)
-
-  {WRITE_TOOLS}
 
   ---
 
@@ -55,209 +32,79 @@ prompt: |
 
   ## How to reason
 
-  **Step 1 — Identify which behavior is triggered by this event.**
-  Look at the event's `recipient` and `input` to understand what kind of trigger it is.
-  Then find that object's behavior in the Object System to determine what it does.
-  The system responds to THIS event only — do NOT project forward to hypothetical future events
-  (e.g., an external actor responding to a request is a separate future event, not part of this event's output).
+  **Step 1 — Identify which workflow step this event activates.**
+  Match the event's `recipient` and `input` to the relevant step(s) above.
+  Use the steps to understand what the system does in response.
 
-  **Step 2 — Trace the behavior chain to the terminal external output.**
-  Follow the chain from the triggered behavior to its terminal external action(s):
-  the observable outputs that leave the system (message sent, record updated, notification triggered).
+  **Step 2 — Trace the step to its terminal external output.**
+  Follow the logic in the steps to the final externally-observable actions:
+  messages sent, records updated, notifications triggered.
   Stop at the first external outputs — do NOT include outputs from subsequent events.
 
-  **Step 3 — Determine routing logic from the Object System, not the Reference Data.**
-  Read each object's behavior description to understand WHO gets notified and under what conditions.
-  The Reference Data is NOT a source of routing rules — it is only a lookup table for names and
-  data values. If the Reference Data contains routing tables or thresholds, ignore them.
+  **Step 3 — Look up exact names from the Reference Data.**
+  Use the Reference Data to replace role descriptions with actual names and identifiers.
+  Example: "the required approvers" → "Maria Chen and Daniel Lopez".
 
-  **Threshold evaluation:** If the object's behavior specifies a conditional output gated on a
-  numeric or categorical threshold (e.g., "if score < 15, escalate to manager"), you MUST evaluate
-  whether the event's actual input data satisfies that condition. Only include the conditional output
-  in `action` if the threshold IS met by the event data. If it is NOT met, write only the
-  non-conditional base-case outputs. Do not assume the threshold is met just because the event
-  involves the relevant field.
+  **Threshold evaluation:** If a step specifies a conditional output gated on a
+  numeric or categorical threshold, evaluate whether the event's input satisfies
+  that condition. Only include the conditional output if the threshold IS met.
 
   **Step 4 — Apply ACTIVE modifications to recompute the expected output.**
 
   A modification is active ONLY if the event occurs at or after the modification's `when` timestamp.
   The `[active modifications: ...]` annotation on each event tells you exactly which apply.
 
-  When an event has `[active modifications: M001, ...]`, the expected `action` is NOT the
-  baseline behavior — it is the MODIFIED behavior. For each active modification:
-
-    1. Read the modification's intent text (in the Modifications section above).
-    2. Determine HOW the intent changes the system's response to THIS event:
-       - Routing change → the message/record goes to a different destination
-       - Behavior suppression → an action that normally fires is now skipped
-       - Threshold change → a conditional path now fires (or no longer fires)
-       - Format change → the output content/structure differs
-       - Time-window → behavior is gated on whether `event.when` is in/out of the window
-       - Expansion → an additional action is now produced alongside baseline
+  When an event has `[active modifications: M001, ...]`, write the MODIFIED behavior, not baseline.
+  For each active modification:
+    1. Read the modification's intent text.
+    2. Determine HOW the intent changes the system's response to THIS event.
     3. WRITE THE EXPECTED OUTPUT THAT REFLECTS THE MODIFICATION'S EFFECT.
 
   **Make the modification's effect prominently visible in `action`.**
-  The validator (and human reviewer) reads `action` to verify the modification
-  is being tested. If the modification adds a field, the field name must be
-  named explicitly. If it changes a destination, the new destination must be
-  named. If it suppresses an action, write "[suppressed by M001] action X
-  not produced". Don't bury the modification's effect inside a long sentence
-  of baseline fields.
-
-  Examples:
-    Mod: "Include company name when provided" + event has Company: 'Acme'
-      ✓ "Row appended with name, email, phone, address, and company 'Acme'.
-         The 'company' field is included as a result of M001."
-      ✗ "Row appended with name, email, phone, address, company, and timestamp."
-        (company is buried in a list — judge may not notice it's new)
-    Mod: "Suppress acknowledgement DMs for in-progress tickets"
-      ✓ "Status update logged to the ticket. [suppressed by M001:
-         acknowledgement DM to requester is NOT sent for in-progress tickets.]"
-      ✗ "Status update logged."
-        (silent suppression — judge can't tell mod is being tested)
-    Mod: "Route Windows 11 23H2 VPN cases to Infrastructure"
-      ✓ "Ticket created in Infrastructure team queue (re-routed by M001 from
-         the default Helpdesk queue) for the VPN lockout case."
-      ✗ "Ticket created in Infrastructure team queue."
-        (correct outcome but doesn't make the re-routing visible)
-
-  **Example — clear modification effect:**
-    Modification: "For Windows 11 23H2 VPN lockout cases, route to Infrastructure"
-    Baseline `action`: "DM sent to user with KB fix instructions"
-    Modified `action`: "Ticket created in Infrastructure team's queue for the Windows 11
-                        23H2 VPN lockout case, with the user's request details"
-    → Use the MODIFIED `action`. Do NOT describe the baseline.
-
-  **Example — modification active but condition not met:**
-    Modification: "For severity P1 only, also notify the on-call channel"
-    Event severity in input: P2
-    → Modification active but doesn't apply (P2 ≠ P1). Use baseline `action`. State in
-      `reason` that the modification's qualifying condition is not met.
-
-  If the modification is VAGUE (e.g., "stop pinging people so much"), commit to a
-  reasonable interpretation, state it in `reason`, and write the `action` under that
-  interpretation. Be specific — vague mods still need a specific test outcome.
+  If it suppresses an action, write "[suppressed by M001] action X not produced".
+  If it changes a destination or adds a field, name it explicitly.
 
   **CRITICAL**: never write the baseline behavior for a `role=post_mod` event without
   also writing in `reason` why the modification's effect does not change THIS event's
-  outcome. A silent baseline on a post_mod event means the modification is not being
-  tested — the test will pass for the wrong reasons.
-
-  **Step 5 — Look up exact names from the Reference Data.**
-  Use the Reference Data to find the actual entity that fills each role. Use exact names and identifiers.
-
-  **Step 6 — Describe each external action in business terms. Do NOT name internal objects or tools.**
-  Use the "Registered Write-Side Tools" section only to understand WHAT the system can do —
-  not to name the tools in the output. Describe the observable outcome:
-    ✓ "An approval request email is sent to Sandra Okonkwo (sandra@co.com) with
-       subject 'Approval required: Q-3112' and deal details."
-    ✓ "An approval request message is posted in Slack on #deal-approvals with quote
-       Q-3112 details and approve/reject prompts."
-    ✗ "`send_approval_email` called with recipient=Sandra Okonkwo" (tool name exposed —
-       this couples the test to the implementation's internal function names)
-    ✗ "Email record created in the notification-handler object" (object name exposed)
-
-  Write what a human user observing the system from outside would see happen.
-  Never mention: object names, peer names, tool function names, internal service identifiers.
-
-  **Step 7 — Only describe actions that the Object System actually performs.**
-  Every output you include in `action` must be directly traceable to a behavior listed in the
-  Object System above. If no behavior sends Slack messages, do NOT include a Slack notification.
-  If no behavior sends email, do NOT include an email. Do not invent outputs.
-
-  **Step 8 — Only use identifiers that are present in the provided data.**
-  Any specific identifier you include in `action` — especially Slack channel names (`#channel`),
-  ticket/record IDs (e.g., `PROJ-1042`), and email addresses — MUST appear verbatim in one of:
-  the event's `input` text, another event's `input` text, the Object System behaviors above,
-  or the Reference Data above.
-  Do NOT invent channel names or identifiers. If the routing target is described by role
-  (e.g., "sales team channel") but no channel name is given anywhere in the provided data,
-  describe it by role ("sales team channel") rather than inventing a `#channel-name`.
+  outcome.
 
   ---
 
   ## What to write
 
   `action` = an EXHAUSTIVE list of EVERY terminal externally-observable side
-  effect the cascade produces for this event. Enumerate across these
-  categories — list every one that fires:
+  effect the cascade produces for this event. Write in plain business language —
+  what a human observer outside the system would see happen.
 
-  1. **State changes in EXTERNAL named storage** — rows inserted/updated,
-     status fields flipped, fields set, counters incremented. The storage
-     must be a named external system: a database table (Postgres `orders`),
-     a Google Sheet tab, an Airtable base, an Asana/Jira/Linear record,
-     a HubSpot/Salesforce object, etc.
-     Example: "Order ORD-1042 status set to 'fulfilled' in the
-     `orders` Postgres table."
+  Categories to enumerate — list every one that fires:
 
-     **DO NOT include internal object state** — the workflow's own
-     LNL objects keep NL state for orchestration, but that is NOT an
-     externally observable side effect. Never demand things like
-     "verification-request-processor state contains X" or
-     "exit-survey-intake records the audit trail" or
-     "follow-up-composition state stores the email preview". Those are
-     implementation details, not terminal observable outputs.
+  1. **State changes in external named storage** — rows inserted/updated, status
+     fields set, records created. Name the external system (HubSpot, Jira, Airtable,
+     Google Sheet, etc.) and the change.
+     Example: "Quote Q-2048 status is set to 'approved' in HubSpot Quotes."
 
-     Quick test: if a human user of the system could not see this state
-     change from outside (no API, no UI, no email/notification),
-     it is internal — omit it.
+  2. **Outbound messages / notifications** — emails sent, Slack messages posted,
+     DMs, SMS. Include recipient and content summary.
+     Example: "An approval request email is sent to Maria Chen with quote Q-2048
+     details and a request to approve or reject."
 
-  2. **Outbound messages / notifications** — emails, Slack DMs/posts,
-     SMS, push notifications. Always include recipient + content summary.
-     Example: "Email sent to maya.patel@acme.com with subject
-     'Welcome to Acme' and body containing the onboarding checklist link."
+  3. **External writes** — any other write to an external system (file upload,
+     calendar event, webhook call, etc.).
+     Example: "A new entry is appended to the Airtable audit log with the
+     submission payload and timestamp."
 
-  3. **External system writes / API calls** — writes to external systems
-     (emails sent, Slack messages posted, records updated in HubSpot/Jira/etc.).
-     Describe the observable outcome in business terms. Do NOT name the internal
-     tool function. Use the "Registered Write-Side Tools" section only to
-     understand WHAT the system can do — not to name the tool in the output.
-     Example: "An approval request email is sent to Sandra Okonkwo
-     (sandra@co.com) with subject 'Approval required: Q-3112' and deal details."
-     Example: "An approval request message is posted in Slack on #deal-approvals
-     with quote Q-3112 details and approve/reject/request-changes prompts."
-
-  4. **File / artifact writes** — files uploaded to Drive, S3, etc.
-     Example: "A PDF named 'invoice-1042.pdf' is uploaded to the
-     `invoices/2026/Q2/` folder in Google Drive."
-
-  5. **Any other externally observable effect** specifically named by
-     the cascade's behaviors.
-
-  If the cascade writes to two systems, list both. If it sends a
-  notification AND updates a status AND invokes a tool, list all three.
-
-  **NOT acceptable** (first-hop peer dispatch — trivially passes):
-    ✗ "Lead forwarded to lead-routing for processing."
-    ✗ "Submission data sent to contact-verification."
-
-  **NOT acceptable** (internal LNL object state — not externally observable):
-    ✗ "follow-up-composition state records the generated email preview."
-    ✗ "verification-request-processor state contains the request payload."
-    ✗ "exit-survey-intake audit-trail stores the submission."
-    These are workflow-internal scratchpads. The judge cannot observe
-    them and they are not real outputs of the system. Replace with the
-    actual external action (Gmail draft created, ticket logged in Jira,
-    row appended to Sheet, etc.).
-
-  **Do NOT name the internal object that performs the action.** Write what
-  happens externally: "Message sent to Alex Rivera" — NOT "Message sent to
-  Alex Rivera via notification-service". "Record updated in system X" —
-  NOT "Message sent to record-writer".
-
-  **Use names as primary identifiers.** When referencing a person, use their name as the
-  primary identifier (e.g., "DM sent to Priya Nair"). Only include a system ID (Slack user ID,
-  ticket ID, record key) if it is the sole way to identify the target in the evidence, or if
-  the ID itself is the meaningful output (e.g., "ticket PROJ-1042 created"). Do not require
-  both a system ID and a name when the name alone is sufficient — over-specifying identifiers
-  causes false failures when the system uses one form and the evidence shows the other.
+  Do NOT include:
+  - Object names, peer names, or internal service identifiers from the system
+  - Internal tool function names or API method names
+  - Internal state that is not visible from outside the system
+  - First-hop peer dispatches ("forwarded to X for processing")
 
   `reason` = the business rule or condition that drives this outcome (one sentence).
-  Name the SaaS platforms involved (HubSpot, Slack, Jira…) but NOT internal object names,
-  peer names, or tool function names.
+  Name the SaaS platforms (HubSpot, Slack…) but NOT internal object or peer names.
 
-  **Do NOT describe internal steps.** Do not mention peer messages, object queries, routing
-  decisions, or intermediate states. Only the final output(s) that leave the system.
+  ---
+
+  ## Output
 
   Respond with JSON only:
   {
@@ -266,3 +113,6 @@ prompt: |
       ...
     ]
   }
+
+  Include one entry per event. Set `action` to null for events with no
+  externally-observable output (e.g. a scheduled check that finds nothing).

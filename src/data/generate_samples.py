@@ -178,20 +178,14 @@ def _rewrite_event_expectations(llm, test_case: Sample, sample: Workflow) -> Non
     with open(prompt_path) as f:
         raw_prompt = _yaml.safe_load(f)["prompt"]
 
-    obj_lines = "\n\n".join(
-        f"[{obj.object_id}]\nRole: {obj.role}\nBehavior: {obj.behavior}"
-        for obj in sample.objects
-    )
-    read_tools  = [t for t in test_case.tools if "_data" in t.tool_name.lower()]
-    write_tools = [t for t in test_case.tools if "_data" not in t.tool_name.lower()]
+    steps_lines = "\n".join(
+        f"{i+1}. {s}" for i, s in enumerate(sample.steps or [])
+    ) or "(none)"
+    read_tools = [t for t in test_case.tools if "_data" in t.tool_name.lower()]
     mock_lines = "\n\n".join(
         f"Tool: {t.tool_name}\n{t.response_template[:3000]}"
         for t in read_tools
     ) or "(none)"
-    write_tool_lines = "\n".join(
-        f"- `{t.tool_name}`: {t.description}  args: {list(t.arguments_schema.get('properties', {}).keys())}"
-        for t in write_tools
-    ) or "(none — describe write actions by outcome)"
     mod_lines = "\n".join(
         f"{m.id} at {m.when} → {m.target}: {m.intent}"
         for m in test_case.modifications
@@ -212,9 +206,8 @@ def _rewrite_event_expectations(llm, test_case: Sample, sample: Workflow) -> Non
     event_lines = "\n".join(event_lines_parts)
 
     prompt = (raw_prompt
-        .replace("{OBJECTS}", obj_lines)
+        .replace("{STEPS}", steps_lines)
         .replace("{MOCK_DATA}", mock_lines)
-        .replace("{WRITE_TOOLS}", write_tool_lines)
         .replace("{MODIFICATIONS}", mod_lines)
         .replace("{EVENTS}", event_lines)
     )
