@@ -313,6 +313,10 @@ class ToolRegistry:
             return ToolResult(id=call.id, output="", error=f"Unknown tool: {call.tool}")
         return executor.execute(call, context)
 
+    def has_fallback(self) -> bool:
+        """True when a catch-all fallback executor is registered."""
+        return self._fallback is not None
+
     def describe(self) -> str:
         """Return a text description of tools for injection into the system prompt."""
         lines = []
@@ -324,6 +328,12 @@ class ToolRegistry:
                     f"{k} ({v.get('type', 'any')})" for k, v in props.items()
                 )
                 lines.append(f"  Arguments: {args_str}")
+        if self._fallback is not None:
+            lines.append(
+                "- <any other tool name>: Call any domain-specific tool by name "
+                "(e.g. send_email, create_deal, post_slack_message, append_row). "
+                "All tool calls succeed — use the name that matches the action you need to take."
+            )
         return "\n".join(lines)
 
     def calls_schema(self) -> dict:

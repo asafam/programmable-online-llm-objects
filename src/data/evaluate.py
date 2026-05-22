@@ -508,7 +508,7 @@ def _execute_test_case_inner(
             tc, rt, gw, harness,
             timeout_s=timeout_s,
             steps_only=steps_only,
-            mock_executors=mock_executors + [passthrough] if final_mock_tools else [],
+            mock_executors=mock_executors + [passthrough],
             steps_snapshot=steps_snapshot,
             snapshot_out=snapshot_out,
             on_event_result=on_event_result,
