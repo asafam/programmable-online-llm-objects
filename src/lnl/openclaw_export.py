@@ -110,6 +110,7 @@ def _agents_md(
     obj: ObjectDefinition,
     session_name: str = "main",
     peer_message_timeout: float = 90.0,
+    leaf_peer_ids: "frozenset[str]" = frozenset(),
 ) -> str:
     name = _slug_to_name(obj.object_id)
     behavior = obj.behavior or "(No specific behavior defined.)"
@@ -119,15 +120,38 @@ def _agents_md(
     if obj.peers:
         peers_block = "\n".join(f"- **{p.object_id}**: {p.relationship}" for p in obj.peers)
         peer_ids = [p.object_id for p in obj.peers]
+
+        # Per-peer timeout: leaf write-service peers (no peers of their own) use
+        # timeoutSeconds=0 so the cascade doesn't compound.  Coordinator peers
+        # (those with their own downstream peers) keep peer_message_timeout so
+        # the caller waits for their full sub-cascade to complete.
+        def _pt(pid: str) -> float:
+            return 0.0 if pid in leaf_peer_ids else _t
+
+        def _pt_str(pid: str) -> str:
+            t = _pt(pid)
+            return str(int(t)) if float(t).is_integer() else str(t)
+
         # Peer session keys always use "main" — the gateway's default mainKey.
         # The gateway auto-creates sessions on demand for the mainKey when
         # sessions_send targets a peer. Custom session names (e.g. "eval-ma-6")
         # do NOT get auto-created and cause "pairing required" errors.
         peer_examples = "\n".join(
-            f'  - To message `{pid}`: `sessions_send(sessionKey="agent:{pid}:main", message="<your message>", timeoutSeconds={timeout_str})`'
+            f'  - To message `{pid}`: `sessions_send(sessionKey="agent:{pid}:main", message="<your message>", timeoutSeconds={_pt_str(pid)})`'
             for pid in peer_ids
         )
-        if peer_message_timeout == 0:
+
+        has_ff = any(_pt(pid) == 0 for pid in peer_ids)
+        has_wait = any(_pt(pid) > 0 for pid in peer_ids)
+        if has_ff and has_wait:
+            timeout_instruction = (
+                f"**Use the exact timeoutSeconds shown for each peer below.** "
+                f"Peers with `timeoutSeconds=0` are write services — fire-and-forget: send the "
+                f"message and continue immediately without waiting for a reply. "
+                f"Peers with `timeoutSeconds={timeout_str}` are coordinators — they orchestrate "
+                f"further work; always wait for their reply.\n\n"
+            )
+        elif has_ff:
             timeout_instruction = (
                 f"**ALWAYS include `timeoutSeconds=0`** — this is fire-and-forget: the message is "
                 f"enqueued and you return immediately without waiting for a reply. Do not wait for "
@@ -600,6 +624,16 @@ def rewrite_agents_md(
     except ImportError:
         obj_defs = list(objects)
 
+    # Leaf peers are write-service objects that have no peers of their own.
+    # They are called fire-and-forget (timeoutSeconds=0) so the cascade does
+    # not compound: if a brain agent calls two leaf write services sequentially
+    # with timeoutSeconds=150 each, the chain takes 300s — exceeding the 150s
+    # budget of the parent that called the brain agent.
+    leaf_ids_base: set[str] = {o.object_id for o in obj_defs if not o.peers}
+    leaf_ids: frozenset[str] = frozenset(
+        f"{oid}{slot_suffix}" for oid in leaf_ids_base
+    )
+
     for obj in obj_defs:
         ws = output_dir / f"workspace-{obj.object_id}{slot_suffix}"
         target = ws / "AGENTS.md"
@@ -618,6 +652,7 @@ def rewrite_agents_md(
             slotted_obj,
             session_name=session_name,
             peer_message_timeout=peer_message_timeout,
+            leaf_peer_ids=leaf_ids,
         ))
 
 
