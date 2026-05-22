@@ -61,6 +61,9 @@ def _make_judge(provider: str, model: str):
     if provider == "openai":
         from src.lnl.judge import OpenAIJudge
         return OpenAIJudge(model=model)
+    elif provider == "azure":
+        from src.lnl.judge import AzureJudge
+        return AzureJudge(model=model)
     elif provider == "google":
         from src.lnl.judge import GeminiJudge
         return GeminiJudge(model=model)
@@ -127,10 +130,10 @@ def _build_expectation_map(tc_path: Path) -> "dict[str, dict[str, str]]":
     result: dict[str, dict[str, str]] = {}
     for tc in test_cases:
         mapping: dict[str, str] = {}
-        for i, step in enumerate(tc.steps):
+        for step in [e for e in tc.events if e.role == "base"]:
             if step.expect:
-                mapping[f"S{i+1:03d}"] = step.expect.action
-        for evt in tc.events:
+                mapping[step.id] = step.expect.action
+        for evt in [e for e in tc.events if e.role != "base"]:
             if evt.expect:
                 mapping[evt.id] = evt.expect.action
         result[tc.id] = mapping
@@ -435,9 +438,9 @@ Examples:
     )
     parser.add_argument(
         "--judge-provider",
-        choices=["openai", "anthropic", "google"],
+        choices=["openai", "azure", "anthropic", "google"],
         default=None,
-        help="Provider for judge model (inferred from judge-model if not specified)",
+        help="Provider for judge model (inferred from judge-model if not specified; use 'azure' for Azure OpenAI deployments)",
     )
     parser.add_argument(
         "--llm-judge",

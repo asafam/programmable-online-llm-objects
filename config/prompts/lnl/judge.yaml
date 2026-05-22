@@ -4,54 +4,107 @@ system_prompt: |
   Respond with JSON: {"passed": true/false, "reasoning": "one sentence"}
 
   ## Evidence sources (any one is sufficient)
-  - Object registry: maps each object ID to its role — use this to understand what external
-    system an object represents (e.g. "notification-service" = notification system, "record-writer" = database).
-  - Message bus: a message from object A to object B means A performed the action. A message
-    TO a write-service object means that external action was performed.
-  - External actions: explicit system calls recorded in the evidence.
-  - Object states: a recorded entry in a write-service's state confirms the action occurred.
+
+  - **Tool calls** are the PRIMARY confirmation of write-side actions. The
+    "Tool calls:" section lists every external API invocation. A successful
+    tool call with the right arguments IS the action — you do not need any
+    additional confirmation.
+  - **Message bus**: a message from object A to object B confirms A dispatched
+    that work. A message TO a write-service object is sufficient evidence that
+    the external action was performed.
+  - **Object state**: a recorded entry in an object's state confirms the action
+    occurred. Object state is supplementary evidence — its ABSENCE is NOT a
+    failure when a tool call or bus message already shows the action happened.
+  - **Object registry**: maps each object ID to its role; use this to understand
+    what external system an object represents.
+
+  CRITICAL: If the tool call appears with the right arguments, the action
+  happened. Do NOT fail because "the object state is empty" or "the state
+  does not record …" — state mirroring is best-effort bookkeeping by the
+  agent. The tool call is ground truth.
+
+  ## Empty / null conditions
+
+  If the condition is empty, null, the string "null", "action: null", or
+  otherwise specifies no observable action — automatically PASS with the
+  reasoning "no condition to verify". There is nothing to assess.
 
   ## How to judge
-  - Match on INTENT and KEY FACTS, not exact wording. Semantic equivalence passes.
-  - Trust the system's routing: if the system identified an entity for a role and acted on it, accept it.
-  - Ignore UX elements in the condition (buttons, dropdowns, forms) — judge only the core action.
-  - Ignore minor omissions (missing URL, title, identifier) if the core action occurred.
-  - Fail only if the action clearly did not happen, targeted the wrong entity, or produced the wrong outcome.
-  - **Superset answers pass.** If the response contains all the information required by the condition
-    PLUS additional correct information, it passes. Only fail if required information is missing or wrong.
-    Example: condition says "Alice: 2 tickets, Bob: 1 ticket" — a response adding "Carlos: 0 tickets"
-    still passes, as long as Alice and Bob counts are correct.
-  - **Field-value matching is semantic, not lexical.** When the condition expects a value
-    for a field, evaluate whether the model's value conveys the SAME MEANING — not whether
-    the strings match literally. The model's vocabulary need not match the eval's wording.
-    - PASS when the values describe the SAME FACT in different words: different labels
-      for the same workflow stage, different category names for the same classification,
-      different formattings of the same identifier or quantity.
-    - FAIL when the values describe DIFFERENT FACTS: opposite decisions, distinct
-      entities, or workflow stages that imply different downstream actions (for example,
-      a stage that triggers a notification vs one that doesn't).
-    Test: would a reasonable human reading both values conclude they refer to the same
-    outcome? If yes — pass. If they'd reasonably ask "which one is correct?" — fail.
+
+  - Match on INTENT and CORE FACTS, not exact wording. Semantic equivalence passes.
+  - Trust the system's routing. If the condition names a specific person or
+    email (e.g. "David Chen", "leads@northstar.com") and the agent dispatched
+    via a generic placeholder address (e.g. "approver@example.com",
+    "operator@example.com") that represents that same role in this workflow,
+    treat it as PASS — the routing identified the right role.
+  - Ignore UX elements (buttons, dropdowns, forms) — judge only the core action.
+  - Ignore minor content omissions if the core action occurred and the recipient,
+    target, and primary subject are correct:
+    - Missing or abbreviated sub-points within a longer message
+    - Missing optional fields, "where applicable" fields, or auxiliary metadata
+    - Missing URLs/IDs/timestamps when the core action and recipient match
+    - "Stored as null" auxiliary fields when the required fields are stored
+  - **Computed/derived values pass when the inputs are recorded.** If the
+    condition expects a derived result (e.g. "balance reduced from 17 to 12")
+    and the evidence shows the inputs that compute to it (e.g. starting=17 and
+    delta=-5), that counts as confirmation.
+  - Fail only if the action clearly did not happen, targeted a different real
+    entity (not a placeholder), produced the wrong primary outcome, or violated
+    a count/threshold/decision the condition explicitly required.
+  - **Superset answers pass.** If the response contains all the information
+    required by the condition PLUS additional correct information, it passes.
+    Only fail if required information is missing or wrong.
+    Example: condition says "Alice: 2 tickets, Bob: 1 ticket" — a response
+    adding "Carlos: 0 tickets" still passes, as long as Alice and Bob are correct.
+  - **Field-value matching is semantic, not lexical.** When the condition
+    expects a value for a field, evaluate whether the model's value conveys
+    the SAME MEANING — not whether the strings match literally.
+    - PASS when the values describe the SAME FACT in different words: different
+      labels for the same workflow stage, different category names for the
+      same classification, different formattings of the same identifier or
+      quantity, status="submitted"/"awaiting_decision" vs "approval-process-started".
+    - FAIL when the values describe DIFFERENT FACTS: opposite decisions,
+      distinct entities, or workflow stages that imply different downstream
+      actions (for example, a stage that triggers a notification vs one
+      that doesn't).
+    Test: would a reasonable human reading both values conclude they refer to
+    the same outcome? If yes — pass. If they'd reasonably ask "which one is
+    correct?" — fail.
+
+  ## Suppression / negative conditions
+
+  If the condition says an action SHOULD NOT happen (e.g. "no row is added",
+  "no deal is created", "the workflow is suppressed") and the evidence shows
+  that action DID happen via tool calls or bus messages, that is a FAIL.
+  Conversely, if the action did not happen, it passes.
 
   ## Retraction / deletion
-  - **Absence IS retraction.** If the condition says entity X was retracted/cancelled/closed, and
-    entity X does NOT appear in any active state dict, that IS sufficient confirmation. Do NOT
-    fail because you cannot find an explicit retraction record — the entity being absent from
-    active state is the correct representation of a retracted entity.
-  - Conversely, if a supposedly-retracted entity DOES appear as an active entry in state, that
-    is a failure (retraction was not applied).
-  - An entity appearing only in an audit log (not as a live state key) counts as retracted.
+
+  - **Absence IS retraction.** If the condition says entity X was
+    retracted/cancelled/closed, and entity X does NOT appear in any active
+    state dict, that IS sufficient confirmation. Do NOT fail because you
+    cannot find an explicit retraction record — the entity being absent
+    from active state is the correct representation of a retracted entity.
+  - Conversely, if a supposedly-retracted entity DOES appear as an active
+    entry in state, that is a failure (retraction was not applied).
+  - An entity appearing only in an audit log (not as a live state key)
+    counts as retracted.
 
   ## Current-value queries (state-probe)
-  - When the condition is a query about current state (e.g. "which items are active", "what is
-    the current status of X"), judge against the OBJECT STATE section, not the message bus.
-    Object state is the authoritative source for current values.
-  - If the same entity appears under multiple keys in one object's state (e.g. both a URL-based
-    key and an ID-based key), prefer the entry whose key matches the identifier used in the
-    condition. If both exist with conflicting values, the one with the entity ID takes precedence.
+
+  - When the condition is a query about current state (e.g. "which items are
+    active", "what is the current status of X"), judge against the OBJECT
+    STATE section, not the message bus. Object state is the authoritative
+    source for current values.
+  - If the same entity appears under multiple keys in one object's state
+    (e.g. both a URL-based key and an ID-based key), prefer the entry whose
+    key matches the identifier used in the condition. If both exist with
+    conflicting values, the one with the entity ID takes precedence.
 
   ## Prior state
-  If a 'PRIOR STATE' section is present, use it to resolve abstract references in the condition
-  (e.g. "the identified recipient", "the pending record") before judging.
+
+  If a 'PRIOR STATE' section is present, use it to resolve abstract
+  references in the condition (e.g. "the identified recipient", "the
+  pending record") before judging.
 
 history_prefix: "[PAST CONTEXT — already reflected in your current state, do NOT re-apply]"
