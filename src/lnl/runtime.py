@@ -146,6 +146,15 @@ class SystemConfig:
     # the planner prompt file (planner_sequential.yaml vs planner_dag.yaml) and toggles
     # ready-set annotation in the executor's active_plan rendering.
     planner_mode: str = "sequential"
+    # Replan checkpoints: planner re-entry when a kind=replan step is reached.
+    # When enabled, the planner may emit `replan` steps that suspend execution
+    # until prior deps land, then re-invoke the planner with completed-step
+    # results so it can emit continuation steps. Budget-capped to prevent
+    # runaway recursion. Orthogonal to planner_mode — works for both sequential
+    # and dag.
+    enable_replan_checkpoints: bool = False
+    # Budget per trace_id; mirrors evaluator_max_cycles_per_trace.
+    replan_max_per_trace: int = 3
 
     @staticmethod
     def load(path: Path | None = None) -> "SystemConfig":
@@ -180,6 +189,8 @@ class SystemConfig:
             max_active_plans_per_object=int(data.get("max_active_plans_per_object", 32)),
             memory_backend=str(data.get("memory_backend", "nested")),
             planner_mode=planner_mode,
+            enable_replan_checkpoints=bool(data.get("enable_replan_checkpoints", False)),
+            replan_max_per_trace=int(data.get("replan_max_per_trace", 3)),
         )
 
 
@@ -465,6 +476,8 @@ class Runtime:
             evaluator_brain=self._evaluator_brain,
             planner_prompt_file=self._planner_prompt_file,
             planner_mode=self._planner_mode,
+            enable_replan_checkpoints=self._heartbeat.enable_replan_checkpoints,
+            replan_max_per_trace=self._heartbeat.replan_max_per_trace,
             log_synthetic_message=self._bus.log_synthetic,
             stale_plan_seconds=self._heartbeat.stale_plan_seconds,
             max_active_plans=self._heartbeat.max_active_plans_per_object,

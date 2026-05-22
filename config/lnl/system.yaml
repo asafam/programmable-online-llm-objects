@@ -31,3 +31,14 @@ knowledge_gaps:
 #                that don't consume each other's results.
 # Only consulted when enable_planner is true.
 planner_mode: sequential
+
+# Replan checkpoints (default off). When true, the planner may emit
+# `kind: replan` steps that hand control back to the planner mid-cascade
+# once their `depends_on` step results land. The runtime invokes the
+# planner again with the original event + completed step results, and the
+# planner emits continuation steps (appended via add_steps). Use for
+# workflows where a downstream decision genuinely depends on a value the
+# planner couldn't see at first-plan time (stock level, authorization,
+# returned id). Budget-capped per trace to prevent runaway recursion.
+enable_replan_checkpoints: false
+replan_max_per_trace: 3

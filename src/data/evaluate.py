@@ -69,7 +69,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v26): modifications now dispatch via rt.send_admin (ADMIN path) — domain-path modifications no longer change definitions
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v27): add --enable-replan-checkpoints + --replan-max for planner re-entry on conditional branches
 
 from src.data.schema import (
     EvalSummary,
@@ -402,6 +402,8 @@ def _execute_test_case_inner(
     log_planner_output: bool = False,
     tool_dispatch: str = "sync",
     planner_mode: str = "sequential",
+    enable_replan_checkpoints: bool = False,
+    replan_max_per_trace: int = 3,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single Sample and return event + modification results."""
     from src.lnl.gateway import EventGateway
@@ -472,6 +474,8 @@ def _execute_test_case_inner(
         memory_backend=memory_backend,
         tool_dispatch=tool_dispatch,
         planner_mode=planner_mode,
+        enable_replan_checkpoints=enable_replan_checkpoints,
+        replan_max_per_trace=replan_max_per_trace,
     )
     rt = Runtime(
         brain,
@@ -1146,6 +1150,8 @@ def execute_test_case(
     log_planner_output: bool = False,
     tool_dispatch: str = "sync",
     planner_mode: str = "sequential",
+    enable_replan_checkpoints: bool = False,
+    replan_max_per_trace: int = 3,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single Sample with a per-event timeout (seconds).
 
@@ -1196,6 +1202,8 @@ def execute_test_case(
         log_planner_output=log_planner_output,
         tool_dispatch=tool_dispatch,
         planner_mode=planner_mode,
+        enable_replan_checkpoints=enable_replan_checkpoints,
+        replan_max_per_trace=replan_max_per_trace,
     )
 
 
@@ -1507,9 +1515,14 @@ def run(args: argparse.Namespace) -> Path:
     if planner_mode == "dag" and planner_prompt_display == "planner_sequential.yaml":
         # Mode auto-selects planner_dag.yaml unless --planner-prompt was explicit.
         planner_prompt_display = "planner_dag.yaml"
+    replan_enabled = getattr(args, "enable_replan_checkpoints", False)
+    replan_label = (
+        f"on (max={getattr(args, 'replan_max', 3)}/trace)" if replan_enabled else "off"
+    )
     extra_info = {
         "Planner": planner_label,
         "Planner mode": planner_mode,
+        "Replan checkpoints": replan_label,
         "Evaluator": evaluator_label,
         "Judge": judge_label,
         "Object prompt": object_prompt,
@@ -1765,7 +1778,7 @@ def run(args: argparse.Namespace) -> Path:
                 max_history=getattr(args, "max_history", None),
                 tracked_harness=tracked_harness,
                 enable_code_tool=getattr(args, "code_tool", True),
-                enable_sink_completion_shim=getattr(args, "sink_shim", True),
+                enable_sink_completion_shim=getattr(args, "sink_shim", False),
                 enable_planner=getattr(args, "enable_planner", True),
                 enable_evaluator=getattr(args, "enable_evaluator", True),
                 planner_brain=planner_brain,
@@ -1775,6 +1788,8 @@ def run(args: argparse.Namespace) -> Path:
                 log_planner_output=(getattr(args, "verbose", None) == "DEBUG"),
                 tool_dispatch=getattr(args, "tool_dispatch", "sync"),
                 planner_mode=getattr(args, "planner_mode", "sequential"),
+                enable_replan_checkpoints=getattr(args, "enable_replan_checkpoints", False),
+                replan_max_per_trace=getattr(args, "replan_max", 3),
             )
         finally:
             # Always store snapshot and signal waiting workers — even on failure —
@@ -2400,16 +2415,15 @@ Examples:
         "--sink-shim",
         action=argparse.BooleanOptionalAction,
         dest="sink_shim",
-        default=True,
+        default=False,
         help=(
             "Sink Completion Shim: for objects whose role identifies them as "
             "write/notify sinks (Write Service, Storage, Notifier, Publisher), "
             "if the LLM finishes without producing an artifact (URL/ID) in its "
             "reply AND without a completion marker (status: sent/stored/...) "
             "in state, the runtime synthesizes a plausible artifact and "
-            "injects it into state + augments the reply. Default: ENABLED — "
-            "error analysis confirmed cross-object self-correction can't "
-            "recover sink-incompletion failures. Use --no-sink-shim to disable."
+            "injects it into state + augments the reply. Default: DISABLED. "
+            "Use --sink-shim to enable."
         ),
     )
     parser.add_argument(
@@ -2503,6 +2517,32 @@ Examples:
             "depends_on or all deps done) fan out in a single executor turn. "
             "Selects planner_dag.yaml automatically when set to 'dag' unless "
             "--planner-prompt is also passed explicitly."
+        ),
+    )
+    parser.add_argument(
+        "--enable-replan-checkpoints",
+        action=argparse.BooleanOptionalAction,
+        dest="enable_replan_checkpoints",
+        default=False,
+        help=(
+            "Replan checkpoints: planner re-entry when a `kind=replan` step is "
+            "reached. The planner may insert replan steps that suspend "
+            "execution until their `depends_on` results land, then re-invoke "
+            "the planner with the prior plan + completed step results so it "
+            "can emit continuation steps. Use for conditional branches the "
+            "planner cannot decide up-front (stock level, authorization, "
+            "returned id). Default: DISABLED. Use --no-enable-replan-checkpoints "
+            "to be explicit. Budget per trace controlled by --replan-max."
+        ),
+    )
+    parser.add_argument(
+        "--replan-max",
+        type=int,
+        default=3,
+        help=(
+            "Max number of replan re-entries per trace_id (default: 3). "
+            "Mirrors --evaluator-max-cycles. Only consulted when "
+            "--enable-replan-checkpoints is set."
         ),
     )
     parser.add_argument(

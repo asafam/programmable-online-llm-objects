@@ -334,10 +334,10 @@ class PlanStep:
     updates so the LLM can rely on it. Step descriptions and the
     evaluator's grading both reference steps by id.
     """
-    kind: str                            # "ask" | "tell" | "tool" | "reason" | "wait"
+    kind: str                            # "ask" | "tell" | "tool" | "reason" | "wait" | "replan"
     description: str
     id: str = ""                         # stable id, e.g. "s1", "s2". Auto-filled by renderer if empty.
-    target: Optional[str] = None         # peer_id for ask/tell; tool name for tool; None for reason/wait
+    target: Optional[str] = None         # peer_id for ask/tell; tool name for tool; None for reason/wait/replan
     depends_on: list[str] = field(default_factory=list)  # ids of steps whose results this step references
     status: str = "planned"              # "planned" | "dispatched" | "done" | "failed" | "skipped"
     result_summary: Optional[str] = None
@@ -346,8 +346,9 @@ class PlanStep:
     # - structured dict/list/scalar for tool returns
     # - short note for reason steps (LLM-emitted at closure)
     # - NL content of the absorbing event (wait)
+    # - count of appended continuation steps for replan
     result: Optional[Any] = None
-    result_kind: Optional[str] = None    # "nl" | "tool" | "reason" | "event"
+    result_kind: Optional[str] = None    # "nl" | "tool" | "reason" | "event" | "replan"
     completed_at: Optional[datetime.datetime] = None
     # ── Wait-step fields (kind == "wait") ─────────────────────────────────────
     # The planner emits these so the runtime can correlate a later-arriving
@@ -356,6 +357,11 @@ class PlanStep:
     wait_source: Optional[str] = None           # expected event source/sender (soft hint)
     wait_timeout_seconds: Optional[float] = None  # overrides the plan-level stale threshold
     matched_event_id: Optional[str] = None      # runtime-stamped when a wait closes
+    # ── Replan-step fields (kind == "replan") ─────────────────────────────────
+    # The planner emits a replan step to defer a decision until prior deps land.
+    # When deps complete, the runtime re-invokes the planner with completed step
+    # results so it can emit continuation steps (appended via add_steps).
+    replan_question: Optional[str] = None       # NL description of the deferred decision
 
 
 @dataclass

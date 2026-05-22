@@ -433,18 +433,99 @@ def _render_active_plan(plan: Optional[Plan], mode: str = "sequential") -> str:
     return "\n".join(lines)
 
 
+def _render_prior_plan_context(prior_plan: "Optional[Plan]", replan_question: Optional[str]) -> str:  # type: ignore[name-defined]
+    """Build the 'Prior Plan Execution' block injected into replan-mode planner prompts.
+
+    Empty string when prior_plan is None (first-time plan call). When set, lists
+    each step's id/kind/target/status and the captured result (if any) so the
+    planner can decide the continuation. `replan_question` is the deferred
+    decision the planner now has full data to resolve.
+    """
+    if prior_plan is None:
+        return ""
+    lines = ["", "## Prior Plan Execution", f"goal: {prior_plan.goal or '(none)'}"]
+    if replan_question:
+        lines.append(f"")
+        lines.append(f"## Decision Required")
+        lines.append(f"{replan_question}")
+    lines.append("")
+    lines.append("Completed steps so far (use these results to decide continuation):")
+    any_done = False
+    for i, s in enumerate(prior_plan.steps):
+        sid = s.id or f"s{i+1}"
+        if s.status not in ("done", "skipped"):
+            continue
+        any_done = True
+        target = f" -> {s.target}" if s.target else ""
+        line = f"  {sid}: {s.kind}{target}  status={s.status}"
+        lines.append(line)
+        if s.result is not None:
+            kind_tag = f" ({s.result_kind})" if s.result_kind else ""
+            if isinstance(s.result, str):
+                rendered = s.result if len(s.result) <= 240 else s.result[:237] + "..."
+            else:
+                try:
+                    rendered = json.dumps(s.result, ensure_ascii=False, default=str)
+                    if len(rendered) > 480:
+                        rendered = rendered[:477] + "..."
+                except (TypeError, ValueError):
+                    rendered = repr(s.result)[:480]
+            lines.append(f"      result{kind_tag}: {rendered}")
+        elif s.result_summary:
+            lines.append(f"      result: {s.result_summary}")
+    if not any_done:
+        lines.append("  (no completed steps yet)")
+    lines.append("")
+    lines.append(
+        "Emit ONLY the continuation steps that should follow. Do NOT repeat the "
+        "completed steps above — they will be preserved automatically. Your output "
+        "is appended to the existing plan via add_steps."
+    )
+    return "\n".join(lines)
+
+
+_REPLAN_MODE_NOTE = (
+    "\n## Replan checkpoints (available)\n"
+    "You may emit `kind: replan` steps to defer a decision that genuinely "
+    "depends on the **value** returned by an earlier step (a quantity, a "
+    "status, an authorization flag, a returned id). Insert a `replan` step "
+    "with `depends_on=[<source step id>]` and a one-line `replan_question` "
+    "describing the deferred decision. When the deps land, the runtime "
+    "re-invokes you with the captured results so you can emit the "
+    "continuation steps (which will be appended after the replan).\n"
+    "Use sparingly — most conditions can be expressed inside step "
+    "descriptions and skipped by the executor. Reserve `replan` for "
+    "genuinely undecidable branches at plan time (e.g., 'send reorder OR "
+    "skip, based on s1's stock level vs threshold').\n"
+    "Example replan step: `{{\"id\": \"s2\", \"kind\": \"replan\", "
+    "\"target\": \"self\", \"depends_on\": [\"s1\"], \"description\": "
+    "\"Defer decision until s1's quantity is known\", "
+    "\"replan_question\": \"Should we send a reorder request? Decide "
+    "based on s1.result.quantity vs reorder_threshold.\", "
+    "\"reasoning\": \"...\"}}`."
+)
+
+
 def build_planner_prompt(
     definition: ObjectDefinition,
     current_state,  # str (from LLM) or dict (from mock scripts)
     message,  # Message
     prompt_file: str = "planner_sequential.yaml",
     tools: str = "",
+    prior_plan: "Optional[Plan]" = None,  # type: ignore[name-defined]
+    replan_question: Optional[str] = None,
+    enable_replan_checkpoints: bool = False,
 ) -> str:
     """Build the planner system prompt from `planner_sequential.yaml` (the sequential default).
 
     The planner is a separate LLM call (Pre-Act Appendix D-inspired) that
     produces a multi-step plan BEFORE the executor starts dispatching. The
     plan persists in the object's active_plan and drives continuations.
+
+    When `prior_plan` is set, this is a replan invocation: the prompt is
+    enriched with the prior plan's completed-step results plus the deferred
+    `replan_question`. The planner is expected to emit only the continuation
+    steps (which the runtime appends via `add_steps`).
     """
     config = _load_prompt_config(prompt_file)
     template = config["system_prompt"]
@@ -457,6 +538,9 @@ def build_planner_prompt(
     else:
         state_str = "(empty)"
 
+    prior_plan_context = _render_prior_plan_context(prior_plan, replan_question)
+    replan_mode_note = _REPLAN_MODE_NOTE if enable_replan_checkpoints else ""
+
     return template.format(
         object_id=definition.object_id,
         role=definition.role,
@@ -467,6 +551,8 @@ def build_planner_prompt(
         sender=getattr(message, "sender", "(unknown)"),
         message_type=getattr(message, "type", "(unknown)").value if hasattr(getattr(message, "type", None), "value") else str(getattr(message, "type", "")),
         message_content=str(getattr(message, "content", "")),
+        prior_plan_context=prior_plan_context,
+        replan_mode_note=replan_mode_note,
     )
 
 
@@ -705,7 +791,7 @@ def build_admin_prompt(
     )
 
 
-VALID_STEP_KINDS = ("ask", "tell", "tool", "reason", "wait")
+VALID_STEP_KINDS = ("ask", "tell", "tool", "reason", "wait", "replan")
 
 
 def _normalize_step_kind(raw: str) -> str:
@@ -737,7 +823,7 @@ def plan_dict_to_plan(plan_dict: dict, trace_id: Optional[str] = None) -> "Plan"
         if kind not in VALID_STEP_KINDS:
             # `final` marker step — drop. Auto-close handles plan completion.
             continue
-        # ask/tell target a peer; tool targets a tool name; reason/wait have no peer target
+        # ask/tell target a peer; tool targets a tool name; reason/wait/replan have no peer target
         target = s.get("target") if kind in ("ask", "tell", "tool") else None
         # Step id: prefer planner-supplied; fall back to auto-assigned 's{n}'.
         # Deduplicate if the planner emits collisions.
@@ -763,6 +849,10 @@ def plan_dict_to_plan(plan_dict: dict, trace_id: Optional[str] = None) -> "Plan"
             wt = s.get("wait_timeout_seconds")
             if isinstance(wt, (int, float)) and wt > 0:
                 wait_timeout_seconds = float(wt)
+        replan_question = None
+        if kind == "replan":
+            rq = s.get("replan_question")
+            replan_question = rq.strip() if isinstance(rq, str) and rq.strip() else None
         steps_out.append(PlanStep(
             id=step_id,
             kind=kind,
@@ -774,6 +864,7 @@ def plan_dict_to_plan(plan_dict: dict, trace_id: Optional[str] = None) -> "Plan"
             wait_predicate=wait_predicate,
             wait_source=wait_source,
             wait_timeout_seconds=wait_timeout_seconds,
+            replan_question=replan_question,
         ))
     return Plan(goal=goal, steps=steps_out, status="active", trace_id=trace_id)
 
@@ -953,8 +1044,8 @@ PLANNER_RESPONSE_SCHEMA: dict[str, Any] = {
                         ),
                     },
                     "step_number": {"type": "integer", "minimum": 1},
-                    "kind": {"type": "string", "enum": ["tell", "ask", "tool", "reason", "wait", "effect", "final"]},
-                    "target": {"type": "string", "description": "Declared peer id (for ask/tell), tool name (for tool), 'self' (for reason/wait), or 'final'."},
+                    "kind": {"type": "string", "enum": ["tell", "ask", "tool", "reason", "wait", "replan", "effect", "final"]},
+                    "target": {"type": "string", "description": "Declared peer id (for ask/tell), tool name (for tool), 'self' (for reason/wait/replan), or 'final'."},
                     "description": {"type": "string"},
                     "depends_on": {
                         "type": "array",
@@ -990,6 +1081,15 @@ PLANNER_RESPONSE_SCHEMA: dict[str, Any] = {
                             "Optional when kind=='wait'. Maximum seconds to wait before the "
                             "step fails and the plan closes. Defaults to a long window "
                             "(e.g. 24h) when omitted."
+                        ),
+                    },
+                    "replan_question": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "Required when kind=='replan'. One short sentence describing the "
+                            "decision the planner has deferred and will resolve on re-entry "
+                            "once `depends_on` step results land (e.g. 'decide whether to "
+                            "send a reorder based on s1.result.quantity vs reorder_threshold')."
                         ),
                     },
                 },

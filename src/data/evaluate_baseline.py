@@ -298,7 +298,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v30): companion bump for evaluate.py v26 — modifications dispatch via send_admin
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v31): companion bump for evaluate.py v27 — replan checkpoints (no baseline change)
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 

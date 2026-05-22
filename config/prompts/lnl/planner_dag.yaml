@@ -28,6 +28,8 @@ system_prompt: |
   Type: {message_type}
   Content:
   {message_content}
+  {prior_plan_context}
+  {replan_mode_note}
 
   # Your task
 

@@ -937,6 +937,7 @@ class LLMObject:
                         self._definition, self._state, message,
                         prompt_file=self._planner_prompt_file,
                         tools=self._tool_registry.describe() if self._tool_registry else "",
+                        enable_replan_checkpoints=self._enable_replan_checkpoints,
                     )
                     plan_dict, planner_metrics = self._planner_brain.plan_call(
                         planner_prompt, object_id=self.object_id,
@@ -1180,6 +1181,12 @@ class LLMObject:
             final_status = finish.status
             final_error = finish.error
 
+            # Replan dispatch (mid-turn): if this finish marked any step done
+            # and a `kind=replan` step's deps are now satisfied, invoke the
+            # planner inline to append continuation steps. Done BEFORE the
+            # evaluator so it sees the full extended plan.
+            self._dispatch_pending_replans(trace_id, message=message)
+
             # Self-evaluation. run_evaluator returns (None, None) when the
             # evaluator should be skipped (disabled, no plan, no message).
             if not self._enable_evaluator or eval_cycle >= self._evaluator_max_cycles:
@@ -1287,6 +1294,12 @@ class LLMObject:
         # entry captures the sender + content that triggered this plan —
         # the richest source of identifying tokens the future event will reference.
         self._dispatch_pending_waits(trace_id, originating_message=message)
+        # Replan dispatch: if the executor's turns transitioned a step that
+        # gated a `kind=replan` step (deps all terminal now), invoke the
+        # planner inline to emit continuation steps. The new steps land via
+        # add_steps and will execute on subsequent inbound messages on this
+        # trace. Budget-capped per trace.
+        self._dispatch_pending_replans(trace_id, message=message)
 
         processing_completed_at = datetime.datetime.now(datetime.timezone.utc)
         return ProcessingResult(
@@ -2327,6 +2340,210 @@ class LLMObject:
                 summary = (s.result_summary or "")[:320]
             out.append({"step_id": sid, "kind": kind, "summary": summary})
         return out
+
+    def _dispatch_pending_replans(
+        self,
+        trace_id: Optional[str],
+        message: "Optional[Message]" = None,
+    ) -> int:
+        """If any `kind=replan` step on the active plan is ready (status=planned
+        AND every dep is in a terminal status), invoke the planner brain inline
+        with the prior plan and the step's `replan_question`. Append the
+        continuation steps via `add_steps` and mark the replan step `done`.
+
+        Budget-capped per trace via `replan_max_per_trace`. When the budget is
+        exhausted, ready replan steps are marked `failed` with a reason in
+        `result_summary` so `_auto_close_plan_if_complete` can retire the plan.
+
+        Returns the number of replan steps that fired (may be 0). Callers can
+        use the count to decide whether to re-render the executor's prompt /
+        run another React turn — typically the caller treats >0 as "plan
+        changed, recompute readiness."
+        """
+        if not self._enable_replan_checkpoints or trace_id is None:
+            return 0
+        fired = 0
+        while True:
+            # Find the next ready replan step under the lock; release before
+            # invoking the planner (which can be slow) to avoid blocking other
+            # plan mutations.
+            target_idx: Optional[int] = None
+            target_step: Optional[PlanStep] = None
+            prior_plan_snapshot: Optional[Plan] = None
+            with self._plans_lock:
+                plan = self._active_plans.get(trace_id)
+                if plan is None or not plan.steps:
+                    return fired
+                done_ids = {
+                    (s.id or f"s{i+1}")
+                    for i, s in enumerate(plan.steps)
+                    if s.status in STEP_TERMINAL_STATUSES
+                }
+                for i, s in enumerate(plan.steps):
+                    if s.kind != "replan" or s.status != "planned":
+                        continue
+                    if all(d in done_ids for d in (s.depends_on or [])):
+                        target_idx = i
+                        target_step = s
+                        break
+                if target_idx is None:
+                    return fired
+                # Budget check
+                with self._replan_cycles_lock:
+                    used = self._replan_cycles_per_trace.get(trace_id, 0)
+                if used >= self._replan_max_per_trace:
+                    target_step.status = "failed"
+                    target_step.result_summary = (
+                        f"replan budget exhausted ({self._replan_max_per_trace} reached)"
+                    )
+                    target_step.completed_at = datetime.datetime.now(datetime.timezone.utc)
+                    plan.last_progress_at = target_step.completed_at
+                    self._log_synthetic_plan_event(
+                        plan, target_idx, "replan_budget_exhausted",
+                    )
+                    fired += 1
+                    continue
+                # Mark dispatched, snapshot the plan for the planner prompt.
+                target_step.status = "dispatched"
+                plan.last_progress_at = datetime.datetime.now(datetime.timezone.utc)
+                # Deepcopy snapshot so we can build the prompt outside the lock
+                # without races against the live plan. We only need the fields
+                # the planner prompt renders.
+                prior_plan_snapshot = Plan(
+                    goal=plan.goal,
+                    status=plan.status,
+                    trace_id=plan.trace_id,
+                    steps=[
+                        PlanStep(
+                            id=s.id, kind=s.kind, description=s.description,
+                            target=s.target, depends_on=list(s.depends_on or []),
+                            status=s.status,
+                            result=s.result, result_kind=s.result_kind,
+                            result_summary=s.result_summary,
+                            replan_question=s.replan_question,
+                        )
+                        for s in plan.steps
+                    ],
+                )
+                replan_question = target_step.replan_question or target_step.description
+            # ── Invoke the planner outside the lock ────────────────────────
+            from .brain import build_planner_prompt, plan_dict_to_plan
+            tools_desc = self._tool_registry.describe() if self._tool_registry else ""
+            planner_prompt = build_planner_prompt(
+                self._definition,
+                self._working_state_for(trace_id),
+                message if message is not None else self._last_message_for(trace_id),
+                prompt_file=self._planner_prompt_file,
+                tools=tools_desc,
+                prior_plan=prior_plan_snapshot,
+                replan_question=replan_question,
+                enable_replan_checkpoints=True,
+            )
+            try:
+                plan_dict, planner_metrics = self._planner_brain.plan_call(
+                    planner_prompt, object_id=self.object_id,
+                )
+            except Exception as exc:
+                # Planner failure → mark the replan step failed, keep going.
+                with self._plans_lock:
+                    plan = self._active_plans.get(trace_id)
+                    if plan is not None and 0 <= target_idx < len(plan.steps):
+                        step = plan.steps[target_idx]
+                        step.status = "failed"
+                        step.result_summary = f"replan call failed: {exc}"
+                        step.completed_at = datetime.datetime.now(datetime.timezone.utc)
+                        plan.last_progress_at = step.completed_at
+                fired += 1
+                continue
+            # Parse the continuation. plan_dict_to_plan returns a Plan; we
+            # only want the appended steps. The planner is instructed to emit
+            # ONLY the continuation, so we treat every parsed step as new.
+            continuation = plan_dict_to_plan(plan_dict, trace_id=trace_id)
+            # ── Apply the continuation under the lock ──────────────────────
+            with self._plans_lock:
+                plan = self._active_plans.get(trace_id)
+                if plan is None:
+                    fired += 1
+                    continue
+                base_offset = len(plan.steps)
+                # Re-id continuation steps so they don't collide with existing
+                # ids. Preserve depends_on by remapping any that reference
+                # newly-assigned ids; deps onto pre-existing ids stay intact.
+                renamed: dict[str, str] = {}
+                for j, ns in enumerate(continuation.steps):
+                    old_id = ns.id or f"s{j+1}"
+                    new_id = f"s{base_offset + j + 1}"
+                    if old_id != new_id:
+                        renamed[old_id] = new_id
+                    ns.id = new_id
+                for ns in continuation.steps:
+                    ns.depends_on = [renamed.get(d, d) for d in (ns.depends_on or [])]
+                    plan.steps.append(ns)
+                # Mark the replan step done with a summary of what was added.
+                step = plan.steps[target_idx]
+                step.status = "done"
+                step.result_kind = "replan"
+                step.result_summary = f"added {len(continuation.steps)} continuation steps"
+                step.completed_at = datetime.datetime.now(datetime.timezone.utc)
+                plan.last_progress_at = step.completed_at
+                # If the plan was 'waiting' because of waits, leave that
+                # status alone. Otherwise restore active.
+                if plan.status == "waiting":
+                    has_active_wait = any(
+                        s.kind == "wait" and s.status == "dispatched" for s in plan.steps
+                    )
+                    if not has_active_wait:
+                        plan.status = "active"
+                else:
+                    plan.status = "active"
+            # Track planner metrics if the brain returned them.
+            if planner_metrics is not None and hasattr(self, "_replan_metrics_per_trace"):
+                self._replan_metrics_per_trace.setdefault(trace_id, []).append(planner_metrics)
+            with self._replan_cycles_lock:
+                self._replan_cycles_per_trace[trace_id] = (
+                    self._replan_cycles_per_trace.get(trace_id, 0) + 1
+                )
+            fired += 1
+            # Loop continues in case another replan is now ready (chained).
+        # (unreachable)
+
+    def _log_synthetic_plan_event(self, plan: Plan, step_idx: int, tag: str) -> None:
+        """Best-effort marker into the bus log for traceability of plan
+        mutations that don't go through normal messaging (replan budget
+        exhaustion, etc.). Silent no-op if no log callback is wired."""
+        if self._log_synthetic_message is None:
+            return
+        try:
+            sid = plan.steps[step_idx].id if 0 <= step_idx < len(plan.steps) else "?"
+            self._log_synthetic_message(Message(
+                sender=f"__{tag}__",
+                recipient=self.object_id,
+                type=MessageType.HEARTBEAT,
+                content=f"plan={plan.trace_id} step={sid} tag={tag}",
+                id=f"synth-{tag}-{plan.trace_id or 'none'}-{sid}",
+                trace_id=plan.trace_id,
+            ))
+        except Exception:
+            pass
+
+    def _last_message_for(self, trace_id: Optional[str]) -> Message:
+        """Best-effort fallback for the originating message of a trace when a
+        caller didn't pass one (used by replan dispatch). Returns the most
+        recent message in history matching the trace_id, or a synthetic
+        placeholder. The planner prompt uses this only for sender / type /
+        content fields, so a placeholder is functional but minimal."""
+        if trace_id is not None:
+            for msg in reversed(self._history):
+                if getattr(msg, "trace_id", None) == trace_id:
+                    return msg
+        return Message(
+            sender="__replan__",
+            recipient=self.object_id,
+            type=MessageType.HEARTBEAT,
+            content="(replan continuation — no originating message available)",
+            id=f"replan-{trace_id or 'none'}",
+            trace_id=trace_id,
+        )
 
     def _correlate_to_pending_wait(self, message: Message) -> Optional[tuple[str, int]]:
         """Try to match an inbound message against any pending wait on this
