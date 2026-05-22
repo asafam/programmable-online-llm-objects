@@ -110,7 +110,7 @@ class GeneratedEventWithExpect(BaseModel):
     recipient: str
     input: str
     when: str
-    role: Optional[Literal["pre_mod", "post_mod", "irrelevant"]] = None
+    role: Optional[Literal["base", "pre_mod", "post_mod", "irrelevant"]] = None
     after_mod_ids: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
     triggered_by: Optional[str] = None
@@ -671,7 +671,7 @@ class EventResult(BaseModel):
     expected: str = ""
     evidence: str = ""      # gather_evidence() output — what the judge saw
     prior_context: str = "" # _format_prior_state() snapshot before this event
-    role: Optional[Literal["pre_mod", "post_mod", "irrelevant"]] = None  # propagated from Event.role
+    role: Optional[Literal["base", "pre_mod", "post_mod", "irrelevant"]] = None  # propagated from Event.role
     input_tokens: int = 0   # entry-agent LLM input tokens (baseline) or LNL agent tokens (lnl eval)
     output_tokens: int = 0  # entry-agent LLM output tokens
     planner_input_tokens: int = 0
