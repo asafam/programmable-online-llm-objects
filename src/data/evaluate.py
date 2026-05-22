@@ -69,7 +69,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v15): companion bump for analyze_results / plot_mod_types defensive event-level infra_error filtering (no behavior change in evaluate.py — already filtered via not e.infra_error)
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v16): companion bump for evaluate_baseline.py v20 — default peer_message_timeout 90→150s
 
 from src.data.schema import (
     EvalSummary,
@@ -1884,7 +1884,7 @@ def run(args: argparse.Namespace) -> Path:
         with tqdm(total=total_runs, initial=n_skipped, unit="run", desc="Evaluating") as pbar:
             _pbar_holder[0] = pbar
             if all_tc_results:  # continuation — show running metrics immediately
-                _pbar_postfix(pbar, all_tc_results, _event_counter[0], _in_tok_counter[0], _out_tok_counter[0])
+                _pbar_postfix(pbar, all_tc_results, _event_counter[0], _in_tok_counter[0], _out_tok_counter[0], agent_model=args.model)
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 for phase_label, phase_runs in run_phases:
                     if not phase_runs:
@@ -1904,7 +1904,7 @@ def run(args: argparse.Namespace) -> Path:
                                 f.write(tc_result.model_dump_json() + "\n")
                                 f.flush()
                                 all_tc_results.append(tc_result)
-                                _pbar_postfix(pbar, all_tc_results, _event_counter[0], _in_tok_counter[0], _out_tok_counter[0])
+                                _pbar_postfix(pbar, all_tc_results, _event_counter[0], _in_tok_counter[0], _out_tok_counter[0], agent_model=args.model)
                                 if run_idx in _done_per_run:
                                     _done_per_run[run_idx] += 1
                                     if _done_per_run[run_idx] == _expected_per_run[run_idx]:
@@ -1967,7 +1967,8 @@ def _running_metrics(results: "list[SampleResult]") -> tuple[Optional[float], Op
     return mean_pr, sample_pr
 
 
-def _pbar_postfix(pbar, results, events_done: int = 0, in_tok: int = 0, out_tok: int = 0) -> None:
+def _pbar_postfix(pbar, results, events_done: int = 0, in_tok: int = 0, out_tok: int = 0,
+                  agent_model: str = None) -> None:
     """Update pbar postfix with running mean + sample pass rates + live counters."""
     mean_pr, sample_pr = _running_metrics(results)
     fields: dict[str, str] = {}
@@ -1975,7 +1976,9 @@ def _pbar_postfix(pbar, results, events_done: int = 0, in_tok: int = 0, out_tok:
         fields["mean"] = f"{mean_pr:.1%}"
     if sample_pr is not None:
         fields["sample"] = f"{sample_pr:.1%}"
-    fields["tok"] = f"{in_tok//1000}k↑{out_tok//1000}k↓"
+    cost = _compute_cost(in_tok, out_tok, agent_model or "")
+    cost_str = f" (${cost:.2f})" if cost is not None else ""
+    fields["tok"] = f"{in_tok//1000}k↑{out_tok//1000}k↓{cost_str}"
     pbar.set_postfix(refresh=False, **fields)
 
 

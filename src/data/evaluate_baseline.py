@@ -296,7 +296,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-22 (v19): companion bump for analyze_results / plot_mod_types defensive event-level infra_error filtering (no behavior change in evaluate_baseline.py — already filtered via and not e.infra_error)
+_VERSION: str = _build_version()  # bumped 2026-05-22 (v20): increase default peer_message_timeout 90→150s so 3-hop A2A chains complete before entry-agent times out
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
@@ -1356,7 +1356,7 @@ async def _execute_tc_async(
     tracked_harness=None,
     thinking: Optional[str] = None,
     sequential: bool = False,
-    peer_message_timeout: float = 90.0,
+    peer_message_timeout: float = 150.0,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Async core: open persistent sessions for ALL agents simultaneously, then send messages.
 
@@ -1972,7 +1972,7 @@ def _execute_test_case_inner(
     tracked_harness=None,
     thinking: Optional[str] = None,
     sequential: bool = False,
-    peer_message_timeout: float = 90.0,
+    peer_message_timeout: float = 150.0,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Sync wrapper: delegate to _execute_tc_async with persistent multi-agent sessions."""
     gateway_url = next(iter(agents.values()))._gateway_url if agents else None
@@ -2008,7 +2008,7 @@ def execute_test_case(
     tracked_harness=None,
     thinking: Optional[str] = None,
     sequential: bool = False,
-    peer_message_timeout: float = 90.0,
+    peer_message_timeout: float = 150.0,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single Sample with an optional wall-clock timeout."""
     if timeout_s is None:
@@ -2151,7 +2151,7 @@ def _running_metrics(results: "list[SampleResult]") -> tuple[Optional[float], Op
     return mean_pr, sample_pr
 
 
-def _pbar_postfix(pbar, results) -> None:
+def _pbar_postfix(pbar, results, agent_model: str = None) -> None:
     """Update pbar postfix with running mean + sample pass rates + token counters."""
     if pbar is None:
         return
@@ -2163,7 +2163,9 @@ def _pbar_postfix(pbar, results) -> None:
         fields["mean"] = f"{mean_pr:.1%}"
     if sample_pr is not None:
         fields["sample"] = f"{sample_pr:.1%}"
-    fields["tok"] = f"{in_tok//1000}k↑{out_tok//1000}k↓"
+    cost = _compute_cost(in_tok, out_tok, agent_model or "")
+    cost_str = f" (${cost:.2f})" if cost is not None else ""
+    fields["tok"] = f"{in_tok//1000}k↑{out_tok//1000}k↓{cost_str}"
     pbar.set_postfix(refresh=False, **fields)
 
 
@@ -2559,7 +2561,7 @@ async def _run_all_tcs_concurrent(
                                     tracked_harness=tracked_harness,
                                     thinking=getattr(args, "thinking", None),
                                     sequential=bool(getattr(args, "sequential", None)),
-                                    peer_message_timeout=getattr(args, "peer_message_timeout", 90.0),
+                                    peer_message_timeout=getattr(args, "peer_message_timeout", 150.0),
                                 )
                                 if tc_timeout:
                                     event_results, mod_results = await asyncio.wait_for(coro, timeout=tc_timeout)
@@ -2626,7 +2628,7 @@ async def _run_all_tcs_concurrent(
                                     output_file.write(tc_result.model_dump_json() + "\n")
                                     output_file.flush()
                                     tqdm.write(f"\n  → TIMEOUT ({_timeout_label})  pass={n_pass}/{len(event_results)}")
-                                    _pbar_postfix(pbar, all_tc_results)
+                                    _pbar_postfix(pbar, all_tc_results, agent_model=args.model)
                                     if pbar is not None:
                                         pbar.update(1)
                                 continue
@@ -2661,7 +2663,7 @@ async def _run_all_tcs_concurrent(
                                 _elapsed_str = f"{int(_tc_s) // 60:02d}:{int(_tc_s) % 60:02d}.{int((_tc_s % 1) * 1000):03d}"
                                 _avg_evt_s = _tc_s / total_n if total_n else 0.0
                                 tqdm.write(f"\n  → pass={passed_n}/{total_n} ({rate_str})  elapsed={_elapsed_str}  avg/evt={_avg_evt_s:.1f}s")
-                                _pbar_postfix(pbar, all_tc_results)
+                                _pbar_postfix(pbar, all_tc_results, agent_model=args.model)
                                 if pbar is not None:
                                     pbar.update(1)
                         break  # run_idx loop finished without connection error — exit retry loop
@@ -2721,7 +2723,7 @@ async def _run_all_tcs_concurrent(
                     output_file.write(tc_result.model_dump_json() + "\n")
                     output_file.flush()
                     tqdm.write(f"  TC {tc.id} [slot={slot}] FAILED: {_err_label}", file=sys.stderr)
-                    _pbar_postfix(pbar, all_tc_results)
+                    _pbar_postfix(pbar, all_tc_results, agent_model=args.model)
                     if pbar is not None:
                         pbar.update(1)
             finally:
@@ -3156,7 +3158,7 @@ def run(args: argparse.Namespace) -> Path:
         total_runs = len(test_cases) * args.runs
         with tqdm(total=total_runs, initial=n_skipped, unit="run", desc="Evaluating") as pbar:
           if all_tc_results:  # continuation — show running metrics immediately
-              _pbar_postfix(pbar, all_tc_results)
+              _pbar_postfix(pbar, all_tc_results, agent_model=args.model)
           if workers:
             # ── Pool mode: clean stale backups, then dispatch ─────────────
             # Agent config is written per-sample in the TC loop (via
@@ -3284,7 +3286,7 @@ def run(args: argparse.Namespace) -> Path:
                         concurrency_seed=getattr(args, "seed", None) or 42,
                         tracked_harness=tracked_harness,
                         thinking=getattr(args, "thinking", None),
-                        peer_message_timeout=getattr(args, "peer_message_timeout", 90.0),
+                        peer_message_timeout=getattr(args, "peer_message_timeout", 150.0),
                     )
                     pass_rate = (
                         sum(1 for e in event_results if e.passed) / len(event_results)
@@ -3305,7 +3307,7 @@ def run(args: argparse.Namespace) -> Path:
                     f.write(tc_result.model_dump_json() + "\n")
                     f.flush()
                     all_tc_results.append(tc_result)
-                    _pbar_postfix(pbar, all_tc_results)
+                    _pbar_postfix(pbar, all_tc_results, agent_model=args.model)
                     passed_n = sum(1 for e in event_results if e.passed)
                     total_n = len(event_results)
                     rate_str = f"{pass_rate:.0%}" if pass_rate is not None else "N/A"
@@ -3331,7 +3333,7 @@ def run(args: argparse.Namespace) -> Path:
                                 concurrency_seed=getattr(args, "seed", None) or 42,
                                 tracked_harness=tracked_harness,
                                 thinking=getattr(args, "thinking", None),
-                                peer_message_timeout=getattr(args, "peer_message_timeout", 90.0),
+                                peer_message_timeout=getattr(args, "peer_message_timeout", 150.0),
                             )
                             pass_rate = (
                                 sum(1 for e in event_results if e.passed) / len(event_results)
@@ -3347,7 +3349,7 @@ def run(args: argparse.Namespace) -> Path:
                             f.write(tc_result.model_dump_json() + "\n")
                             f.flush()
                             all_tc_results.append(tc_result)
-                            _pbar_postfix(pbar, all_tc_results)
+                            _pbar_postfix(pbar, all_tc_results, agent_model=args.model)
                             passed_n = sum(1 for e in event_results if e.passed)
                             total_n = len(event_results)
                             rate_str = f"{pass_rate:.0%}" if pass_rate is not None else "N/A"
@@ -3444,10 +3446,10 @@ Examples:
                         choices=["disabled", "enabled"],
                         default=None,
                         help="Set extended thinking mode for OpenClaw agent execute() calls (disabled/enabled). Default: not set (model default).")
-    parser.add_argument("--peer-message-timeout", type=float, default=90.0, metavar="SECONDS",
+    parser.add_argument("--peer-message-timeout", type=float, default=150.0, metavar="SECONDS",
                         help="timeoutSeconds for sessions_send peer messages in multi-agent runs. "
                              "0 = fire-and-forget (enqueue and return immediately, no reply awaited). "
-                             "Default 90 preserves wait-for-reply behavior. "
+                             "Default 150 — sized for 3-hop A2A chains that complete in ~110-115s. "
                              "See https://docs.openclaw.ai/concepts/session-tool. Multi-agent only.")
     parser.add_argument("--steps-only", action="store_true", default=False,
                         help="Run only the steps phase (no modifications/events). "
