@@ -193,15 +193,15 @@ prompt: |
      Example: "Email sent to maya.patel@acme.com with subject
      'Welcome to Acme' and body containing the onboarding checklist link."
 
-  3. **Tool / API invocations** — calls to external systems (send_email,
-     post_slack_message, update_hubspot_record, create_jira_ticket…).
-     Use the EXACT tool name from the "Registered Write-Side Tools" section.
-     Include the key arguments the system must supply.
-     Example: "`send_approval_email` called with recipient=Sandra Okonkwo,
-     subject='Approval required: Q-3112', body containing deal name and ARR."
-     Example: "`post_slack_message` called on #deal-approvals with Q-3112
-     details and approve/reject/request-changes prompts."
-     If no registered tool covers this action, describe it by outcome.
+  3. **External system writes / API calls** — writes to external systems
+     (emails sent, Slack messages posted, records updated in HubSpot/Jira/etc.).
+     Describe the observable outcome in business terms. Do NOT name the internal
+     tool function. Use the "Registered Write-Side Tools" section only to
+     understand WHAT the system can do — not to name the tool in the output.
+     Example: "An approval request email is sent to Sandra Okonkwo
+     (sandra@co.com) with subject 'Approval required: Q-3112' and deal details."
+     Example: "An approval request message is posted in Slack on #deal-approvals
+     with quote Q-3112 details and approve/reject/request-changes prompts."
 
   4. **File / artifact writes** — files uploaded to Drive, S3, etc.
      Example: "A PDF named 'invoice-1042.pdf' is uploaded to the
