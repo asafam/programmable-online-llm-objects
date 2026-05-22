@@ -901,8 +901,15 @@ class LLMObject:
                 effective_step_index = message.plan_step_index
             # Inject the LLM's prior tool_call step as an assistant message so
             # the continuation sees its own action alongside the result.
+            # We must REPLACE messages[-2] when it is already an assistant message
+            # ("Understood." from history compression) to avoid two consecutive
+            # assistant turns, which LLM providers reject or mishandle.
             if _plan is not None and _plan.pending_tool_call_context:
-                messages.insert(-1, {"role": "assistant", "content": _plan.pending_tool_call_context})
+                tool_call_msg = {"role": "assistant", "content": _plan.pending_tool_call_context}
+                if len(messages) >= 3 and messages[-2].get("role") == "assistant":
+                    messages[-2] = tool_call_msg
+                else:
+                    messages.insert(-1, tool_call_msg)
                 _plan.pending_tool_call_context = None  # consumed
         else:
             effective_sender = message.sender
