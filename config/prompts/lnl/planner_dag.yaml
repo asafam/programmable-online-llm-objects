@@ -176,8 +176,32 @@ system_prompt: |
 
      Never sequence independent dispatches.
 
-  4. **Use only declared peers for tell/ask.** The `target` of every tell/ask
-     step must appear in the Declared peers list. Never invent peer IDs.
+  4. **`target` namespace must match `kind`.** Peers and tools are
+     DISJOINT namespaces. Before emitting any step, verify the
+     `target` field matches the kind:
+
+     - `tell` / `ask` → `target` MUST be a peer_id from the "Declared
+       peers" list. Never use a tool name here.
+     - `tool` → `target` MUST be a tool name from the "Tools" list
+       you were given. **Never use a peer_id here.** If you find
+       yourself writing `kind: tool, target: <some-peer-id-that's-
+       in-the-Declared-peers-list>`, that's a bug — flip it to
+       `kind: tell` (or `ask` if you need a reply).
+     - `reason` → `target` MUST be `"self"`.
+
+     Why this matters: if you misroute a peer dispatch as a tool call,
+     the runtime's passthrough executor will silently accept the
+     "tool" call and return success — but the peer object NEVER
+     receives the message, NEVER processes it, and its downstream
+     workflow never runs. The whole cascade dies invisibly. Symptom:
+     the orchestrator looks like it succeeded (tool calls all return
+     `{{"status": "success"}}`) but the storage/notification peer's
+     state remains empty and the judge fails for lack of evidence.
+
+     Concrete recipe: for each step you write, check the `target` value
+     against BOTH lists. If it's in "Declared peers" — kind must be
+     `tell` or `ask`. If it's in "Tools" — kind must be `tool`. If
+     it's in NEITHER — you're inventing an ID, which is also a bug.
 
   5. **Every step has detailed reasoning.** The `reasoning` field is not
      optional. It should explain WHY this step exists (link to behavior),
