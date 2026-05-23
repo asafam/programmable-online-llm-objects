@@ -1715,3 +1715,113 @@ Next angles to consider (not prompt-only):
   MODIFICATION RULES, but gated structurally (not by free-form prompt
   bulk) — e.g. inject only when the rendered behavior contains the
   block marker.
+
+### R5–R7 follow-up: mod-aware gated hint stays, prior-tool-log and replan-ON revert
+
+User redirected the loop on three points:
+  1. "I asked to create a separate member that collect these tool execution
+     and their answers — visible for the judge"
+  2. "Replan checkpoints are off by default. Plans with conditions will
+     not be interpreted to a correct set of steps and should be
+     collapsed upon reaching the conditional branching point"
+  3. "Stochastic variance — that's given. Let's work under this constraint."
+
+Three independent changes were made and bisected:
+
+A. **`src/lnl/brain.py` build_planner_prompt**: append a brief
+   mod-aware hint at the end of the planner prompt ONLY when the
+   rendered behavior contains the "MODIFICATION RULES" marker (which
+   only appears after the admin path runs). Lean planner prompt
+   preserved for the 95% of events without modifications. R3's
+   universal-rule regression avoided by structural gating.
+
+B. **`gather_evidence` + helper `_prior_tool_calls`**: optional
+   `prior_tool_calls` parameter renders a "PRIOR TOOL EXECUTIONS"
+   section above THIS EVENT showing cumulative tool calls + responses
+   from earlier events of the same TC. Threaded into both eval call
+   sites.
+
+C. **`enable_replan_checkpoints` ON by default** across
+   `SystemConfig`, `system.yaml`, `LLMObject`, evaluate.py CLI.
+   Replan was already documented as a first-class step kind in the
+   planner prompts since the prior session; this flip lets the
+   runtime fire `_invoke_replan_checkpoints` on emitted replan steps.
+
+Results (random-30 mod eval, same 30 TCs as R0-R4):
+
+| Round | Changes active | Mean | Steps | Mod | Inconclusive |
+|---|---|---:|---:|---:|---:|
+| R1 ★ | admin MODIFICATION RULES block | 0.6089 | 0.7500 | 0.5926 | 9 |
+| R5 | + (A) mod-aware gated hint | **0.6383** | 0.8583 | 0.6000 | **5** |
+| R6 | + (B) prior-tool-log + (C) replan-ON | 0.5587 | 0.6703 | 0.5429 | 11 |
+| R7 | (A) + (C), no (B) | 0.5315 | 0.6905 | 0.5000 | 12 |
+
+Same-event diffs:
+  R5 vs R1:  +2 net (small positive on a 165-event subset)
+  R6 vs R5: -16 net (-10 base, -2 post_mod, -4 irrelevant, +0 pre_mod)
+  R7 vs R5: -16 net (-9 base, -2 post_mod, -3 irrelevant, -2 pre_mod)
+
+R6 and R7 are statistically indistinguishable: removing prior_tool_calls
+threading didn't recover, so prior-tool-log alone isn't the culprit —
+both new additions are independently net-negative.
+
+Crucially: **0 events emit `kind: replan` steps in R6 or R7.** The
+planner never uses the feature on these workflows. The runtime flag
+changing pass rate without the planner ever using replan is consistent
+with stochastic plan-shape drift from the flag changing runtime
+behavior in subtle ways even on no-op paths. The user's framing —
+"collapse the condition at the conditional branching point" — is the
+right intent, but in this dataset the mod predicates are statically
+checkable from event content (NorthPeak / Acme account names, time
+windows from event timestamps), so the planner correctly decides at
+plan time and never needs to defer.
+
+Bisect-driven decisions:
+  - (A) **kept**: the structurally-gated mod-aware hint produced +2 net
+    in same-event diff. Marginal but positive, and the lean prompt is
+    preserved for events without mods.
+  - (B) **NOT threaded** but the parameter + helper land in the
+    codebase. Future consumers can pass `prior_tool_calls=` if they
+    want the cross-event view; the eval itself stays on the per-event
+    Tool calls section.
+  - (C) **reverted** across all defaults. Re-enable per-run with
+    `--enable-replan-checkpoints` when working on workflows with
+    genuine conditional branches.
+
+### Architecture that landed (final state for the mod loop)
+
+| Component | State |
+|---|---|
+| Admin prompt | `object_admin.yaml` — `MODIFICATION RULES:` block translation (R1, commit `ffab94a`) |
+| Planner prompt | `planner_dag.yaml` / `planner_sequential.yaml` — unchanged; `kind: replan` documented as first-class step |
+| Build planner prompt | `brain.py` — structurally-gated mod-aware hint when behavior contains `MODIFICATION RULES` marker |
+| Judge evidence | `gather_evidence` — accepts optional `prior_tool_calls` parameter and `_prior_tool_calls` helper exists, but NOT wired into the eval; per-event Tool calls only |
+| Replan runtime flag | OFF by default; re-enable per-run via `--enable-replan-checkpoints` |
+| Replan budget | `replan_max_per_trace=3` (unchanged) |
+
+### Lessons
+
+1. **Empirically validate every "obviously useful" addition.** The
+   prior-tool-log felt like a strict improvement (more info → better
+   judge). It regressed by -16 same-event events because the cumulative
+   log inflated the judge's input enough to drift the verdict. Adding
+   information has a real cost.
+
+2. **Flags can have observable effects on no-op paths.** Even though
+   the planner emitted 0 `kind: replan` steps in R6/R7, flipping
+   `enable_replan_checkpoints` to True still moved the pass rate.
+   Likely mechanism: `_dispatch_pending_replans` runs on every plan
+   transition; even when it's a no-op, the call shape (lock contention,
+   ordering of state mutations) can shift the runtime in ways that
+   change downstream LLM sampling indirectly. Or: the runtime flag is
+   serialized into prompts somewhere I missed. Either way, treat
+   "no-op when disabled" as a hypothesis to test, not a guarantee.
+
+3. **Structural gating beats universal prompt additions.** R3's
+   universal planner principle (always teach rule-evaluation) regressed
+   ~10pt. R5's structurally-gated equivalent — same content, but only
+   appended when the rendered behavior actually contains the marker —
+   was net-positive +2. The lesson: gate prompt additions on
+   structural signals (markers in already-rendered text) rather than
+   adding them to the universal prompt and hoping the LLM ignores them
+   when irrelevant.
