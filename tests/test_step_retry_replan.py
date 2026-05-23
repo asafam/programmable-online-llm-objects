@@ -206,6 +206,37 @@ class TestSynthesizeReactiveReplans:
         rr = next(s for s in plan.steps if s.reactive_replan_for == "s1")
         assert "no outgoing message observed" in (rr.replan_question or "")
 
+    def test_reactive_replan_max_per_trace_cap(self):
+        """reactive_replan_max_per_trace limits total synthetic replans
+        across all steps in one trace — prevents plan explosion when many
+        steps fail simultaneously."""
+        obj = _make_object(step_max_retries=2, reactive_replan_max_per_trace=2)
+        # Five steps all past the threshold.
+        steps = [
+            PlanStep(kind="tell", id=f"s{i}", description=f"step {i}", retry_count=3)
+            for i in range(1, 6)
+        ]
+        _seed_plan(obj, "t1", steps)
+
+        added = obj._synthesize_reactive_replans("t1")
+
+        assert added == 2  # capped at reactive_replan_max_per_trace
+
+    def test_reactive_replan_max_counts_already_synthesized(self):
+        """Already-synthesized reactive replans count against the per-trace
+        budget even after they complete."""
+        obj = _make_object(step_max_retries=2, reactive_replan_max_per_trace=2)
+        s1 = PlanStep(kind="tell", id="s1", description="step 1", retry_count=3)
+        s2 = PlanStep(kind="tell", id="s2", description="step 2", retry_count=3)
+        # Two reactive replans already completed — budget exhausted.
+        done_rr1 = PlanStep(kind="replan", id="rr1", description="rr1", status="done", reactive_replan_for="s0")
+        done_rr2 = PlanStep(kind="replan", id="rr2", description="rr2", status="done", reactive_replan_for="s0")
+        _seed_plan(obj, "t1", [s1, s2, done_rr1, done_rr2])
+
+        added = obj._synthesize_reactive_replans("t1")
+
+        assert added == 0
+
     def test_pending_synthetic_replan_blocks_duplicate(self):
         """If a synthetic replan for this step is already pending in the
         plan, don't pile another on top this turn."""

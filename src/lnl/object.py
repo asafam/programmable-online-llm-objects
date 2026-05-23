@@ -80,6 +80,7 @@ class LLMObject:
         enable_step_retry_replan: bool = False,
         step_max_retries: int = 2,
         step_replan_max: int = 1,
+        reactive_replan_max_per_trace: int = 4,
         log_synthetic_message: "Optional[Callable[[Message], None]]" = None,
         stale_plan_seconds: float = 180.0,
         max_active_plans: int = 32,
@@ -164,6 +165,7 @@ class LLMObject:
         self._enable_step_retry_replan = bool(enable_step_retry_replan)
         self._step_max_retries = int(step_max_retries) if step_max_retries > 0 else 0
         self._step_replan_max = int(step_replan_max) if step_replan_max > 0 else 0
+        self._reactive_replan_max_per_trace = int(reactive_replan_max_per_trace) if reactive_replan_max_per_trace > 0 else 0
         # Per-trace evaluator cycle counts (cap to prevent runaway).
         self._evaluator_cycles_per_trace: dict[str, int] = {}
         self._evaluator_cycles_lock = threading.Lock()
@@ -2507,8 +2509,18 @@ class LLMObject:
             # Snapshot the original step list so the append loop doesn't
             # iterate over freshly-added synthetic replans.
             original_steps = list(plan.steps)
+            # Per-trace cap: count reactive replan steps already in the plan
+            # (regardless of status — completed ones still count against the budget).
+            already_synthesized = sum(
+                1 for s in plan.steps if s.reactive_replan_for is not None
+            )
+            remaining_budget = self._reactive_replan_max_per_trace - already_synthesized
+            if remaining_budget <= 0:
+                return 0
             now = datetime.datetime.now(datetime.timezone.utc)
             for i, s in enumerate(original_steps):
+                if added >= remaining_budget:
+                    break
                 if s.kind == "replan":
                     continue
                 # Skip hard-terminal steps: failed (gave up) and skipped

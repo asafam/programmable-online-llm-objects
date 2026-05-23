@@ -58,3 +58,4 @@ replan_max_per_trace: 3
 enable_step_retry_replan: false
 step_max_retries: 2
 step_replan_max: 1
+reactive_replan_max_per_trace: 4  # total synthetic replans per trace; prevents plan explosion

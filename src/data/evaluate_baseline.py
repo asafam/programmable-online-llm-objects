@@ -298,7 +298,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-23 (v40): companion bump for evaluate.py v36. Baseline logic unchanged.
+_VERSION: str = _build_version()  # bumped 2026-05-23 (v42): companion bump for evaluate.py v37 — reactive_replan_max_per_trace added. Baseline logic unchanged.
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
@@ -2685,6 +2685,23 @@ async def _run_all_tcs_concurrent(
                                 _pbar_postfix(pbar, all_tc_results, agent_model=args.model)
                                 if pbar is not None:
                                     pbar.update(1)
+                        # TC-boundary barrier: fire-and-forget peer cascades
+                        # from the last event can still be writing after
+                        # _execute_tc_async returns. Letting the next TC's
+                        # _write_worker_config land mid-cascade triggers a
+                        # gateway hot-reload that drops in-flight sessions and
+                        # crashes the worker. Drain trailing mock activity
+                        # before releasing the slot.
+                        if workers and slot_mock_server is not None:
+                            try:
+                                await _wait_mock_quiescence(
+                                    slot_mock_server,
+                                    max_wait_s=INTER_EVENT_TIMEOUT_S,
+                                    quiet_s=6.0,
+                                    slot_id=slot_suffix or "default",
+                                )
+                            except Exception:
+                                pass  # never block slot release on quiescence errors
                         break  # run_idx loop finished without connection error — exit retry loop
                     except (
                         ConnectionResetError, ConnectionRefusedError, BrokenPipeError,

@@ -703,6 +703,7 @@ class RunConfig(BaseModel):
     enable_step_retry_replan: bool = False
     step_max_retries: int = 2
     step_replan_max: int = 1
+    reactive_replan_max_per_trace: int = 4
 
 
 # Evaluation result schemas

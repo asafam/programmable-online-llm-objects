@@ -69,7 +69,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-23 (v36): add last_failure_reason to plan step serialization.
+_VERSION: str = _build_version()  # bumped 2026-05-23 (v38): companion bump for evaluate_baseline.py v41 (TC-boundary quiescence). LNL logic unchanged.
 
 from src.data.schema import (
     EvalSummary,
@@ -432,6 +432,7 @@ def _execute_test_case_inner(
     enable_step_retry_replan: bool = False,
     step_max_retries: int = 2,
     step_replan_max: int = 1,
+    reactive_replan_max_per_trace: int = 4,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single Sample and return event + modification results."""
     from src.lnl.gateway import EventGateway
@@ -507,6 +508,7 @@ def _execute_test_case_inner(
         enable_step_retry_replan=enable_step_retry_replan,
         step_max_retries=step_max_retries,
         step_replan_max=step_replan_max,
+        reactive_replan_max_per_trace=reactive_replan_max_per_trace,
     )
     rt = Runtime(
         brain,
@@ -1211,6 +1213,7 @@ def execute_test_case(
     enable_step_retry_replan: bool = False,
     step_max_retries: int = 2,
     step_replan_max: int = 1,
+    reactive_replan_max_per_trace: int = 4,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single Sample with a per-event timeout (seconds).
 
@@ -1266,6 +1269,7 @@ def execute_test_case(
         enable_step_retry_replan=enable_step_retry_replan,
         step_max_retries=step_max_retries,
         step_replan_max=step_replan_max,
+        reactive_replan_max_per_trace=reactive_replan_max_per_trace,
     )
 
 
@@ -1855,6 +1859,7 @@ def run(args: argparse.Namespace) -> Path:
                 enable_step_retry_replan=getattr(args, "enable_step_retry_replan", False),
                 step_max_retries=getattr(args, "step_max_retries", 2),
                 step_replan_max=getattr(args, "step_replan_max", 1),
+                reactive_replan_max_per_trace=getattr(args, "reactive_replan_max_per_trace", 4),
             )
         finally:
             # Always store snapshot and signal waiting workers — even on failure —
@@ -1941,6 +1946,7 @@ def run(args: argparse.Namespace) -> Path:
         enable_step_retry_replan=getattr(args, "enable_step_retry_replan", False),
         step_max_retries=getattr(args, "step_max_retries", 2),
         step_replan_max=getattr(args, "step_replan_max", 1),
+        reactive_replan_max_per_trace=getattr(args, "reactive_replan_max_per_trace", 4),
     )
 
     # With --reuse-steps, split into two phases to avoid blocking worker threads:
@@ -2654,6 +2660,17 @@ Examples:
             "Step is only escalated this many times before further "
             "invalidations are ignored. Only consulted when "
             "--enable-step-retry-replan is set."
+        ),
+    )
+    parser.add_argument(
+        "--reactive-replan-max-per-trace",
+        type=int,
+        default=4,
+        dest="reactive_replan_max_per_trace",
+        help=(
+            "Total reactive replan steps allowed per trace (default: 4). "
+            "Prevents plan explosion when many steps fail simultaneously. "
+            "Only consulted when --enable-step-retry-replan is set."
         ),
     )
     parser.add_argument(

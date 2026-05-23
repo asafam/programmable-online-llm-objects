@@ -169,6 +169,7 @@ class SystemConfig:
     enable_step_retry_replan: bool = False
     step_max_retries: int = 2
     step_replan_max: int = 1
+    reactive_replan_max_per_trace: int = 4  # total synthetic replans allowed per trace
 
     @staticmethod
     def load(path: Path | None = None) -> "SystemConfig":
@@ -208,6 +209,7 @@ class SystemConfig:
             enable_step_retry_replan=bool(data.get("enable_step_retry_replan", False)),
             step_max_retries=int(data.get("step_max_retries", 2)),
             step_replan_max=int(data.get("step_replan_max", 1)),
+            reactive_replan_max_per_trace=int(data.get("reactive_replan_max_per_trace", 4)),
         )
 
 
@@ -498,6 +500,7 @@ class Runtime:
             enable_step_retry_replan=self._heartbeat.enable_step_retry_replan,
             step_max_retries=self._heartbeat.step_max_retries,
             step_replan_max=self._heartbeat.step_replan_max,
+            reactive_replan_max_per_trace=self._heartbeat.reactive_replan_max_per_trace,
             log_synthetic_message=self._bus.log_synthetic,
             stale_plan_seconds=self._heartbeat.stale_plan_seconds,
             max_active_plans=self._heartbeat.max_active_plans_per_object,
