@@ -1971,3 +1971,59 @@ single sample we observed. The other changes (R6/R7/R8/R9) are
 reverted, which is the right call because they were also random
 samples and we have no signal to keep them over the simpler R1+R5
 state.
+
+### 3-run HEAD baseline: the variance is across-TCs, not within-TC
+
+After R5-replication showed an 8pt single-run swing on identical code,
+ran HEAD (R1 + R5) with `--runs 3` on the same 30-TC subset to get a
+proper baseline:
+
+| Run | Mean |
+|---|---:|
+| 1 | 0.5316 |
+| 2 | 0.5766 |
+| 3 | 0.6518 |
+| **aggregate** | **0.6175 ±ME 0.1068** |
+
+Range across the 3 runs: 12 points (0.53–0.65). Std ≈ 0.06.
+
+Multi-run averaging didn't tighten the band as much as expected because
+the dominant variance is ACROSS-TCs (which TCs sampled, what tools fail
+on this attempt) not WITHIN-TC (same TC twice). The reported ME is per-
+TC, so averaging across runs at the SAME 30 TCs only marginally tightens
+it. The 95% CI of HEAD on this subset is still roughly [0.51, 0.72].
+
+**Every round in the entire 9-round session falls within HEAD's 3-run CI.**
+Nothing we tried was distinguishable from HEAD at the 30-TC sample size.
+
+| Round | Mean | Distinguishable from HEAD CI [0.51, 0.72]? |
+|---|---:|---|
+| R0 baseline | 0.5671 | no |
+| R1 | 0.6089 | no |
+| R5 orig | 0.6383 | no |
+| R5 rep | 0.5569 | no |
+| R6 | 0.5587 | no |
+| R7 | 0.5315 | no |
+| R8 | 0.5640 | no |
+| R9 | 0.5480 | no |
+
+### What it would take to make progress on this dataset
+
+Three real options, ordered by cost-effectiveness:
+
+1. **Larger sample size first, then prompt iteration.** A 100-TC subset
+   would shrink the per-TC contribution to ME by √(100/30) ≈ 1.83×,
+   giving ME ~±0.058 instead of ~±0.107. That's enough to detect ±6pt
+   prompt deltas with 1 run. Cost: ~$15–25 per run (vs ~$5 for 30).
+2. **Both larger sample AND multi-run.** 100 TCs × 3 runs would give
+   ME ~±0.033 — enough to detect ±3pt prompt changes. Cost: ~$50–75
+   per measurement.
+3. **Accept the noise band, stop iterating.** Single-run, 30-TC eval
+   can only detect changes of ~±10pt, which is bigger than realistic
+   per-round prompt gains. Continuing without methodology change just
+   generates more uninterpretable noise.
+
+The user's "stochastic variance is given, work under it" frame doesn't
+work because the variance is larger than the typical signal. Either we
+shrink the variance (option 1 or 2) or we stop spending on iterations
+that can't be interpreted.
