@@ -553,6 +553,17 @@ def compute_table_by_objects(path: Path, tc_objects: dict[str, int]) -> dict[str
                 if not re.match(r"^S\d+$", e.get("event_id", "")):
                     by_bin[b][tc_id][ri]["mean"].append(passed)
 
+    # TCs present in the source dataset but absent from the eval file entirely.
+    # These represent complete failures (system broke before writing any record).
+    # Count them as base=False so the denominator equals the full source dataset
+    # and the curve reflects true completion rate, not just attempted-TCs rate.
+    tc_ids_in_eval: set[str] = {tc_id for b_data in by_bin.values() for tc_id in b_data}
+    for tc_id, n_obj in tc_objects.items():
+        if tc_id not in tc_ids_in_eval:
+            b = _object_bin(n_obj)
+            by_bin[b][tc_id][0]["base"].append(False)
+            by_bin[b][tc_id][0]["mean"].append(False)
+
     out: dict[str, dict] = {}
     for b, tcs in by_bin.items():
         per_tc_means = {"mean": [], "base": [], "pre_mod": [], "on_mod": [], "off_mod": []}
