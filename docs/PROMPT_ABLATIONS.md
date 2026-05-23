@@ -1644,3 +1644,74 @@ board. Reverted.
    "tool was called for the wrong subset of events". A crisp rule with
    a checkable trigger reduces this gap by giving the executor an
    unambiguous predicate to honor.
+
+### R4 (also reverted): Tailoring / Correction / Contextual-Gating categories
+
+Targeted the persistent failures with a new admin category split — Expansion
+became Tailoring/Adjustment ("baseline runs unchanged; only the CONTENT of
+one or two specific outputs changes"), Correction became field-override
+("baseline runs unchanged; only one specific field formula is altered"),
+and Contextual became Contextual-Gating ("gates whether ONE specific
+baseline step fires; other baseline steps not affected"). Each new
+category had a worked vague→crisp example.
+
+Result vs R1 (same 30 TCs, 174 common events, same-event diff):
+
+| Role | n | + | − | net |
+|---|---:|---:|---:|---:|
+| post_mod | 78 | 9 | 9 | 0 |
+| irrelevant | 27 | 3 | 1 | +2 |
+| base | 40 | 5 | 9 | −4 |
+| pre_mod | 29 | 2 | 7 | −5 |
+| **TOTAL** |  | **19** | **26** | **−7** |
+
+Conclusive-only metrics looked attractive (Irrelevant 0.7778 vs R1's
+0.5556, Post-mod 0.7222 vs R1's 0.6481) but that's composition shift — 10
+inconclusive vs R1's 9 plus a different inconclusive set. The same-event
+diff is unambiguous: −7 net. Reverted.
+
+The pre-mod regression in particular shouldn't have been caused by an
+admin-only prompt change (admin only runs when a modification dispatches,
+and pre_mod events fire before that). The −5 pre-mod is stochastic
+variance, but it's enough to indicate this experiment didn't move the
+needle. Three independent attempts (R2 IF/ELSE, R3 planner principle,
+R4 new categories) have failed to beat R1's `MODIFICATION RULES` block.
+
+### Closing remark on this loop
+
+The modifier feedback loop appears to have hit a ceiling for prompt-only
+changes on this dataset:
+
+- **R1** (admin → structured MODIFICATION RULES block with 6 vague→crisp
+  category templates) lifted +10 events vs R0. This is the operating
+  point.
+- **R2/R3/R4** each tried a different angle (structural mandate,
+  planner-side rule evaluation, new categories) and each regressed or
+  ran flat vs R1 in same-event diffs.
+- Pattern: once the admin produces a checkable trigger + named action +
+  baseline-continues clause, more prompt scaffolding stops helping.
+  Diminishing returns are real here.
+
+Remaining failures look like one of:
+1. **Mock-data ceiling.** Some tool returns are stub
+   `{"status":"success"}` payloads with no realistic field values
+   (engineering-work-intake, save-email-attachments, ai-voice-generator).
+   The agent has no real value to thread; my placeholder rule forbids
+   fabrication; the eval expects the value. Unwinnable at the prompt
+   layer.
+2. **Multi-condition temporal mods** (ai-form-temporal,
+   form-jira-temporal): 3-4 AND'd predicates each, all evaluated from
+   event content. Complex predicate evaluation at plan time is just
+   hard.
+3. **Stochastic run-to-run variance** at this dataset size (30 TCs,
+   ~150-180 events per run). Standard deviation across the four rounds
+   is ~3pt on overall mean — comparable to the gains we'd be chasing.
+
+Next angles to consider (not prompt-only):
+- Multi-run averaging (`--runs 3`) to reduce stochastic noise.
+- Improving mock tool return payloads to provide realistic field values
+  (so the agent's placeholder-rule has real values available).
+- A separate "mod-aware" planner pass when behavior contains
+  MODIFICATION RULES, but gated structurally (not by free-form prompt
+  bulk) — e.g. inject only when the rendered behavior contains the
+  block marker.
