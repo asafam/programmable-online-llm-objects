@@ -163,6 +163,47 @@ ENRICHMENTS: dict[str, str] = {
     "send_telegram_message": (
         '{{"status":"success","message_id":"tg-{call_index:08d}"}}'
     ),
+    # Generation tools (R2 — Cat 2: stub generation responses left
+    # downstream Slack/email steps with no content to share, causing
+    # judge failures even though the workflow ran end-to-end). Embed
+    # realistic synthesized content keyed off {call_index} so each call
+    # returns a distinct payload.
+    "generate_meeting_brief": (
+        '{{"status":"success","brief_id":"brief-{call_index:08d}",'
+        '"brief":"Meeting brief #{call_index}: Account overview — recent '
+        'engagement strong with quarterly product usage up ~12%. '
+        'Stakeholders to engage: primary contact + executive sponsor. '
+        'Recommended discussion: review current quarter priorities, '
+        'surface blockers, validate renewal timeline. Key questions: '
+        '(1) What are the top three priorities this quarter? '
+        '(2) Are there outstanding integration or support issues? '
+        '(3) When does the procurement cycle re-open? '
+        'Recent notes from Salesforce and Clearbit are attached as '
+        'context. Suggested next step: schedule a 30-minute follow-up '
+        'within the next 7 business days.",'
+        '"prompt_tokens":520,"completion_tokens":210}}'
+    ),
+    "call_gpt_4o_classify_message": (
+        '{{"status":"success","classification_id":"cls-{call_index:08d}",'
+        '"category":"actionable","subcategory":"customer-support",'
+        '"confidence":0.86,"reasoning":"Message references a specific '
+        'product issue and requests a follow-up action, matching the '
+        '\\"actionable\\" rubric definition.",'
+        '"prompt_tokens":180,"completion_tokens":40}}'
+    ),
+    "call_gpt_4o_summarize_message": (
+        '{{"status":"success","summary_id":"sum-{call_index:08d}",'
+        '"summary":"Sender raised a concrete request needing follow-up '
+        'and provided context to act on; the recipient should respond '
+        'with next steps and an ETA.",'
+        '"prompt_tokens":210,"completion_tokens":55}}'
+    ),
+    "generate_image": (
+        '{{"status":"success","image_id":"img-{call_index:08d}",'
+        '"image_url":"https://cdn.example.com/generated/{call_index:08d}.png",'
+        '"thumbnail_url":"https://cdn.example.com/generated/{call_index:08d}_thumb.png",'
+        '"width":1024,"height":1024}}'
+    ),
 }
 
 STUB_RE_FULL = '{"status": "success", "tool":'  # marker for stub responses
