@@ -427,7 +427,7 @@ def _execute_test_case_inner(
     log_planner_output: bool = False,
     tool_dispatch: str = "sync",
     planner_mode: str = "dag",
-    enable_replan_checkpoints: bool = True,
+    enable_replan_checkpoints: bool = False,
     replan_max_per_trace: int = 3,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single Sample and return event + modification results."""
@@ -823,7 +823,6 @@ def _run_test_case_timeline(
                 evaluator_out_tok = sum(r.evaluator_metrics.output_tokens for r in results if r.evaluator_metrics)
                 bus_msgs = rt.message_log[log_snapshot:]
                 new_calls = _new_tool_calls(execs, exec_snap)
-                prior_calls = _prior_tool_calls(execs, exec_snap)
                 cf_errors = rt.drain_infra_errors()
                 # Mark infra-error if THIS event raised an error OR an earlier
                 # event in the same TC already did (downstream events depend
@@ -831,7 +830,14 @@ def _run_test_case_timeline(
                 infra_error = bool(cf_errors) or tc_had_infra_error
                 if infra_error:
                     tc_had_infra_error = True
-                evidence = gather_evidence(rt, results, step.recipient, bus_messages=bus_msgs, tool_calls=new_calls, prior_tool_calls=prior_calls)
+                # NB: prior_tool_calls intentionally NOT threaded — adding a
+                # cumulative PRIOR TOOL EXECUTIONS section to the judge
+                # evidence regressed the random-30 mod eval (−10 base events
+                # vs prior baseline). The cumulative log inflated the
+                # judge's input enough to either confuse it or make it
+                # stricter on later events. Helper retained in case a
+                # different consumer wants the cross-event view.
+                evidence = gather_evidence(rt, results, step.recipient, bus_messages=bus_msgs, tool_calls=new_calls)
                 condition = step.expect.action
                 passed, reasoning, votes, j_in_tok, j_out_tok = harness.evaluate_assertion(condition, evidence, prior_context)
                 event_results.append(EventResult(
@@ -977,12 +983,13 @@ def _run_test_case_timeline(
             evaluator_out_tok = _evaluator_out_tok if _evaluator_out_tok is not None else sum(r.evaluator_metrics.output_tokens for r in res if r.evaluator_metrics)
             bus_msgs = rt.message_log[log_snap:]
             new_calls = _new_tool_calls(execs, exec_s)
-            prior_calls = _prior_tool_calls(execs, exec_s)
             if active_harness is tracked_harness:
                 # Memory-fidelity judge: only object states, no tool calls / bus traffic
                 evidence = gather_evidence(rt, res, evt.recipient)
             else:
-                evidence = gather_evidence(rt, res, evt.recipient, bus_messages=bus_msgs, tool_calls=new_calls, prior_tool_calls=prior_calls)
+                # See companion comment in the steps loop — prior_tool_calls
+                # not threaded; the cumulative section regressed the eval.
+                evidence = gather_evidence(rt, res, evt.recipient, bus_messages=bus_msgs, tool_calls=new_calls)
             passed, reasoning, votes, j_in_tok, j_out_tok = active_harness.evaluate_assertion(evt.expect.action, evidence, ctx)
             trace_spans, trace_root = build_event_trace(bus_msgs)
             event_results.append(EventResult(
@@ -1189,7 +1196,7 @@ def execute_test_case(
     log_planner_output: bool = False,
     tool_dispatch: str = "sync",
     planner_mode: str = "dag",
-    enable_replan_checkpoints: bool = True,
+    enable_replan_checkpoints: bool = False,
     replan_max_per_trace: int = 3,
 ) -> tuple[list[EventResult], list[ModificationResult]]:
     """Run a single Sample with a per-event timeout (seconds).
@@ -1554,7 +1561,7 @@ def run(args: argparse.Namespace) -> Path:
     if planner_mode == "dag" and planner_prompt_display == "planner_sequential.yaml":
         # Mode auto-selects planner_dag.yaml unless --planner-prompt was explicit.
         planner_prompt_display = "planner_dag.yaml"
-    replan_enabled = getattr(args, "enable_replan_checkpoints", True)
+    replan_enabled = getattr(args, "enable_replan_checkpoints", False)
     replan_label = (
         f"on (max={getattr(args, 'replan_max', 3)}/trace)" if replan_enabled else "off"
     )
@@ -1827,7 +1834,7 @@ def run(args: argparse.Namespace) -> Path:
                 log_planner_output=(getattr(args, "verbose", None) == "DEBUG"),
                 tool_dispatch=getattr(args, "tool_dispatch", "sync"),
                 planner_mode=getattr(args, "planner_mode", "dag"),
-                enable_replan_checkpoints=getattr(args, "enable_replan_checkpoints", True),
+                enable_replan_checkpoints=getattr(args, "enable_replan_checkpoints", False),
                 replan_max_per_trace=getattr(args, "replan_max", 3),
             )
         finally:
@@ -2563,7 +2570,7 @@ Examples:
         "--enable-replan-checkpoints",
         action=argparse.BooleanOptionalAction,
         dest="enable_replan_checkpoints",
-        default=True,
+        default=False,
         help=(
             "Replan checkpoints: planner re-entry when a `kind=replan` step is "
             "reached. The planner may insert replan steps that suspend "
@@ -2571,8 +2578,13 @@ Examples:
             "the planner with the prior plan + completed step results so it "
             "can emit continuation steps. Use for conditional branches the "
             "planner cannot decide up-front (stock level, authorization, "
-            "returned id). Default: ENABLED. Use --no-enable-replan-checkpoints "
-            "to disable. Budget per trace controlled by --replan-max."
+            "returned id). Default: DISABLED — empirically the runtime flag "
+            "causes a regression on the random-30 mod eval even when the "
+            "planner emits 0 replan steps (mechanism unclear; may be "
+            "stochastic plan-shape drift from the flag changing runtime "
+            "behavior in subtle ways). Re-enable per-run with this flag "
+            "when working on workflows with genuine conditional branches. "
+            "Budget per trace controlled by --replan-max."
         ),
     )
     parser.add_argument(
