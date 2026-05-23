@@ -2445,3 +2445,83 @@ returns don't carry the values downstream steps need.
 Recommended ratio of mock-iteration : prompt-iteration on Zapier-style
 benchmarks going forward: heavily favor mock work first; iterate on
 prompts only after mock returns provide everything downstream needs.
+
+---
+
+## Fresh-seed loop (2026-05-23) — L1 → L2 → L3 (reverted)
+
+Fresh 33-TC random sample (seed 20260524) to retest the post-R5 state
+against the variance floor.
+
+| Round | Change | Base S* pass | Mean pass | Delta vs L1 | Decision |
+|---|---|---:|---:|---:|---|
+| L1 | HEAD (post-R5) | 47/67 = 0.7015 | 0.6245 | — | baseline |
+| L2 | `cb40565` mock/server `{call_index}` interpolation fix | 38/66 = 0.5758 | 0.5476 | **-12.6pt base / -7.7pt mean** | ❌ reverted (`7a285e5`) |
+
+### The bug `cb40565` claimed to fix
+
+The HTTP mock server's `_interpolate()` was missing `call_index` from its
+context. All 558 enrichments from `scripts/enrich_mock_returns.py` that used
+`{call_index}` were silently falling back to returning the literal template
+string (with `{{ }}` doubled braces and unsubstituted placeholder).
+
+The fix wired through a per-(slot, method) counter and was correct in
+isolation.
+
+### Why the correct fix regressed aggregate scores by 12pt
+
+The "broken" L1 state had mocks returning literal placeholder text. Agents
+treated those returns as opaque success signals and proceeded with
+LLM-natural reasoning — often happening to satisfy the judge's expectations
+by inference rather than from data.
+
+Once the mocks returned crisp structured JSON (`{"issue_number": 5, "url":
+"…/issues/5"}`), the agents stopped reasoning and mechanically propagated
+the mock values downstream. For many TCs the mock-returned values don't
+match what the expectations require (e.g. mock returns `ranking_score: 5`,
+expectation needs the agent to compute `score += 10`). The fix exposed
+mock/expectation misalignment that was hidden by lazy literal-string
+interpretations.
+
+Net per-event diff L1→L2: 27 FAIL→PASS, 50 PASS→FAIL.
+
+Wins were exactly the chronic ones we predicted (`form-zoho-crm`,
+`automate-github-issues-from-slack`, `slack-changelog-automation`,
+`ai-multi-channel-inbound-message-routing`). Losses were spread across the
+sample as previously-lucky-by-inference TCs lost their inference latitude.
+
+### Decision
+
+Reverted. The state where mocks return broken literal templates is
+empirically our best baseline on this dataset. The proper next step would
+be a per-TC mock-vs-expectation alignment audit, but that's substantially
+larger than a single fix and falls outside the scope of this iteration.
+
+### Pattern identified but not patched: intermediate-object forwarding
+
+L1 base failures span 17 TCs with mostly TC-specific causes (omits a
+field, gives up on a content computation, etc.). The one repeating pattern
+is **intermediate object with exactly one declared peer whose behavior
+text doesn't explicitly say to forward to it** — same shape as the entry-point
+fix in `c01ad6d`, but `append_forward_instruction.py`'s filter (role contains a
+forwarding verb) skipped them because intermediate "business logic"
+objects describe their work, not their downstream.
+
+This pattern affects 84 TCs / 144 objects across the full dataset; only 3
+of L1's 17 failing TCs match. Touching 144 objects to fix 3 in-sample TCs
+carries the same risk profile that just bit us with `cb40565` (a broad,
+technically-correct change exposing latent misalignments elsewhere).
+Documented and deferred.
+
+### Confirmation: diminishing returns
+
+After 11+ prompt rounds, 5 mock-data rounds, base-step + mod loops, and
+this fresh-seed retest, the remaining 30-40% of failures on this dataset
+are dominated by TC-specific authoring issues (mock/expectation
+misalignment, missing fields in object behavior text, tools missing for
+declared skills, etc.). No single change unlocks more than ~3 TCs without
+risking equal-or-greater regression elsewhere.
+
+We have hit the practical ceiling for blind iteration on this dataset
+under the current model. Further gains require per-TC audits of the
+dataset itself, not the runtime or prompts.
