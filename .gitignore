@@ -137,6 +137,8 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+# Stray env files (e.g., misfired scp targets)
+achimoa@*
 .venv
 env/
 venv/
