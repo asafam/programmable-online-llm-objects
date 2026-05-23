@@ -937,7 +937,6 @@ class LLMObject:
                         self._definition, self._state, message,
                         prompt_file=self._planner_prompt_file,
                         tools=self._tool_registry.describe() if self._tool_registry else "",
-                        enable_replan_checkpoints=self._enable_replan_checkpoints,
                     )
                     plan_dict, planner_metrics = self._planner_brain.plan_call(
                         planner_prompt, object_id=self.object_id,
@@ -2341,6 +2340,43 @@ class LLMObject:
             out.append({"step_id": sid, "kind": kind, "summary": summary})
         return out
 
+    def _skip_pending_replans(self, trace_id: str) -> int:
+        """Mark any ready `kind=replan` step on the trace's plan as `skipped`.
+
+        Called when the runtime flag `enable_replan_checkpoints` is OFF but the
+        planner emitted a replan step anyway. Without this, the step would
+        remain `planned` and `_auto_close_plan_if_complete` would never retire
+        the plan (it requires every step in STEP_TERMINAL_STATUSES).
+
+        Returns the number of steps marked skipped (callers treat >0 the same
+        as a successful replan dispatch — plan changed, recompute readiness).
+        """
+        skipped = 0
+        with self._plans_lock:
+            plan = self._active_plans.get(trace_id)
+            if plan is None or not plan.steps:
+                return 0
+            done_ids = {
+                (s.id or f"s{i+1}")
+                for i, s in enumerate(plan.steps)
+                if s.status in STEP_TERMINAL_STATUSES
+            }
+            for i, s in enumerate(plan.steps):
+                if s.kind != "replan" or s.status != "planned":
+                    continue
+                if not all(d in done_ids for d in (s.depends_on or [])):
+                    continue
+                s.status = "skipped"
+                s.result_summary = (
+                    "replan checkpoints disabled at runtime "
+                    "(SystemConfig.enable_replan_checkpoints=False)"
+                )
+                s.completed_at = datetime.datetime.now(datetime.timezone.utc)
+                plan.last_progress_at = s.completed_at
+                self._log_synthetic_plan_event(plan, i, "replan_skipped_runtime_disabled")
+                skipped += 1
+        return skipped
+
     def _dispatch_pending_replans(
         self,
         trace_id: Optional[str],
@@ -2359,9 +2395,18 @@ class LLMObject:
         use the count to decide whether to re-render the executor's prompt /
         run another React turn — typically the caller treats >0 as "plan
         changed, recompute readiness."
+
+        When the runtime flag is disabled but the planner emits a kind=replan
+        step anyway (possible because the planner prompt teaches replan as a
+        first-class step kind regardless of the flag), ready replan steps are
+        marked `skipped` so `_auto_close_plan_if_complete` can retire the plan
+        normally. Without this, the step would sit in `planned` status until
+        the plan hits `stale_plan_seconds` and got abandoned.
         """
-        if not self._enable_replan_checkpoints or trace_id is None:
+        if trace_id is None:
             return 0
+        if not self._enable_replan_checkpoints:
+            return self._skip_pending_replans(trace_id)
         fired = 0
         while True:
             # Find the next ready replan step under the lock; release before
@@ -2437,7 +2482,6 @@ class LLMObject:
                 tools=tools_desc,
                 prior_plan=prior_plan_snapshot,
                 replan_question=replan_question,
-                enable_replan_checkpoints=True,
             )
             try:
                 plan_dict, planner_metrics = self._planner_brain.plan_call(

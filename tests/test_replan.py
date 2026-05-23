@@ -7,7 +7,12 @@ again with `prior_plan` + the deferred question; the planner emits
 continuation steps that the runtime appends via `add_steps`. The replan step
 itself transitions `planned → dispatched → done`.
 
-Off by default; opt-in via `SystemConfig.enable_replan_checkpoints`.
+`replan` is documented as a first-class step kind in the planner prompts
+(planner_dag.yaml / planner_sequential.yaml). The runtime-level flag
+`SystemConfig.enable_replan_checkpoints` controls whether the runtime
+actually fires the planner re-invocation when a ready replan step is
+detected; it does not change what the planner sees in its prompt.
+Off by default.
 """
 from __future__ import annotations
 
@@ -124,21 +129,30 @@ class TestReplanPromptRendering:
         completed_section = out.split("Completed steps")[-1]
         assert "s2:" not in completed_section
 
-    def test_replan_note_only_when_enabled(self):
+    def test_replan_is_first_class_kind_in_prompt(self):
+        """`replan` is documented as a regular step kind in the planner
+        prompt — no longer gated by a runtime flag. The planner sees the
+        same kind list regardless of `enable_replan_checkpoints`; the flag
+        only controls whether the runtime fires the replan dispatch."""
         defn = ObjectDefinition(object_id="o", role="r", behavior="b",
                                 peers=[PeerDeclaration("p", "x")])
         from datetime import datetime, timezone
         msg = Message(sender="u", recipient="o", type=MessageType.DOMAIN,
                       content="go", id="m1", trace_id="t1",
                       timestamp=datetime.now(timezone.utc))
-        out_off = build_planner_prompt(defn, "", msg,
-                                       prompt_file="planner_sequential.yaml")
-        assert "Replan checkpoints (available)" not in out_off
-        out_on = build_planner_prompt(defn, "", msg,
-                                      prompt_file="planner_sequential.yaml",
-                                      enable_replan_checkpoints=True)
-        assert "Replan checkpoints (available)" in out_on
-        assert "replan_question" in out_on
+        out = build_planner_prompt(defn, "", msg,
+                                   prompt_file="planner_sequential.yaml")
+        # replan is enumerated in the Step kinds section and in the JSON
+        # kind union; replan_question appears as a field.
+        assert "`replan`" in out
+        assert "replan_question" in out
+        # The legacy gated note is gone.
+        assert "Replan checkpoints (available)" not in out
+        # Same for the DAG planner prompt.
+        out_dag = build_planner_prompt(defn, "", msg,
+                                       prompt_file="planner_dag.yaml")
+        assert "`replan`" in out_dag
+        assert "replan_question" in out_dag
 
 
 # ── End-to-end: planner emits replan → runtime invokes planner again ───────
@@ -236,8 +250,12 @@ class TestReplanEndToEnd:
 
     def test_disabled_by_default_no_planner_re_entry(self):
         """When enable_replan_checkpoints=False, a replan step in the plan is
-        NOT actioned: the planner is invoked once; the replan step stays in
-        `planned` status; the budget counter stays empty."""
+        NOT actioned: the planner is invoked once; the budget counter stays
+        empty. The step itself is auto-marked `skipped` so the plan can close
+        (regression test against a leak where the prompt cleanup left replan
+        as a first-class kind, so the planner can now emit it even when the
+        runtime flag is off — the step must reach a terminal status either
+        way or the plan stalls until stale_plan_seconds)."""
         brain = MockBrain()
         self._script_initial_and_continuation(brain)
         brain.script_react(ReactStep(
@@ -254,13 +272,31 @@ class TestReplanEndToEnd:
         rt.create_object(_defn())
         rt.send("orchestrator", "test")
         orch = rt._bus.objects["orchestrator"]
-        # The second scripted plan should NOT have been consumed.
+        # The second scripted plan should NOT have been consumed (the planner
+        # is not re-invoked).
         remaining = brain._plan_scripts.get("orchestrator", [])
         assert len(remaining) == 1, \
             f"second plan should not have been called when replan disabled; remaining={len(remaining)}"
-        # Budget counter unchanged.
+        # Budget counter unchanged (we didn't dispatch a replan, we skipped one).
         assert not orch._replan_cycles_per_trace, \
             "expected NO replan cycles when feature disabled"
+        # The replan step should have been marked `skipped` so that
+        # _auto_close_plan_if_complete CAN retire the plan — without this,
+        # s2 would sit in `planned` forever and the plan would stall until
+        # stale_plan_seconds. (The mock evaluator doesn't actually verdict
+        # here, so plan-closure may not run — but the step's terminal status
+        # is what matters; it unblocks closure whenever it does run.)
+        with orch._plans_lock:
+            all_plans = list(orch._active_plans.values()) + list(orch._completed_plans)
+        target = next(p for p in all_plans if any(s.id == "s2" for s in p.steps))
+        s2 = next(s for s in target.steps if s.id == "s2")
+        assert s2.kind == "replan"
+        assert s2.status == "skipped", (
+            f"expected s2.status='skipped' when runtime flag is off; got {s2.status!r}. "
+            f"A non-terminal status here would prevent _auto_close_plan_if_complete from "
+            f"retiring the plan once s1 is done."
+        )
+        assert "disabled" in (s2.result_summary or "").lower()
 
     def test_budget_exhaustion_marks_replan_failed(self):
         """With replan_max_per_trace=1, a SECOND replan step in the same

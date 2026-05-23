@@ -31,28 +31,40 @@ system_prompt: |
   Content:
   {message_content}
   {prior_plan_context}
-  {replan_mode_note}
 
   # Your task
 
   Produce a numbered, multi-step plan describing the actions this object must
   take to handle this event. Each step is a SINGLE atomic action.
 
-  **Four step kinds:**
-  - `tell` / `ask` — dispatch to a declared peer (`target` = peer_id)
-  - `tool` — invoke a registered tool the object owns (`target` = tool name)
+  **Step kinds** (the full enum is enforced by the output schema below — pick
+  the right one for each step):
+
+  - `tell` / `ask` — dispatch to a declared peer (`target` = peer_id).
+    Choose when the object forwards, notifies, or queries a peer.
+  - `tool` — invoke a registered tool the object owns (`target` = tool
+    name). Choose when the object must perform an external write/read
+    (storage, notification API, etc.).
   - `reason` — record a state requirement or non-dispatch decision
-    (`target` = `"self"`)
+    (`target` = `"self"`). Choose for state changes or a deliberate
+    no-dispatch step (e.g., acknowledging an event that requires no
+    downstream work).
+  - `replan` — defer a conditional branch you cannot decide up-front
+    because the choice genuinely depends on a value that will only be
+    known after an earlier step completes (returned id, quantity vs
+    threshold, authorization outcome, status code, etc.). Set
+    `target = "self"`, `depends_on = [<id of the step whose result you
+    need>]`, and `replan_question` = a one-line description of the
+    deferred decision. **Do not plan both branches**: stop at the
+    decision point, emit the `replan` step, and let the runtime re-invoke
+    you with the resolved value so you can emit the continuation steps
+    for the branch that actually applies. Use only when the planner
+    genuinely cannot pick the branch from information available at
+    plan time — most conditions are better expressed inside a step's
+    description and skipped/short-circuited by the executor.
 
-  Choose `tell`/`ask` when the object forwards, notifies, or queries a
-  declared peer. Choose `tool` when the object must invoke a tool to
-  perform an external write/read (storage, notification API, etc.).
-  Choose `reason` when the action is a state change or a deliberate
-  no-dispatch step (e.g., acknowledging an event that requires no
-  downstream work).
-
-  Note: a fifth step kind `wait` exists for multi-stage workflows that
-  span asynchronous external events. **Do not author wait steps in this
+  Note: a kind `wait` also exists for multi-stage workflows that span
+  asynchronous external events. **Do not author wait steps in this
   initial plan** — the executor amends the plan with wait steps from
   inside its iteration loop, where it has access to evaluator feedback
   and can pull identifiers from prior step results. Plan the steps you'd
@@ -69,11 +81,12 @@ system_prompt: |
       {{
         "id": "s1",
         "step_number": 1,
-        "kind": "tell" | "ask" | "tool" | "reason",
-        "target": "<declared-peer-id for tell/ask, tool name for tool, 'self' for reason>",
-        "description": "<one short sentence: what to dispatch, call, or record>",
+        "kind": "tell" | "ask" | "tool" | "reason" | "replan",
+        "target": "<peer-id for tell/ask, tool name for tool, 'self' for reason/replan>",
+        "description": "<one short sentence: what to dispatch, call, record, or defer>",
         "depends_on": [],
-        "reasoning": "<detailed reasoning: why this step exists, what data it carries, what role it plays in completing the workflow>"
+        "reasoning": "<detailed reasoning: why this step exists, what data it carries, what role it plays in completing the workflow>",
+        "replan_question": "<one-line deferred decision — REQUIRED when kind=replan, omit otherwise>"
       }},
       {{
         "id": "s2",

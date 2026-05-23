@@ -484,28 +484,6 @@ def _render_prior_plan_context(prior_plan: "Optional[Plan]", replan_question: Op
     return "\n".join(lines)
 
 
-_REPLAN_MODE_NOTE = (
-    "\n## Replan checkpoints (available)\n"
-    "You may emit `kind: replan` steps to defer a decision that genuinely "
-    "depends on the **value** returned by an earlier step (a quantity, a "
-    "status, an authorization flag, a returned id). Insert a `replan` step "
-    "with `depends_on=[<source step id>]` and a one-line `replan_question` "
-    "describing the deferred decision. When the deps land, the runtime "
-    "re-invokes you with the captured results so you can emit the "
-    "continuation steps (which will be appended after the replan).\n"
-    "Use sparingly — most conditions can be expressed inside step "
-    "descriptions and skipped by the executor. Reserve `replan` for "
-    "genuinely undecidable branches at plan time (e.g., 'send reorder OR "
-    "skip, based on s1's stock level vs threshold').\n"
-    "Example replan step: `{{\"id\": \"s2\", \"kind\": \"replan\", "
-    "\"target\": \"self\", \"depends_on\": [\"s1\"], \"description\": "
-    "\"Defer decision until s1's quantity is known\", "
-    "\"replan_question\": \"Should we send a reorder request? Decide "
-    "based on s1.result.quantity vs reorder_threshold.\", "
-    "\"reasoning\": \"...\"}}`."
-)
-
-
 def build_planner_prompt(
     definition: ObjectDefinition,
     current_state,  # str (from LLM) or dict (from mock scripts)
@@ -514,7 +492,6 @@ def build_planner_prompt(
     tools: str = "",
     prior_plan: "Optional[Plan]" = None,  # type: ignore[name-defined]
     replan_question: Optional[str] = None,
-    enable_replan_checkpoints: bool = False,
 ) -> str:
     """Build the planner system prompt from `planner_sequential.yaml` (the sequential default).
 
@@ -526,6 +503,11 @@ def build_planner_prompt(
     enriched with the prior plan's completed-step results plus the deferred
     `replan_question`. The planner is expected to emit only the continuation
     steps (which the runtime appends via `add_steps`).
+
+    `replan` is documented as a first-class step kind directly in the
+    planner prompt (see planner_dag.yaml / planner_sequential.yaml). Whether
+    a `kind=replan` step actually fires is controlled at the runtime layer
+    by `SystemConfig.enable_replan_checkpoints`, not here.
     """
     config = _load_prompt_config(prompt_file)
     template = config["system_prompt"]
@@ -539,7 +521,6 @@ def build_planner_prompt(
         state_str = "(empty)"
 
     prior_plan_context = _render_prior_plan_context(prior_plan, replan_question)
-    replan_mode_note = _REPLAN_MODE_NOTE if enable_replan_checkpoints else ""
 
     return template.format(
         object_id=definition.object_id,
@@ -552,7 +533,6 @@ def build_planner_prompt(
         message_type=getattr(message, "type", "(unknown)").value if hasattr(getattr(message, "type", None), "value") else str(getattr(message, "type", "")),
         message_content=str(getattr(message, "content", "")),
         prior_plan_context=prior_plan_context,
-        replan_mode_note=replan_mode_note,
     )
 
 
