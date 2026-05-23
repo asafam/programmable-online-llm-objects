@@ -298,7 +298,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-23 (v42): companion bump for evaluate.py v37 — reactive_replan_max_per_trace added. Baseline logic unchanged.
+_VERSION: str = _build_version()  # bumped 2026-05-23 (v44): companion bump for evaluate.py v40 — enable_step_retry_replan on by default. Baseline logic unchanged.
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
@@ -617,10 +617,14 @@ async def _ensure_worker_healthy(worker: "WorkerConfig") -> bool:
         raise RuntimeError(f"[{worker.name}] Mock server not ready after restart")
 
     # Wait for gateway to be stable (the entrypoint writes a fresh template
-    # config on startup, which triggers config overwrites over ~5s)
+    # config on startup, which triggers config overwrites over ~5s).
+    # 120s matches the per-TC config-patch wait (line 2504): under CPU
+    # contention, gateway-ready can slip from ~12s to 80s+ (see commit
+    # 2f17cbc), so the previous 45s budget fired before the gateway came
+    # back and surfaced as "gateway did not become ready within 45s".
     await _wait_for_gateway(
         worker.gateway_url, None,
-        timeout_s=45.0, stable_for_s=5.0,
+        timeout_s=120.0, stable_for_s=5.0,
     )
     tqdm.write(f"  [{worker.name}] Container recovered.")
     return True  # restarted — caller must re-configure agents

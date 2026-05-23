@@ -166,7 +166,7 @@ class SystemConfig:
     # that step), the originating step is marked failed and the plan's status
     # is flipped to "failed" so the trace concludes gracefully. Independent of
     # enable_replan_checkpoints; safe to enable either, both, or neither.
-    enable_step_retry_replan: bool = False
+    enable_step_retry_replan: bool = True
     step_max_retries: int = 2
     step_replan_max: int = 1
     reactive_replan_max_per_trace: int = 4  # total synthetic replans allowed per trace
@@ -206,7 +206,7 @@ class SystemConfig:
             planner_mode=planner_mode,
             enable_replan_checkpoints=bool(data.get("enable_replan_checkpoints", False)),
             replan_max_per_trace=int(data.get("replan_max_per_trace", 3)),
-            enable_step_retry_replan=bool(data.get("enable_step_retry_replan", False)),
+            enable_step_retry_replan=bool(data.get("enable_step_retry_replan", True)),
             step_max_retries=int(data.get("step_max_retries", 2)),
             step_replan_max=int(data.get("step_replan_max", 1)),
             reactive_replan_max_per_trace=int(data.get("reactive_replan_max_per_trace", 4)),

@@ -55,7 +55,7 @@ replan_max_per_trace: 3
 # failed and the plan's status flips to "failed" so the trace concludes
 # gracefully. Independent of enable_replan_checkpoints — safe to enable
 # either, both, or neither.
-enable_step_retry_replan: false
+enable_step_retry_replan: true
 step_max_retries: 2
 step_replan_max: 1
 reactive_replan_max_per_trace: 4  # total synthetic replans per trace; prevents plan explosion

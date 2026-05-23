@@ -69,7 +69,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-23 (v38): companion bump for evaluate_baseline.py v41 (TC-boundary quiescence). LNL logic unchanged.
+_VERSION: str = _build_version()  # bumped 2026-05-23 (v40): enable_step_retry_replan on by default.
 
 from src.data.schema import (
     EvalSummary,
@@ -429,7 +429,7 @@ def _execute_test_case_inner(
     planner_mode: str = "dag",
     enable_replan_checkpoints: bool = False,
     replan_max_per_trace: int = 3,
-    enable_step_retry_replan: bool = False,
+    enable_step_retry_replan: bool = True,
     step_max_retries: int = 2,
     step_replan_max: int = 1,
     reactive_replan_max_per_trace: int = 4,
@@ -1210,7 +1210,7 @@ def execute_test_case(
     planner_mode: str = "dag",
     enable_replan_checkpoints: bool = False,
     replan_max_per_trace: int = 3,
-    enable_step_retry_replan: bool = False,
+    enable_step_retry_replan: bool = True,
     step_max_retries: int = 2,
     step_replan_max: int = 1,
     reactive_replan_max_per_trace: int = 4,
@@ -1856,7 +1856,7 @@ def run(args: argparse.Namespace) -> Path:
                 planner_mode=getattr(args, "planner_mode", "dag"),
                 enable_replan_checkpoints=getattr(args, "enable_replan_checkpoints", False),
                 replan_max_per_trace=getattr(args, "replan_max", 3),
-                enable_step_retry_replan=getattr(args, "enable_step_retry_replan", False),
+                enable_step_retry_replan=getattr(args, "enable_step_retry_replan", True),
                 step_max_retries=getattr(args, "step_max_retries", 2),
                 step_replan_max=getattr(args, "step_replan_max", 1),
                 reactive_replan_max_per_trace=getattr(args, "reactive_replan_max_per_trace", 4),
@@ -1943,7 +1943,7 @@ def run(args: argparse.Namespace) -> Path:
         concurrency=getattr(args, "concurrency", None),
         modifications=getattr(args, "modifications", None),
         is_continuation=is_continuation,
-        enable_step_retry_replan=getattr(args, "enable_step_retry_replan", False),
+        enable_step_retry_replan=getattr(args, "enable_step_retry_replan", True),
         step_max_retries=getattr(args, "step_max_retries", 2),
         step_replan_max=getattr(args, "step_replan_max", 1),
         reactive_replan_max_per_trace=getattr(args, "reactive_replan_max_per_trace", 4),
@@ -2629,7 +2629,7 @@ Examples:
         "--enable-step-retry-replan",
         action=argparse.BooleanOptionalAction,
         dest="enable_step_retry_replan",
-        default=False,
+        default=True,
         help=(
             "Reactive step-retry escalation: when the post-execution evaluator "
             "invalidates the same plan step --step-max-retries times in a row, "
