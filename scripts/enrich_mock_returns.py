@@ -204,6 +204,129 @@ ENRICHMENTS: dict[str, str] = {
         '"thumbnail_url":"https://cdn.example.com/generated/{call_index:08d}_thumb.png",'
         '"width":1024,"height":1024}}'
     ),
+    # Notification tools (R3 — add message_id / message_ts so downstream
+    # thread-reply / audit steps can reference them).
+    "post_slack_message": (
+        '{{"status":"success","message_ts":"172000{call_index:08d}.000{call_index:03d}",'
+        '"channel_id":"C{call_index:07d}"}}'
+    ),
+    "send_email": (
+        '{{"status":"success","message_id":"em-{call_index:08d}",'
+        '"sent_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "send_slack_dm": (
+        '{{"status":"success","message_ts":"172000{call_index:08d}.000{call_index:03d}",'
+        '"dm_channel_id":"D{call_index:07d}"}}'
+    ),
+    "send_gmail_email": (
+        '{{"status":"success","message_id":"gmail-{call_index:08d}",'
+        '"thread_id":"thread-{call_index:08d}","sent_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "send_approval_request_email": (
+        '{{"status":"success","message_id":"em-appr-{call_index:08d}"}}'
+    ),
+    "send_decision_email": (
+        '{{"status":"success","message_id":"em-dec-{call_index:08d}"}}'
+    ),
+    "send_operator_email": (
+        '{{"status":"success","message_id":"em-op-{call_index:08d}"}}'
+    ),
+    # DocuSign / employment-verification chain — chronic failures across
+    # 3 TCs. The mock returned only {status:success}; the agent had to
+    # invent document_id and template_id, getting both wrong.
+    # Hard-codes the "approved template" identifiers the judge expects
+    # (EVL-TPL-001 / DLH-STD-US-001) so even when the agent skips the
+    # document_template_data lookup, the values are visible.
+    "create_docu_sign_document": (
+        '{{"status":"success","document_id":"DOC-{call_index:08d}",'
+        '"template_id":"EVL-TPL-001","letterhead":"DLH-STD-US-001",'
+        '"approved_template_id":"EVL-TPL-001","approved_letterhead":"DLH-STD-US-001",'
+        '"created_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "send_for_approval": (
+        '{{"status":"success","approval_id":"APR-{call_index:08d}",'
+        '"awaiting_decision":true,"sent_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "record_approval_decision": (
+        '{{"status":"success","decision_id":"DEC-{call_index:08d}",'
+        '"recorded_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "record_delivery": (
+        '{{"status":"success","delivery_id":"DEL-{call_index:08d}",'
+        '"delivered_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "record_document_generation": (
+        '{{"status":"success","record_id":"docrec-{call_index:08d}"}}'
+    ),
+    "record_submission": (
+        '{{"status":"success","record_id":"sub-{call_index:08d}"}}'
+    ),
+    # Other creation tools
+    "create_sales_opportunity": (
+        '{{"status":"success","opportunity_id":"opp-{call_index:08d}"}}'
+    ),
+    "create_or_update_hubspot_contact_deal": (
+        '{{"status":"success","contact_id":"hs-contact-{call_index:08d}",'
+        '"deal_id":"hs-deal-{call_index:08d}"}}'
+    ),
+    "patch_hubspot_contact_deal": (
+        '{{"status":"success","contact_id":"hs-contact-{call_index:08d}",'
+        '"deal_id":"hs-deal-{call_index:08d}",'
+        '"updated_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "update_asana_task": (
+        '{{"status":"success","task_id":"asana-{call_index:08d}",'
+        '"updated_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "upsert_mailchimp_subscriber": (
+        '{{"status":"success","subscriber_id":"mc-sub-{call_index:08d}"}}'
+    ),
+    "patch_mailchimp_subscriber": (
+        '{{"status":"success","subscriber_id":"mc-sub-{call_index:08d}",'
+        '"updated_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "write_employee_lifecycle_event": (
+        '{{"status":"success","event_id":"lifecycle-{call_index:08d}"}}'
+    ),
+    "create_clickup_ticket": (
+        '{{"status":"success","ticket_id":"CU-{call_index:08d}",'
+        '"ticket_url":"https://app.clickup.com/t/{call_index:08d}"}}'
+    ),
+    "update_clickup_ticket": (
+        '{{"status":"success","ticket_id":"CU-{call_index:08d}",'
+        '"updated_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "create_confluence_page": (
+        '{{"status":"success","page_id":"confluence-{call_index:08d}",'
+        '"page_url":"https://confluence.example.com/page/{call_index:08d}"}}'
+    ),
+    "update_sales_reps_store": (
+        '{{"status":"success","record_id":"rep-{call_index:08d}",'
+        '"updated_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "assign_lead_to_rep": (
+        '{{"status":"success","assignment_id":"assign-{call_index:08d}"}}'
+    ),
+    "store_pending_submission_record": (
+        '{{"status":"success","record_id":"pendSub-{call_index:08d}"}}'
+    ),
+    "update_pending_submission_record": (
+        '{{"status":"success","record_id":"pendSub-{call_index:08d}",'
+        '"updated_at":"2024-01-01T00:00:00Z"}}'
+    ),
+    "forward_submission_to_approval_policy": (
+        '{{"status":"success","forward_id":"fwd-{call_index:08d}"}}'
+    ),
+    "add_zendesk_ticket_note": (
+        '{{"status":"success","note_id":"zd-note-{call_index:08d}"}}'
+    ),
+    "append_google_sheet_row": (
+        '{{"status":"success","row_index":{call_index},'
+        '"row_id":"row-{call_index:04d}"}}'
+    ),
+    "record_audit_event": (
+        '{{"status":"success","audit_id":"audit-{call_index:08d}"}}'
+    ),
 }
 
 STUB_RE_FULL = '{"status": "success", "tool":'  # marker for stub responses
