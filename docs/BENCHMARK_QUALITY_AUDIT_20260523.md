@@ -311,6 +311,42 @@ These probably need targeted hand-patches or accept-as-known-issues.
 
 ---
 
+## Path B experiment — cross-event ID matching (REVERTED)
+
+After v7, attempted to flip more `causal_orphan` cases by adding a rule:
+*"Before finalizing each expect, scan inputs of LATER events for specific IDs
+(thread IDs, case IDs, record IDs). If a later event references an ID that
+THIS event's processing would create, USE that exact ID in the expect."*
+
+Regenerated expects for the 75 samples with at least one `causal_orphan` flag.
+
+Result (v8):
+
+| Code | v7 | v8 (Path B) | Δ |
+|---|---|---|---|
+| `causal_orphan` | 131 | 107 | **-24 (-18%)** ✓ |
+| `sequential_paradox` | 3 | 9 | **+6** ✗ |
+| `expect_leak` | 4 | 8 | **+4** ✗ |
+| `mod_effect_not_reflected` | 12 | 14 | +2 |
+| CLEAN | 381 | 388 | +7 |
+| PARADOX | 3 | 8 | +5 |
+| INCOMPLETE | 4 | 5 | +1 |
+
+The rule worked for its stated purpose (-18% on `causal_orphan`) but the LLM
+**over-applied** — when scanning future events for IDs, it also pulled in
+future decisions and outcomes, creating new leakage and paradox defects.
+
+**Decision: revert.** +7 CLEAN at the cost of +6 worst-tail samples isn't a
+net win when the worst-tail samples are *truly broken* (paradox) vs
+*narrowly imperfect* (mild causal_orphan). Backup at
+`workflows-mods.jsonl.before_pathB_044144` was restored.
+
+A tighter version of the rule (strictly IDs only, no decisions / outcomes /
+status fields) might avoid the regressions, but the experiment wasn't pursued
+in this session.
+
+---
+
 ## V7 confirmation run
 
 A second validator pass on the v6 output (`sample_event_validation_v7_confirm.jsonl`)
