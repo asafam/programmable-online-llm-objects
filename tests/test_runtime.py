@@ -705,7 +705,7 @@ class TestAdminEdgeCases:
 
         rt.send_admin("worker", "Update role.")
 
-        history = rt._bus.objects["worker"]._history
+        history = rt._bus.objects["worker"].history
         assert any(m.content == "Update role." for m in history)
         assert any(m.type.name == "ADMIN" for m in history)
 

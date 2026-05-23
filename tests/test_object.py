@@ -595,3 +595,220 @@ class TestSinkShimMergeSemantics:
             "expected the [sink_shim] telemetry line; got: "
             + repr([r.message for r in caplog.records])
         )
+
+
+class TestHistoryTaskGrouping:
+    """Task-grouped history: entries are tagged with the Plan.id that owned
+    their processing; the bucket is flushed when the plan terminates."""
+
+    def _msg(self, content: str, trace_id: str, sender: str = "__user__", msg_type: MessageType = MessageType.DOMAIN) -> Message:
+        return Message(
+            sender=sender,
+            recipient="test-obj",
+            type=msg_type,
+            content=content,
+            id=f"m-{trace_id}-{content}",
+            trace_id=trace_id,
+        )
+
+    def _inject_plan(self, obj, trace_id: str, steps=None, status: str = "active"):
+        """Inject a Plan directly into _active_plans, bypassing the planner.
+        Returns the Plan so the test can read .id."""
+        from src.lnl.types import Plan, PlanStep
+        plan_steps = steps if steps is not None else [
+            PlanStep(id="s1", kind="reason", description="placeholder", status="planned"),
+        ]
+        plan = Plan(goal="test goal", steps=list(plan_steps), status=status, trace_id=trace_id)
+        with obj._plans_lock:
+            obj._active_plans[trace_id] = plan
+        with obj._planned_traces_lock:
+            obj._planned_traces.add(trace_id)
+        return plan
+
+    def _make_obj(self, **kwargs):
+        brain = MockBrain()
+        brain.set_default(LLMResponse(updated_state={}, reply="ok"))
+        defaults = dict(enable_planner=False, enable_evaluator=False)
+        defaults.update(kwargs)
+        return LLMObject(_make_definition(), brain, **defaults), brain
+
+    def test_history_property_returns_messages(self):
+        """Back-compat: obj.history still yields list[Message]."""
+        obj, _ = self._make_obj()
+        obj.process_message(_user_msg("hello"))
+        hist = obj.history
+        assert len(hist) == 1
+        assert hist[0].content == "hello"
+        assert isinstance(hist[0], Message)
+
+    def test_history_entries_property_returns_entries(self):
+        obj, _ = self._make_obj()
+        obj.process_message(_user_msg("hello"))
+        entries = obj.history_entries
+        assert len(entries) == 1
+        assert entries[0].message.content == "hello"
+
+    def test_orphan_bucket_when_no_plan(self):
+        """With planner disabled, no plan exists → entries land in the
+        orphan (task_id=None) bucket."""
+        obj, _ = self._make_obj()
+        obj.process_message(_user_msg("x"))
+        entries = obj.history_entries
+        assert len(entries) == 1
+        assert entries[0].task_id is None
+
+    def test_history_tagged_with_plan_id_when_plan_active(self):
+        obj, _ = self._make_obj()
+        plan = self._inject_plan(obj, trace_id="t-A")
+        obj.process_message(self._msg("first", trace_id="t-A"))
+        entries = obj.history_entries
+        assert len(entries) == 1
+        assert entries[0].task_id == plan.id
+
+    def test_reply_continuation_reuses_task_id(self):
+        obj, _ = self._make_obj()
+        plan = self._inject_plan(obj, trace_id="t-A")
+        obj.process_message(self._msg("first", trace_id="t-A"))
+        obj.process_message(self._msg("follow-up", trace_id="t-A", sender="peer-x", msg_type=MessageType.REPLY))
+        entries = obj.history_entries
+        assert len(entries) == 2
+        assert entries[0].task_id == plan.id
+        assert entries[1].task_id == plan.id
+
+    def test_two_concurrent_traces_distinct_task_ids(self):
+        obj, _ = self._make_obj()
+        plan_a = self._inject_plan(obj, trace_id="t-A")
+        plan_b = self._inject_plan(obj, trace_id="t-B")
+        assert plan_a.id != plan_b.id  # distinct auto-minted ids
+        obj.process_message(self._msg("on-A", trace_id="t-A"))
+        obj.process_message(self._msg("on-B", trace_id="t-B"))
+        entries = obj.history_entries
+        task_ids = [e.task_id for e in entries]
+        assert plan_a.id in task_ids
+        assert plan_b.id in task_ids
+
+    def test_history_flushed_on_plan_complete(self):
+        """When a plan auto-closes (all steps terminal), its history entries
+        are flushed."""
+        from src.lnl.types import PlanStep
+        obj, _ = self._make_obj()
+        # Plan whose only step is already terminal — auto_close will fire
+        # at the end of the next process_message turn for this trace.
+        plan = self._inject_plan(obj, trace_id="t-A", steps=[
+            PlanStep(id="s1", kind="reason", description="done already", status="done"),
+        ])
+        obj.process_message(self._msg("trigger", trace_id="t-A"))
+        # Plan should be closed and entry flushed.
+        assert obj.plan_for("t-A") is None
+        assert all(e.task_id != plan.id for e in obj.history_entries)
+
+    def test_history_preserved_on_other_trace_when_one_plan_completes(self):
+        """Flushing task A leaves task B's entries intact."""
+        from src.lnl.types import PlanStep
+        obj, _ = self._make_obj()
+        plan_a = self._inject_plan(obj, trace_id="t-A", steps=[
+            PlanStep(id="s1", kind="reason", description="done", status="done"),
+        ])
+        plan_b = self._inject_plan(obj, trace_id="t-B")
+        obj.process_message(self._msg("on-B", trace_id="t-B"))   # tagged plan_b.id, stays
+        obj.process_message(self._msg("on-A", trace_id="t-A"))   # tagged plan_a.id, flushed
+        task_ids = [e.task_id for e in obj.history_entries]
+        assert plan_b.id in task_ids
+        assert plan_a.id not in task_ids
+
+    def test_history_cap_32_total(self):
+        """Total entries never exceed max_history; oldest evicted first."""
+        obj, _ = self._make_obj()  # default max_history=32
+        for i in range(50):
+            obj.process_message(_user_msg(f"m{i}"))
+        entries = obj.history_entries
+        assert len(entries) == 32
+        # Should be the last 32: m18..m49
+        assert entries[0].message.content == "m18"
+        assert entries[-1].message.content == "m49"
+
+    def test_custom_max_history_respected(self):
+        obj, _ = self._make_obj(max_history=5)
+        for i in range(10):
+            obj.process_message(_user_msg(f"m{i}"))
+        assert len(obj.history_entries) == 5
+        assert obj.history_entries[-1].message.content == "m9"
+
+    def test_replan_in_place_keeps_task_id(self):
+        """When the planner re-plans in place (needs_replan=True), Plan.id
+        is preserved, so existing history entries remain correctly tagged."""
+        from src.lnl.types import PlanStep
+        brain = MockBrain()
+        brain.set_default(LLMResponse(updated_state={}, reply="ok"))
+        # Script a replacement plan dict for the planner.
+        brain.script_plan(
+            {
+                "goal": "replanned",
+                "steps": [
+                    {"kind": "reason", "description": "step after replan"},
+                ],
+            },
+            object_id="test-obj",
+        )
+        obj = LLMObject(
+            _make_definition(), brain,
+            enable_planner=True, enable_evaluator=False,
+        )
+        plan = self._inject_plan(obj, trace_id="t-A", steps=[
+            PlanStep(id="s1", kind="reason", description="pre-replan", status="planned"),
+        ])
+        original_id = plan.id
+        obj.process_message(self._msg("first", trace_id="t-A"))
+        entry_before = obj.history_entries[-1]
+        assert entry_before.task_id == original_id
+        # Mark plan as needs_replan; next DOMAIN turn re-plans in place.
+        with obj._plans_lock:
+            obj._active_plans["t-A"].needs_replan = True
+        obj.process_message(self._msg("second", trace_id="t-A"))
+        # Plan.id unchanged after replan.
+        assert obj.plan_for("t-A") is not None
+        assert obj.plan_for("t-A").id == original_id
+        # Both history entries share the same task_id.
+        ids = [e.task_id for e in obj.history_entries]
+        assert ids[-2] == original_id
+        assert ids[-1] == original_id
+
+    def test_build_chat_messages_groups_by_task(self):
+        """_build_chat_messages renders history grouped by task_id with
+        task headers; orphan bucket gets '-- Other --'."""
+        from src.lnl.brain import _build_chat_messages
+        from src.lnl.types import HistoryEntry
+        history = [
+            HistoryEntry(message=self._msg("a1", trace_id="t-A"), task_id="taskAAAA1234"),
+            HistoryEntry(message=self._msg("b1", trace_id="t-B"), task_id="taskBBBB5678"),
+            HistoryEntry(message=self._msg("a2", trace_id="t-A"), task_id="taskAAAA1234"),
+            HistoryEntry(message=self._msg("orphan", trace_id="t-C"), task_id=None),
+        ]
+        msgs = _build_chat_messages("sys", history, self._msg("new", trace_id="t-D"))
+        # Find the past-messages user message.
+        past = next(m for m in msgs if m["role"] == "user" and "[Past messages" in m["content"])
+        content = past["content"]
+        # Headers present, in first-occurrence order.
+        idx_a = content.find("-- Task taskAAAA")
+        idx_b = content.find("-- Task taskBBBB")
+        idx_other = content.find("-- Other --")
+        assert idx_a >= 0 and idx_b >= 0 and idx_other >= 0
+        assert idx_a < idx_b < idx_other
+        # Both A entries appear under the A header (i.e. before B starts).
+        a1_pos = content.find("a1")
+        a2_pos = content.find("a2")
+        assert idx_a < a1_pos < idx_b
+        assert idx_a < a2_pos < idx_b
+
+    def test_snapshot_exposes_history_task_ids(self):
+        obj, _ = self._make_obj()
+        plan = self._inject_plan(obj, trace_id="t-A")
+        obj.process_message(self._msg("x", trace_id="t-A"))
+        snap = obj.snapshot()
+        assert snap["history_length"] == 1
+        assert snap["history_task_ids"] == [plan.id]
+
+    def test_default_max_history_is_32(self):
+        """Regression: the new default cap is 32 (was 6)."""
+        obj, _ = self._make_obj()
+        assert obj._max_history == 32

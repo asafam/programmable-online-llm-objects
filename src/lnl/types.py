@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import secrets
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
@@ -369,6 +370,10 @@ class Plan:
     """An active or terminated plan, scoped to one trace_id. Multiple plans
     may coexist on a single object — one per concurrent cascade."""
     goal: str
+    # Stable per-plan identifier — survives replan-in-place; used to tag
+    # HistoryEntry rows so history can be grouped by task and flushed when
+    # the plan terminates.
+    id: str = field(default_factory=lambda: secrets.token_hex(8))
     steps: list[PlanStep] = field(default_factory=list)
     status: str = "active"               # "active" | "waiting" | "complete" | "cancelled" | "abandoned" | "failed"
     trace_id: Optional[str] = None       # cascade this plan belongs to
@@ -400,6 +405,18 @@ class Plan:
     # dispatching, replacing plan.steps and clearing the flag. State and
     # accumulated_deltas are preserved across the re-plan.
     needs_replan: bool = False
+
+
+@dataclass
+class HistoryEntry:
+    """A past message in an LLM-object's history, tagged with the Plan.id of
+    the task that owned its processing.
+
+    task_id == None means the message arrived outside any plan (admin
+    messages, broadcasts, or DOMAIN messages handled with planner disabled).
+    """
+    message: Message
+    task_id: Optional[str] = None
 
 
 @dataclass
