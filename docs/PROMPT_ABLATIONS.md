@@ -2277,3 +2277,90 @@ In priority order:
 3. **Multi-run + larger-sample baseline.** 100 TCs × 3 runs would
    give ME ±0.033 — finally enough to detect ±3pt prompt deltas. The
    prompt iteration loop is unusable below this resolution.
+
+## 2026-05-23 — Mock data enrichment R1: chronic Jira/Drive TCs unblocked
+
+Pivot from prompt iteration to data iteration after the base-step
+loop's R3 inspection showed lead-router and form-jira fail because
+mock tools return `{"status":"success"}` with no usable id/url/key.
+No prompt rule can synthesize a value the mock didn't return.
+
+Wrote `scripts/enrich_mock_returns.py` to replace stub response
+templates with realistic payloads. 31 tool_names targeted, 474 stub
+templates across 318 TCs (most tools recur across mod-type variants).
+Uses the existing `{call_index}` interpolation so templates stay
+robust regardless of call args.
+
+| Tool | Was | Now (synthesized via {call_index}) |
+|---|---|---|
+| `create_jira_issue` | `{status:success}` | + `issue_key:"ITHELP-NNNN"`, `issue_url:"…/browse/ITHELP-NNNN"` |
+| `upload_google_drive_file` | same | + `file_id:"1DrvNNNNNNNN"`, `file_url:"…/view"`, `upload_timestamp` |
+| `create_airtable_record` | same | + `record_id:"recNNNNNNNN"`, `created_at` |
+| `create_asana_task` | same | + `task_id`, `task_url` |
+| `create_notion_database_item` | same | + `page_id`, `page_url` |
+| `create_github_issue` | same | + `issue_number`, `issue_url` |
+| etc. for 25+ more | same | similar realistic payloads |
+
+Validation on the random-100 TC subset:
+
+|  | Mean | Inconclusive |
+|---|---:|---:|
+| HEAD baseline | 0.5791 | 25 |
+| Mock-enriched | 0.5638 | 41 |
+
+Same-event diff: 53 FAIL→PASS, 77 PASS→FAIL, **−24 net**.
+
+But: 130 events flipped out of 576 = **22.6% churn — BELOW the 31.6%
+identical-code variance** measured in R5-replication. The aggregate
+is statistically indistinguishable from re-running HEAD.
+
+### Targeted-subset wins (the actual signal)
+
+| TC | HEAD | Mock-enriched | |
+|---|---|---|---|
+| form-jira-temporal | 0/1 | **1/1** | ✓ FIXED |
+| form-jira-correction | 0/1 | **1/1** | ✓ FIXED |
+| form-jira-exception | 0/1 | **1/1** | ✓ FIXED |
+| engineering-work-intake-slack-jira-removal | 0/1 | **1/1** | ✓ FIXED |
+| engineering-work-intake-slack-jira-exception | 0/1 | **1/1** | ✓ FIXED |
+
+**All 5 chronic Jira-pattern TCs FIXED.** These had failed across EVERY
+single round of the entire session — 11 rounds of prompt iteration
+couldn't move them; one data change resolved them all.
+
+The form-jira × 3 cluster is particularly clean: across HEAD/Base-R1/
+Base-R2 it had failed three different ways (`<unknown>` placeholder →
+upstream-ID substitution → skipped dispatch entirely), each new prompt
+rule closing one fabrication tactic and the agent finding another. The
+mock fix removes the underlying gap that caused all three.
+
+### The lesson
+
+The dominant performance ceiling on this dataset is mock-data
+integration. A workflow whose downstream steps need an `issue_key` or
+`file_url` cannot complete reliably if the mock tool that should
+produce that key/URL returns nothing useful. The agent has only two
+options — fabricate (failing) or skip (also failing) — and prompt
+rules can only choose which failure mode to prefer.
+
+One ~$25 data-engineering pass unlocked 5 chronically-failing TCs
+that 11 rounds of prompt iteration couldn't. Going forward, the
+ratio of mock improvements : prompt rounds should heavily favor mock
+work until the remaining mock-data ceilings are closed.
+
+### Remaining inconclusive categories worth attacking next
+
+From the 41 inconclusive TCs on the mock-enriched run (note: the
+specific TC list changed slightly vs HEAD due to stochasticity):
+
+- **Content truncation** (~5 TCs): agent fragments long fields across
+  messages. Model-level limitation — could try a model upgrade or a
+  prompt rule about "complete content per message" (already noted in
+  prior session lessons).
+- **Wrong count / wrong identifier lookup** (~3 TCs): brand-monitoring
+  reports wrong negative-mention counts, granola assigns wrong
+  follow-up owners. Need richer mock reference-data tools (the
+  `*_data` lookups) — current ones may not carry the data the agent
+  needs to disambiguate.
+- **Infra-error TCs** (~8 still): mock-server / content-filter
+  issues. Separate axis from prompt or mock-tool quality.
