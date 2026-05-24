@@ -479,13 +479,13 @@ def load_tc_object_counts(source_path: Path) -> dict[str, int]:
 
 def _object_bin(n: int) -> str:
     """Bin object count into readable buckets."""
-    if n <= 4:   return "3–4"
-    if n <= 6:   return "5–6"
-    if n <= 8:   return "7–8"
+    if n == 3:   return "3"
+    if n <= 5:   return "4–5"
+    if n <= 8:   return "6–8"
     return "9+"
 
 
-_BIN_ORDER = ["3–4", "5–6", "7–8", "9+"]
+_BIN_ORDER = ["3", "4–5", "6–8", "9+"]
 
 
 def compute_table_by_objects(path: Path, tc_objects: dict[str, int]) -> dict[str, dict]:
