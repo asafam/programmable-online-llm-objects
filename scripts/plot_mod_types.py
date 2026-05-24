@@ -705,7 +705,7 @@ def plot_by_objects_single(
     if not bins_present:
         return
 
-    fig, ax = plt.subplots(figsize=(6.0, 4.0))
+    fig, ax = plt.subplots(figsize=(9.5, 4.5))
     _apply_style(fig, ax, p)
     colors = p["colors"]
     x = np.arange(len(bins_present))
