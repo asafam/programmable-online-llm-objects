@@ -708,8 +708,9 @@ class Runtime:
                 exc_str = str(exc).lower()
                 _INFRA_EXC_MARKERS = (
                     "content filter", "finish_reason=length", "stop_reason=max_tokens",
-                    # Azure / OpenAI provider 5xx — provider failure, not agent behavior.
-                    "http 500", "http 503", "5xx", "internal server error", "service unavailable",
+                    # Any HTTP 4xx/5xx from the provider — auth (401), quota (429),
+                    # schema rejection (400), server errors (500/503), etc.
+                    "http 4", "http 5", "5xx", "internal server error", "service unavailable",
                 )
                 if any(m in exc_str for m in _INFRA_EXC_MARKERS):
                     logger.warning("Error reading object %s: %s", _oid, exc)

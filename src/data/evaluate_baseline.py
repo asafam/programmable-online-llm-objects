@@ -336,7 +336,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-23 (v44): companion bump for evaluate.py v40 — enable_step_retry_replan on by default. Baseline logic unchanged.
+_VERSION: str = _build_version()  # bumped 2026-05-24 (v45): classify all HTTP 4xx/5xx as infra_provider — covers auth (401), quota (429), schema (400), server errors (500/503) and any future provider HTTP errors without needing per-code additions.
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
@@ -393,8 +393,11 @@ _INFRA_PROVIDER_PATTERNS: list[str] = [
     # reasoning. Classified as infra_provider so it doesn't pollute behavioral.
     "rejected the request schema", "provider rejected the request",
     "llm request failed: provider rejected",
-    # Azure HTTP 5xx
-    "http 500", "http 503", "internal server error", "5xx", "azure openai response truncated",
+    # Any HTTP 4xx / 5xx from the provider — auth failures (401), quota (429),
+    # schema rejection (400), server errors (500/503), etc. All indicate the
+    # provider rejected the request before the agent could reason, so they
+    # don't reflect agent quality and should be excluded from pass-rate scoring.
+    "http 4", "http 5", "5xx", "azure openai response truncated",
     # OpenAI/Azure-specific error envelopes
     "openai_error", "azureopenai", "api error", "service unavailable",
 ]

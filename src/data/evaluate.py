@@ -69,7 +69,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-23 (v40): enable_step_retry_replan on by default.
+_VERSION: str = _build_version()  # bumped 2026-05-24 (v41): companion bump — runtime.py now classifies all HTTP 4xx/5xx as infra errors.
 
 from src.data.schema import (
     EvalSummary,
