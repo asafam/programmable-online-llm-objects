@@ -557,12 +557,23 @@ def compute_table_by_objects(path: Path, tc_objects: dict[str, int]) -> dict[str
     # These represent complete failures (system broke before writing any record).
     # Count them as base=False so the denominator equals the full source dataset
     # and the curve reflects true completion rate, not just attempted-TCs rate.
+    #
+    # Guard: only inject when coverage >= 70%. Below that threshold, absent TCs
+    # are "not yet evaluated" (partial run), not failed. Injecting them would
+    # inflate the failure denominator with phantom results.
     tc_ids_in_eval: set[str] = {tc_id for b_data in by_bin.values() for tc_id in b_data}
-    for tc_id, n_obj in tc_objects.items():
-        if tc_id not in tc_ids_in_eval:
-            b = _object_bin(n_obj)
-            by_bin[b][tc_id][0]["base"].append(False)
-            by_bin[b][tc_id][0]["mean"].append(False)
+    n_source  = len(tc_objects)
+    n_in_eval = len(tc_ids_in_eval)
+    coverage  = n_in_eval / n_source if n_source else 0.0
+    if coverage >= 0.70:
+        for tc_id, n_obj in tc_objects.items():
+            if tc_id not in tc_ids_in_eval:
+                b = _object_bin(n_obj)
+                by_bin[b][tc_id][0]["base"].append(False)
+                by_bin[b][tc_id][0]["mean"].append(False)
+    else:
+        print(f"  [by-objects] coverage={coverage:.0%} ({n_in_eval}/{n_source} TCs) — "
+              f"partial run, skipping absent-TC injection")
 
     out: dict[str, dict] = {}
     for b, tcs in by_bin.items():
