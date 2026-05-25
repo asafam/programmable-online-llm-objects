@@ -1747,7 +1747,8 @@ async def _execute_tc_async(
 
     # Reset state before run.
     if single_agent_id:
-        reset_single_agent_state(tc.objects, openclaw_home, single_agent_id)
+        # Steps-based single-agent mode: pass the Sample (uses tc.steps), not tc.objects.
+        reset_single_agent_state(tc, openclaw_home, single_agent_id)
     else:
         for obj in tc.objects:
             reset_agent_state(f"{obj.object_id}{slot_suffix}", obj.state_description, openclaw_home)
@@ -2794,7 +2795,8 @@ async def _run_all_tcs_concurrent(
                             if not seen_exports_per_slot[slot]:
                                 await asyncio.sleep(slot * 2.0)
                             if single_agent_id:
-                                export_single_agent_workspace(tc.objects, slot_openclaw_home,
+                                # Steps-based single-agent mode: pass Sample (tc.steps used).
+                                export_single_agent_workspace(tc, slot_openclaw_home,
                                                               agent_id=single_agent_id, force=True)
                             else:
                                 export_workflow_from_objects(tc.objects, slot_openclaw_home,
@@ -3584,7 +3586,8 @@ def run(args: argparse.Namespace) -> Path:
                 if single_agent_id:
                     tqdm.write(f"  Exporting single agent '{single_agent_id}' for sample {tc.sample_id!r} "
                           f"({len(tc.objects)} objects: {[o.object_id for o in tc.objects]})")
-                    export_single_agent_workspace(tc.objects, openclaw_home, agent_id=single_agent_id, force=True)
+                    # Steps-based single-agent mode: pass Sample (tc.steps used, not tc.objects).
+                    export_single_agent_workspace(tc, openclaw_home, agent_id=single_agent_id, force=True)
                     if agent_model or agent_provider:
                         effective_provider = asyncio.run(_configure_single_openclaw_agent(
                             single_agent_id,

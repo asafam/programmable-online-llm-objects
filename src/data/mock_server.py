@@ -54,6 +54,61 @@ __all__ = [
     "OrchestratorReaction",
 ]
 
+# ── TC-specific → extension generic name aliases ──────────────────────────────
+# When an agent calls a generic name (e.g. slack_send_message) the mock server
+# must serve the TC-specific template (e.g. post_slack_message).  This table
+# maps each known TC tool name → the extension's registered generic name so
+# merge_tc_mock_tools can inject an alias entry.
+_TC_TO_EXTENSION_ALIASES: dict[str, str] = {
+    # Slack
+    "post_slack_message": "slack_send_message",
+    "send_slack_dm": "slack_send_message",
+    # Email / Gmail
+    "send_email": "email_send",
+    "send_gmail_email": "email_send",
+    "send_decision_email": "email_send",
+    "send_approval_request_email": "email_send",
+    "send_operator_email": "email_send",
+    "send_email_notification": "email_send",
+    # Google Sheets
+    "append_sheet_row": "sheets_create_row",
+    "append_google_sheet_row": "sheets_create_row",
+    "update_sheet_row": "sheets_update_row",
+    # Airtable
+    "create_airtable_record": "airtable_create_record",
+    "write_airtable_record": "airtable_create_record",
+    "update_airtable_record": "airtable_update_record",
+    "create_airtable_generated_audio_record": "airtable_create_record",
+    # Asana
+    "create_asana_task": "asana_create_task",
+    "update_asana_task": "asana_update_task",
+    # HubSpot
+    "create_hubspot_contact": "hubspot_create_contact",
+    "update_hubspot_record": "hubspot_update_contact",
+    "create_or_update_hubspot_contact_deal": "hubspot_create_deal",
+    "patch_hubspot_contact_deal": "hubspot_update_deal",
+    # Jira
+    "create_jira_issue": "jira_create_issue",
+    # Google Drive
+    "upload_google_drive_file": "drive_upload_file",
+    # OpenAI / audio
+    "create_openai_voice_generation": "openai_generate_audio",
+    # Zendesk
+    "add_zendesk_ticket_note": "zendesk_add_note",
+    # Webhook / audit / generic write-through
+    "log_audit_event": "webhook_post",
+    "record_audit_event": "webhook_post",
+    "record_jotform_submission": "webhook_post",
+    "publish_claim_link": "webhook_post",
+    "write_employee_lifecycle_event": "webhook_post",
+    "forward_submission_to_approval_policy": "webhook_post",
+    # Salesforce
+    "create_sales_opportunity": "salesforce_create_record",
+    # Mailchimp → webhook (no direct extension equivalent)
+    "upsert_mailchimp_subscriber": "webhook_post",
+    "patch_mailchimp_subscriber": "webhook_post",
+}
+
 # ── Keyword → config file mapping ─────────────────────────────────────────────
 
 _SYSTEM_KEYWORDS: dict[str, str] = {
@@ -194,6 +249,18 @@ def merge_tc_mock_tools(
         )
         for t in tc_mock_tools
     }
+
+    # Inject generic-name aliases so agents calling extension-registered names
+    # (e.g. slack_send_message) get the TC-specific seeded response instead of
+    # the static YAML fallback.  Only add an alias when the generic name is not
+    # already covered by a TC tool of the same name.
+    for tc_name, method_def in list(tc_methods.items()):
+        generic = _TC_TO_EXTENSION_ALIASES.get(tc_name)
+        if generic and generic not in tc_methods:
+            tc_methods[generic] = MockMethodDef(
+                method=generic,
+                immediate=method_def.immediate,
+            )
 
     if script is None:
         return MockScript(systems=[MockSystemDef(system="tc_mock_tools", tools=list(tc_methods.values()))])
