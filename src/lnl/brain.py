@@ -1848,10 +1848,12 @@ class AzureBrain(LLMBrain):
     @staticmethod
     def _raise_if_content_filter(exc: Exception, object_id: str | None) -> None:
         body = getattr(exc, "body", None) or {}
-        code = (body.get("error") or {}).get("code") if isinstance(body, dict) else None
-        if code == "content_filter":
+        err  = (body.get("error") or {}) if isinstance(body, dict) else {}
+        code = err.get("code")
+        msg  = (err.get("message") or "").lower()
+        if code == "content_filter" or "flagged" in msg or "invalid prompt" in msg:
             raise RuntimeError(
-                f"Azure content filter triggered for object {object_id} (jailbreak detection). Skipping."
+                f"Azure content filter triggered for object {object_id} (prompt flagged). Skipping."
             ) from None
 
 

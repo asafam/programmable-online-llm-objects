@@ -480,12 +480,13 @@ def load_tc_object_counts(source_path: Path) -> dict[str, int]:
 def _object_bin(n: int) -> str:
     """Bin object count into readable buckets."""
     if n == 3:   return "3"
-    if n <= 5:   return "4–5"
-    if n <= 8:   return "6–8"
-    return "9+"
+    if n == 4:   return "4"
+    if n == 5:   return "5"
+    if n == 6:   return "6"
+    return "7+"
 
 
-_BIN_ORDER = ["3", "4–5", "6–8", "9+"]
+_BIN_ORDER = ["3", "4", "5", "6", "7+"]
 
 
 def compute_table_by_objects(path: Path, tc_objects: dict[str, int]) -> dict[str, dict]:
@@ -530,15 +531,17 @@ def compute_table_by_objects(path: Path, tc_objects: dict[str, int]) -> dict[str
             ri = d.get("run_index", 0)
 
             for e in (d.get("events") or []):
-                # Apply pass_strict semantics:
-                #   - infra_error or oc_eval/infra_provider → fail
+                # pass_strict semantics:
                 #   - passed=None + no infra signal → skip (no verdict)
-                #   - passed=None + infra signal → fail (broken before judge)
+                #   - passed=None + infra signal    → fail (broken before judge ran)
+                #   - passed=True/False, infra=True → trust the judge verdict;
+                #     tc-level infra contamination can mark downstream events as
+                #     infra_error=True even when the judge ran and they passed.
                 infra = e.get("infra_error") or _classify_event(e) in ("oc_eval", "infra_provider")
                 raw_passed = e.get("passed")
                 if raw_passed is None and not infra:
                     continue
-                passed = False if infra else bool(raw_passed)
+                passed = False if raw_passed is None else bool(raw_passed)
 
                 role = e.get("role")
                 if role is None:
@@ -637,6 +640,119 @@ def compute_table_by_objects(path: Path, tc_objects: dict[str, int]) -> dict[str
     return out
 
 
+def compute_heatmap_by_objects(path: Path, tc_objects: dict[str, int]) -> dict[str, dict[str, float]]:
+    """Return {mod_type: {bin_label: completion_pct}} for LNL eval file.
+
+    Completion = fraction of (TC, run) pairs where ALL base events passed.
+    Same pass_strict semantics as compute_table_by_objects.
+    """
+    from collections import defaultdict
+    # mod_type → bin → tc_id → run_index → [base_bool]
+    data: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list))))
+
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line: continue
+            try: d = json.loads(line)
+            except json.JSONDecodeError: continue
+            if "tc_id" not in d: continue
+
+            tc_id = d["tc_id"]
+            mod_type = _extract_mod_type(tc_id)
+            if mod_type is None: continue
+            n_obj = tc_objects.get(tc_id)
+            if n_obj is None: continue
+            b = _object_bin(n_obj)
+            ri = d.get("run_index", 0)
+
+            for e in (d.get("events") or []):
+                if e.get("role") is not None: continue  # base events only (role=None)
+                infra = e.get("infra_error") or _classify_event(e) in ("oc_eval", "infra_provider")
+                raw_passed = e.get("passed")
+                if raw_passed is None and not infra: continue
+                passed = False if raw_passed is None else bool(raw_passed)
+                data[mod_type][b][tc_id][ri].append(passed)
+
+    result: dict[str, dict[str, float]] = {}
+    for mod_type in MOD_TYPES_ORDER:
+        result[mod_type] = {}
+        bins = data.get(mod_type, {})
+        for b in _BIN_ORDER:
+            tc_runs = bins.get(b, {})
+            completions: list[float] = []
+            for tc_id, runs in tc_runs.items():
+                for base_bools in runs.values():
+                    if base_bools:
+                        completions.append(1.0 if all(base_bools) else 0.0)
+            result[mod_type][b] = float(np.mean(completions) * 100) if completions else float("nan")
+    return result
+
+
+def plot_heatmap_by_objects(
+    heatmap_data: dict[str, dict[str, float]],
+    plots_dir: Path,
+    palette: dict,
+    filename: str = "mod_types_heatmap_by_objects.pdf",
+) -> None:
+    """Heatmap: rows=modification types, columns=complexity bins, values=LNL completion %."""
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    p = palette
+
+    rows = MOD_TYPES_ORDER
+    cols = [b for b in _BIN_ORDER if any(
+        not np.isnan(heatmap_data.get(r, {}).get(b, float("nan"))) for r in rows
+    )]
+    if not cols: return
+
+    matrix = np.full((len(rows), len(cols)), float("nan"))
+    for i, mod in enumerate(rows):
+        for j, b in enumerate(cols):
+            v = heatmap_data.get(mod, {}).get(b, float("nan"))
+            matrix[i, j] = v
+
+    fig, ax = plt.subplots(figsize=(len(cols) * 1.4 + 1.5, len(rows) * 0.72 + 1.2))
+    fig.patch.set_facecolor(p["bg"])
+    ax.set_facecolor(p["bg"])
+
+    cmap = plt.cm.RdYlGn
+    im = ax.imshow(matrix, aspect="auto", cmap=cmap, vmin=0, vmax=100)
+
+    # Annotate cells
+    for i in range(len(rows)):
+        for j in range(len(cols)):
+            v = matrix[i, j]
+            if np.isnan(v):
+                txt, color = "—", p["text"]
+            else:
+                txt = f"{v:.0f}%"
+                color = "white" if v < 30 or v > 70 else "black"
+            ax.text(j, i, txt, ha="center", va="center", fontsize=9,
+                    color=color, fontweight="bold")
+
+    ax.set_xticks(range(len(cols)))
+    ax.set_xticklabels([f"{b}" for b in cols], fontsize=10, color=p["text"])
+    ax.set_xlabel("Workflow complexity (#domains)", fontsize=10, color=p["text"])
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([m.capitalize() for m in rows], fontsize=10, color=p["text"])
+    ax.tick_params(colors=p["text"])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    cb = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.04)
+    cb.set_label("Completion rate (%)", fontsize=9, color=p["text"])
+    cb.ax.yaxis.set_tick_params(color=p["text"])
+    plt.setp(cb.ax.yaxis.get_ticklabels(), color=p["text"])
+
+    ax.set_title("LNL workflow completion rate by modification type and workflow complexity",
+                 fontsize=11, color=p["text"], pad=10)
+
+    out = plots_dir / filename
+    fig.savefig(out, bbox_inches="tight", facecolor=p["bg"])
+    plt.close(fig)
+    print(f"  Saved → {out}")
+
+
 def plot_by_objects(
     all_data: dict[str, dict[str, dict]],
     plots_dir: Path,
@@ -686,7 +802,7 @@ def plot_by_objects(
                             color=color, alpha=0.12, linewidth=0, zorder=2)
         ax.set_xticks(x)
         ax.set_xticklabels(bins_present, fontsize=10, color=p["text"])
-        ax.set_xlabel(f"Workflow size (#objects) — {title}", fontsize=10, color=p["text"])
+        ax.set_xlabel(f"Workflow complexity (#domains) — {title}", fontsize=10, color=p["text"])
         ax.set_ylim(0, 100)
         ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0f}%"))
         if ax_idx == 0:
@@ -746,7 +862,7 @@ def plot_by_objects_single(
 
     ax.set_xticks(x)
     ax.set_xticklabels(bins_present, fontsize=10, color=p["text"])
-    ax.set_xlabel("Workflow size (#objects)", fontsize=10, color=p["text"])
+    ax.set_xlabel("Workflow complexity (#domains)", fontsize=10, color=p["text"])
     ax.set_ylabel(title, fontsize=11, color=p["text"])
     ax.set_ylim(0, 100)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0f}%"))
@@ -1193,6 +1309,22 @@ def main() -> None:
                     title="Workflow completion rate",
                     filename="mod_types_by_objects_completion.pdf",
                 )
+                # Heatmap: LNL only (mod-type × complexity bin)
+                if "lnl" in files and files["lnl"].exists():
+                    hm_data = compute_heatmap_by_objects(files["lnl"], tc_objects)
+                    plot_heatmap_by_objects(hm_data, plots_dir, palette)
+                    # Print heatmap table to stdout
+                    header = f"{'':15s}" + "".join(f"  {b:>5s}" for b in _BIN_ORDER)
+                    print(f"\nLNL completion heatmap (mod-type × #domains):\n{header}")
+                    for mod in MOD_TYPES_ORDER:
+                        row_vals = "".join(
+                            f"  {hm_data[mod].get(b, float('nan')):>4.0f}%"
+                            if not np.isnan(hm_data[mod].get(b, float("nan")))
+                            else f"  {'—':>4s} "
+                            for b in _BIN_ORDER
+                        )
+                        print(f"  {mod:13s}{row_vals}")
+
                 # Echo the table to stdout
                 print()
                 print(by_obj_path.read_text())
