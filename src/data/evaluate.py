@@ -69,7 +69,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-24 (v41): companion bump — runtime.py now classifies all HTTP 4xx/5xx as infra errors.
+_VERSION: str = _build_version()  # bumped 2026-05-25 (v42): companion bump — mock_server.py injects generic-name aliases so baseline agents get TC-seeded responses.
 
 from src.data.schema import (
     EvalSummary,

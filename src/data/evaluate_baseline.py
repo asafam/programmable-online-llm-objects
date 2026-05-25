@@ -336,7 +336,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-24 (v45): classify all HTTP 4xx/5xx as infra_provider — covers auth (401), quota (429), schema (400), server errors (500/503) and any future provider HTTP errors without needing per-code additions.
+_VERSION: str = _build_version()  # bumped 2026-05-25 (v46): mock_server.py injects generic-name aliases so agents calling slack_send_message/email_send/etc. get the TC-seeded template instead of "no script configured".
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 
