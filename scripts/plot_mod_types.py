@@ -477,6 +477,25 @@ def load_tc_object_counts(source_path: Path) -> dict[str, int]:
     return out
 
 
+AMBIGUITY_ORDER = ["precise", "implicit", "semantic", "vague"]
+
+
+def load_tc_ambiguity(source_path: Path) -> dict[str, str]:
+    """Read source workflows-mods.jsonl and return {tc_id: ambiguity}."""
+    out: dict[str, str] = {}
+    if not source_path.exists():
+        return out
+    with open(source_path) as f:
+        for line in f:
+            try: tc = json.loads(line)
+            except json.JSONDecodeError: continue
+            tc_id = tc.get("id")
+            mods = tc.get("modifications") or []
+            if tc_id and mods and mods[0].get("ambiguity"):
+                out[tc_id] = mods[0]["ambiguity"]
+    return out
+
+
 def _object_bin(n: int) -> str:
     """Bin object count into readable buckets."""
     if n == 3:   return "3"
@@ -640,14 +659,19 @@ def compute_table_by_objects(path: Path, tc_objects: dict[str, int]) -> dict[str
     return out
 
 
-def compute_heatmap_by_objects(path: Path, tc_objects: dict[str, int]) -> dict[str, dict[str, float]]:
-    """Return {mod_type: {bin_label: completion_pct}} for LNL eval file.
+def compute_heatmap_by_objects(
+    path: Path,
+    tc_objects: dict[str, int],
+    tc_groups: dict[str, str],
+    groups_order: list[str],
+) -> dict[str, dict[str, float]]:
+    """Return {group: {bin_label: completion_pct}} for an LNL eval file.
 
+    tc_groups: {tc_id: group_label} — e.g. mod_type or ambiguity.
     Completion = fraction of (TC, run) pairs where ALL base events passed.
     Same pass_strict semantics as compute_table_by_objects.
     """
     from collections import defaultdict
-    # mod_type → bin → tc_id → run_index → [base_bool]
     data: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict(list))))
 
     with open(path) as f:
@@ -659,33 +683,33 @@ def compute_heatmap_by_objects(path: Path, tc_objects: dict[str, int]) -> dict[s
             if "tc_id" not in d: continue
 
             tc_id = d["tc_id"]
-            mod_type = _extract_mod_type(tc_id)
-            if mod_type is None: continue
+            group = tc_groups.get(tc_id)
+            if group is None: continue
             n_obj = tc_objects.get(tc_id)
             if n_obj is None: continue
             b = _object_bin(n_obj)
             ri = d.get("run_index", 0)
 
             for e in (d.get("events") or []):
-                if e.get("role") is not None: continue  # base events only (role=None)
+                if e.get("role") is not None: continue  # base events only
                 infra = e.get("infra_error") or _classify_event(e) in ("oc_eval", "infra_provider")
                 raw_passed = e.get("passed")
                 if raw_passed is None and not infra: continue
                 passed = False if raw_passed is None else bool(raw_passed)
-                data[mod_type][b][tc_id][ri].append(passed)
+                data[group][b][tc_id][ri].append(passed)
 
     result: dict[str, dict[str, float]] = {}
-    for mod_type in MOD_TYPES_ORDER:
-        result[mod_type] = {}
-        bins = data.get(mod_type, {})
+    for group in groups_order:
+        result[group] = {}
+        bins = data.get(group, {})
         for b in _BIN_ORDER:
             tc_runs = bins.get(b, {})
             completions: list[float] = []
-            for tc_id, runs in tc_runs.items():
+            for runs in tc_runs.values():
                 for base_bools in runs.values():
                     if base_bools:
                         completions.append(1.0 if all(base_bools) else 0.0)
-            result[mod_type][b] = float(np.mean(completions) * 100) if completions else float("nan")
+            result[group][b] = float(np.mean(completions) * 100) if completions else float("nan")
     return result
 
 
@@ -693,23 +717,24 @@ def plot_heatmap_by_objects(
     heatmap_data: dict[str, dict[str, float]],
     plots_dir: Path,
     palette: dict,
+    groups_order: list[str],
+    title: str = "LNL workflow completion rate",
     filename: str = "mod_types_heatmap_by_objects.pdf",
 ) -> None:
-    """Heatmap: rows=modification types, columns=complexity bins, values=LNL completion %."""
+    """Heatmap: rows=groups, columns=complexity bins, values=LNL completion %."""
     plots_dir.mkdir(parents=True, exist_ok=True)
     p = palette
 
-    rows = MOD_TYPES_ORDER
+    rows = groups_order
     cols = [b for b in _BIN_ORDER if any(
         not np.isnan(heatmap_data.get(r, {}).get(b, float("nan"))) for r in rows
     )]
     if not cols: return
 
     matrix = np.full((len(rows), len(cols)), float("nan"))
-    for i, mod in enumerate(rows):
+    for i, grp in enumerate(rows):
         for j, b in enumerate(cols):
-            v = heatmap_data.get(mod, {}).get(b, float("nan"))
-            matrix[i, j] = v
+            matrix[i, j] = heatmap_data.get(grp, {}).get(b, float("nan"))
 
     fig, ax = plt.subplots(figsize=(len(cols) * 1.4 + 1.5, len(rows) * 0.72 + 1.2))
     fig.patch.set_facecolor(p["bg"])
@@ -718,7 +743,6 @@ def plot_heatmap_by_objects(
     cmap = plt.cm.RdYlGn
     im = ax.imshow(matrix, aspect="auto", cmap=cmap, vmin=0, vmax=100)
 
-    # Annotate cells
     for i in range(len(rows)):
         for j in range(len(cols)):
             v = matrix[i, j]
@@ -731,10 +755,10 @@ def plot_heatmap_by_objects(
                     color=color, fontweight="bold")
 
     ax.set_xticks(range(len(cols)))
-    ax.set_xticklabels([f"{b}" for b in cols], fontsize=10, color=p["text"])
+    ax.set_xticklabels(cols, fontsize=10, color=p["text"])
     ax.set_xlabel("Workflow complexity (#domains)", fontsize=10, color=p["text"])
     ax.set_yticks(range(len(rows)))
-    ax.set_yticklabels([m.capitalize() for m in rows], fontsize=10, color=p["text"])
+    ax.set_yticklabels([r.capitalize() for r in rows], fontsize=10, color=p["text"])
     ax.tick_params(colors=p["text"])
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -744,8 +768,7 @@ def plot_heatmap_by_objects(
     cb.ax.yaxis.set_tick_params(color=p["text"])
     plt.setp(cb.ax.yaxis.get_ticklabels(), color=p["text"])
 
-    ax.set_title("LNL workflow completion rate by modification type and workflow complexity",
-                 fontsize=11, color=p["text"], pad=10)
+    ax.set_title(title, fontsize=11, color=p["text"], pad=10)
 
     out = plots_dir / filename
     fig.savefig(out, bbox_inches="tight", facecolor=p["bg"])
@@ -1309,21 +1332,49 @@ def main() -> None:
                     title="Workflow completion rate",
                     filename="mod_types_by_objects_completion.pdf",
                 )
-                # Heatmap: LNL only (mod-type × complexity bin)
+                # Heatmaps: LNL only — one by mod-type, one by ambiguity
                 if "lnl" in files and files["lnl"].exists():
-                    hm_data = compute_heatmap_by_objects(files["lnl"], tc_objects)
-                    plot_heatmap_by_objects(hm_data, plots_dir, palette)
-                    # Print heatmap table to stdout
-                    header = f"{'':15s}" + "".join(f"  {b:>5s}" for b in _BIN_ORDER)
-                    print(f"\nLNL completion heatmap (mod-type × #domains):\n{header}")
-                    for mod in MOD_TYPES_ORDER:
-                        row_vals = "".join(
-                            f"  {hm_data[mod].get(b, float('nan')):>4.0f}%"
-                            if not np.isnan(hm_data[mod].get(b, float("nan")))
-                            else f"  {'—':>4s} "
-                            for b in _BIN_ORDER
+                    tc_ambiguity = load_tc_ambiguity(source_tcs)
+
+                    def _print_heatmap(hm: dict, groups: list[str], label: str) -> None:
+                        header = f"{'':15s}" + "".join(f"  {b:>8s}" for b in _BIN_ORDER)
+                        print(f"\nLNL completion heatmap ({label}):\n{header}")
+                        for grp in groups:
+                            row_vals = "".join(
+                                f"  {hm[grp].get(b, float('nan')):>7.0f}%"
+                                if not np.isnan(hm[grp].get(b, float("nan")))
+                                else f"  {'—':>7s} "
+                                for b in _BIN_ORDER
+                            )
+                            print(f"  {grp:13s}{row_vals}")
+
+                    # Mod-type heatmap
+                    tc_mod_groups = {tc_id: _extract_mod_type(tc_id)
+                                     for tc_id in tc_objects
+                                     if _extract_mod_type(tc_id) is not None}
+                    hm_mod = compute_heatmap_by_objects(
+                        files["lnl"], tc_objects, tc_mod_groups, MOD_TYPES_ORDER)
+                    plot_heatmap_by_objects(
+                        hm_mod, plots_dir, palette,
+                        groups_order=MOD_TYPES_ORDER,
+                        title="LNL workflow completion rate by modification type and workflow complexity",
+                        filename="mod_types_heatmap_by_objects.pdf",
+                    )
+                    _print_heatmap(hm_mod, MOD_TYPES_ORDER, "mod-type × #domains")
+
+                    # Ambiguity heatmap
+                    if tc_ambiguity:
+                        hm_ambig = compute_heatmap_by_objects(
+                            files["lnl"], tc_objects, tc_ambiguity, AMBIGUITY_ORDER)
+                        plot_heatmap_by_objects(
+                            hm_ambig, plots_dir, palette,
+                            groups_order=AMBIGUITY_ORDER,
+                            title="LNL workflow completion rate by modification ambiguity and workflow complexity",
+                            filename="mod_types_heatmap_by_ambiguity.pdf",
                         )
-                        print(f"  {mod:13s}{row_vals}")
+                        _print_heatmap(hm_ambig, AMBIGUITY_ORDER, "ambiguity × #domains")
+                    else:
+                        print("  [warn] no ambiguity data found — skipping ambiguity heatmap")
 
                 # Echo the table to stdout
                 print()
