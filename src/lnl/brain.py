@@ -980,13 +980,28 @@ def _build_chat_messages(
     should strip this entry and pass it separately.
     """
     msgs: list[dict[str, str]] = [{"role": "system", "content": sys_prompt}]
-    if history:
+    # Split history into a leading "past" section (folded into a single user
+    # blob, as before) and trailing ASSISTANT_TURN entries that must round-trip
+    # as real role=assistant messages immediately before the current-turn user
+    # message. The latter exists so that when an async tool dispatch completes
+    # in a future turn, the prompt still contains the LLM's prior tool_call —
+    # otherwise the model sees a tool result with no record of the call it made.
+    trailing_assistant: list[HistoryEntry] = []
+    cutoff = len(history)
+    for i in range(len(history) - 1, -1, -1):
+        if history[i].message.type == MessageType.ASSISTANT_TURN:
+            trailing_assistant.insert(0, history[i])
+            cutoff = i
+        else:
+            break
+    past = history[:cutoff]
+    if past:
         # Two-level grouping — history[task][plan]. Outer by task_id, inner
         # by plan_id (the plan generation). Both groupings preserve first-
         # occurrence order. None task_id renders under "-- Other --"; None
         # plan_id (only the orphan bucket today) skips the inner header.
         task_groups: "dict[Optional[str], dict[Optional[str], list[Message]]]" = {}
-        for entry in history:
+        for entry in past:
             inner = task_groups.setdefault(entry.task_id, {})
             inner.setdefault(entry.plan_id, []).append(entry.message)
         history_lines: list[str] = []
@@ -1005,6 +1020,8 @@ def _build_chat_messages(
                         history_lines.append(f"      [{_message_label(msg)}]: {msg.content}")
         msgs.append({"role": "user", "content": "[Past messages — already reflected in your state]\n" + "\n".join(history_lines)})
         msgs.append({"role": "assistant", "content": "Understood. What is the new message?"})
+    for ent in trailing_assistant:
+        msgs.append({"role": "assistant", "content": ent.message.content})
     if _is_tool_reply(message):
         msgs.append({"role": "user", "content": _render_tool_reply(message)})
     else:

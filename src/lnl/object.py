@@ -1159,7 +1159,7 @@ class LLMObject:
         evaluator_total = InferenceMetrics(model="")
 
         while True:
-            finish, pending_deltas, react_metrics, tools_called = self._run_react_cycle(messages, trace_id, origin_msg=message)
+            finish, pending_deltas, react_metrics, tools_called, assistant_step_json = self._run_react_cycle(messages, trace_id, origin_msg=message)
             tools_called_total.extend(tools_called)
             total_metrics = _accumulate_metrics(total_metrics, react_metrics)
             executor_total = _accumulate_metrics(executor_total, react_metrics)
@@ -1181,6 +1181,26 @@ class LLMObject:
                     plan.accumulated_tools_called.extend(tools_called_total)
                 _t, _p = self._resolve_task_plan_ids(trace_id)
                 self._append_history(message, _t, _p)
+                # Persist the assistant's tool_call as a synthetic
+                # ASSISTANT_TURN history entry so the next turn — triggered
+                # by an inbound tool REPLY — can render it as a real
+                # role=assistant message in the continuation prompt. Without
+                # this, the LLM sees a tool result with no record of the call
+                # it made (the "lost intent / re-dispatch" pattern documented
+                # in runtime.py:138).
+                if assistant_step_json:
+                    synthetic = Message(
+                        sender=self.object_id,
+                        recipient=self.object_id,
+                        type=MessageType.ASSISTANT_TURN,
+                        content=assistant_step_json,
+                        trace_id=trace_id,
+                        depth_remaining=0,
+                        id="",
+                        task_id=_t,
+                        plan_id=_p,
+                    )
+                    self._append_history(synthetic, _t, _p)
                 processing_completed_at = datetime.datetime.now(datetime.timezone.utc)
                 return ProcessingResult(
                     object_id=self.object_id,
@@ -1490,7 +1510,7 @@ class LLMObject:
         messages: list[dict],
         trace_id: Optional[str] = None,
         origin_msg: "Optional[Message]" = None,
-    ) -> "tuple[Optional[ReactFinish], list[StateDelta], InferenceMetrics, list[str]]":
+    ) -> "tuple[Optional[ReactFinish], list[StateDelta], InferenceMetrics, list[str], Optional[str]]":
         """ReAct loop with ASYNC tool dispatch.
 
         When the LLM requests tools AND a registry is configured, tools are
@@ -1507,17 +1527,25 @@ class LLMObject:
         LLM's commitment, not intermediate reasoning. Updates emitted on
         action="tool_call" steps are discarded.
 
-        Returns (finish_or_None, pending_deltas, accumulated_metrics, tools_called):
+        Returns (finish_or_None, pending_deltas, accumulated_metrics, tools_called, assistant_step_json):
         finish is None when tools were dispatched async (caller must wait).
         tools_called is the ordered list of tool names actually dispatched
         during this cycle, surfaced to the evaluator so it can verify that
         plan `tool` steps were executed.
+        assistant_step_json is the JSON-rendered tool_call action that was
+        dispatched async (set only when finish is None and tools were dispatched
+        via the pool); the caller persists it as a synthetic ASSISTANT_TURN
+        history entry so the next process_message turn — triggered by an
+        inbound tool REPLY — can render it as a real role=assistant message in
+        the continuation prompt, restoring the call→result pairing the LLM
+        would otherwise see in sync mode.
         """
         metrics = InferenceMetrics(model="")
         pending_deltas: list[StateDelta] = []
         tool_rounds = 0
         finish: Optional[ReactFinish] = None
         tools_called: list[str] = []
+        assistant_step_json: Optional[str] = None
         # In async mode the ReAct cycle is one-shot: a single LLM call either
         # finishes (returns the finish) or dispatches tools (returns pending,
         # exits the function). No internal looping — the next LLM call only
@@ -1637,6 +1665,21 @@ class LLMObject:
             # surfaced to the LLM on subsequent turns through the rendered
             # active_plan. There is no separate "continuation" conversation —
             # the REPLY is processed as a regular inbound message.
+            #
+            # Capture the assistant's tool_call action as a JSON string mirroring
+            # what sync mode appends inline to the messages list (line ~1598).
+            # The caller persists this as a synthetic ASSISTANT_TURN history
+            # entry so the next process_message turn — triggered by an inbound
+            # tool REPLY — can render it as a real role=assistant message,
+            # restoring the call→result pairing the LLM would otherwise lose.
+            assistant_step_json = json.dumps({
+                "thought": step.thought or "",
+                "action": "tool_call",
+                "tool_calls": [
+                    {"id": t.id, "tool": t.tool, "arguments": t.arguments}
+                    for t in tcs
+                ],
+            })
             with self._lock:
                 self._pending_tool_count += len(tcs)
             if plan is not None:
@@ -1690,9 +1733,9 @@ class LLMObject:
                     )
                     self.deliver(err_reply)  # _pending_tool_count already decremented above
             # Return pending — no finish yet; tool REPLYs arrive via mailbox.
-            return None, pending_deltas, metrics, tools_called
+            return None, pending_deltas, metrics, tools_called, assistant_step_json
 
-        return finish, pending_deltas, metrics, tools_called
+        return finish, pending_deltas, metrics, tools_called, assistant_step_json
 
     def _build_evaluator_feedback_text(self, criteria: list, feedback: str) -> str:
         """Format the evaluator's per-sub-item diagnostics into a user-message
