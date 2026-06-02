@@ -131,7 +131,7 @@ def test_agents_md_contains_role():
     assert "## Role" in md
     assert "## Behavior" in md
     assert "(No specific behavior defined.)" in md
-    assert "(No peers defined.)" in md
+    assert "(No neighbors defined.)" in md
 
 
 def test_agents_md_with_peers():
@@ -142,7 +142,6 @@ def test_agents_md_with_peers():
     )
     md = _agents_md(obj)
     assert "**billing**" in md
-    assert "Handles payments" in md
 
 
 def test_soul_md_first_sentence():

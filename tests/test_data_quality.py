@@ -33,7 +33,6 @@ from src.data.schema import (
     Modification,
     ModType,
     ObjectDef,
-    PeerDecl,
     Step,
     Sample,
 )
@@ -104,7 +103,7 @@ class TestMockDataFieldMismatches:
         tc = Sample(
             id="TC001", name="Ticket routing", domain="support", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="New ticket received from customer", target="ticket-router")],
+            steps=['New ticket received from customer'],
             modifications=[_mod("ticket-router")],
             events=[_event("ticket-router", "Ticket TICK-001 received", "Assign to on-call agent")],
             mock_tools=[mock],
@@ -130,7 +129,7 @@ class TestMockDataFieldMismatches:
         tc = Sample(
             id="TC002", name="Lead processing", domain="sales", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="New lead from Acme Corp", target="crm-handler")],
+            steps=['New lead from Acme Corp'],
             modifications=[_mod("crm-handler")],
             events=[_event("crm-handler", "New lead received", "Process lead")],
             mock_tools=[mock],
@@ -155,7 +154,7 @@ class TestMockDataFieldMismatches:
         tc = Sample(
             id="TC003", name="Ticket routing", domain="support", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="New ticket received from customer", target="ticket-router")],
+            steps=['New ticket received from customer'],
             modifications=[_mod("ticket-router")],
             events=[_event("ticket-router", "Ticket TICK-001 received", "Assign to on-call agent")],
             mock_tools=[mock],
@@ -179,7 +178,7 @@ class TestReadWriteMisclassification:
             role="Triages HR support requests",
             behavior="When a request arrives, query the FAQ knowledge base for a matching answer.",
             event_sources=["slack"],
-            peers=[PeerDecl(object_id="faq-knowledge-base", relationship="Query for answers to employee HR questions")],
+            neighbors=['faq-knowledge-base'],
         )
         obj_b = ObjectDef(
             object_id="faq-knowledge-base",
@@ -189,7 +188,7 @@ class TestReadWriteMisclassification:
         tc = Sample(
             id="TC004", name="HR support", domain="hr", source_type="zapier",
             objects=[obj_a, obj_b],
-            steps=[Step(text="Slack message from Maya Chen: question about parental leave", target="hr-triage")],
+            steps=['Slack message from Maya Chen: question about parental leave'],
             modifications=[_mod("hr-triage")],
             events=[_event("hr-triage", "HR question received", "Reply with FAQ answer")],
             mock_tools=[],
@@ -205,7 +204,7 @@ class TestReadWriteMisclassification:
             role="Checks compliance policies",
             behavior="On each request, lookup applicable policy rules from the policy store.",
             event_sources=["webhook"],
-            peers=[PeerDecl(object_id="policy-store", relationship="Lookup applicable policies for the contract type")],
+            neighbors=['policy-store'],
         )
         obj_b = ObjectDef(
             object_id="policy-store",
@@ -216,7 +215,7 @@ class TestReadWriteMisclassification:
         tc = Sample(
             id="TC005", name="Policy check", domain="compliance", source_type="zapier",
             objects=[obj_a, obj_b],
-            steps=[Step(text="New vendor contract for review: Acme Corp MSA", target="policy-engine")],
+            steps=['New vendor contract for review: Acme Corp MSA'],
             modifications=[_mod("policy-engine")],
             events=[_event("policy-engine", "Contract review requested", "Apply matching policy")],
             mock_tools=[],
@@ -231,7 +230,7 @@ class TestReadWriteMisclassification:
             role="Routes support tickets",
             behavior="On each ticket, query the directory service to get the on-call agent.",
             event_sources=["zendesk"],
-            peers=[PeerDecl(object_id="org-directory", relationship="Query for the on-call agent for the relevant team")],
+            neighbors=['org-directory'],
         )
         obj_b = ObjectDef(
             object_id="org-directory",
@@ -242,7 +241,7 @@ class TestReadWriteMisclassification:
         tc = Sample(
             id="TC006", name="Ticket routing", domain="support", source_type="zapier",
             objects=[obj_a, obj_b],
-            steps=[Step(text="High-priority ticket from Acme Corp", target="ticket-router")],
+            steps=['High-priority ticket from Acme Corp'],
             modifications=[_mod("ticket-router")],
             events=[_event("ticket-router", "Ticket arrived", "Route to on-call agent")],
             mock_tools=[],
@@ -256,7 +255,7 @@ class TestReadWriteMisclassification:
             role="Scores incoming leads",
             behavior="On each lead, retrieve account data and score based on firmographics.",
             event_sources=["hubspot"],
-            peers=[PeerDecl(object_id="crm-data-service", relationship="Retrieve account details for the incoming lead")],
+            neighbors=['crm-data-service'],
         )
         obj_b = ObjectDef(
             object_id="crm-data-service",
@@ -267,7 +266,7 @@ class TestReadWriteMisclassification:
         tc = Sample(
             id="TC007", name="Lead scoring", domain="sales", source_type="zapier",
             objects=[obj_a, obj_b],
-            steps=[Step(text="New lead: Jane Smith, jane@acme.com", target="lead-scorer")],
+            steps=['New lead: Jane Smith, jane@acme.com'],
             modifications=[_mod("lead-scorer")],
             events=[_event("lead-scorer", "Lead received", "Score lead and route")],
             mock_tools=[],
@@ -294,16 +293,12 @@ class TestSequentialConfirmationChains:
                 "After hubspot-tasks confirms, send summary to slack-notifications."
             ),
             event_sources=["gong"],
-            peers=[
-                PeerDecl(object_id="gmail-drafts", relationship="Send draft email"),
-                PeerDecl(object_id="hubspot-tasks", relationship="Send follow-up task"),
-                PeerDecl(object_id="slack-notifications", relationship="Send summary"),
-            ],
+            neighbors=['gmail-drafts', 'hubspot-tasks', 'slack-notifications'],
         )
         tc = Sample(
             id="TC008", name="Sales follow-up", domain="sales", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="Gong call summary: rep Alice, Acme Corp", target="follow-up-composer")],
+            steps=['Gong call summary: rep Alice, Acme Corp'],
             modifications=[_mod("follow-up-composer")],
             events=[_event("follow-up-composer", "Call summary received", "Send email draft, HubSpot task, and Slack notification")],
             mock_tools=[],
@@ -322,15 +317,12 @@ class TestSequentialConfirmationChains:
                 "When finance-tracker responds with the record ID, notify slack-finance."
             ),
             event_sources=["expensify"],
-            peers=[
-                PeerDecl(object_id="finance-tracker", relationship="Record expense entry"),
-                PeerDecl(object_id="slack-finance",   relationship="Send expense notification"),
-            ],
+            neighbors=['finance-tracker', 'slack-finance'],
         )
         tc = Sample(
             id="TC009", name="Expense processing", domain="finance", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="Expense submitted by Alice: $450, client dinner", target="expense-policy")],
+            steps=['Expense submitted by Alice: $450, client dinner'],
             modifications=[_mod("expense-policy")],
             events=[_event("expense-policy", "Expense received", "Record and notify")],
             mock_tools=[],
@@ -348,16 +340,12 @@ class TestSequentialConfirmationChains:
                 "asana-tasks, and slack-sales. Include all lead details in each message."
             ),
             event_sources=["typeform"],
-            peers=[
-                PeerDecl(object_id="hubspot-crm", relationship="Create CRM contact"),
-                PeerDecl(object_id="asana-tasks",  relationship="Create follow-up task"),
-                PeerDecl(object_id="slack-sales",  relationship="Notify sales team"),
-            ],
+            neighbors=['hubspot-crm', 'asana-tasks', 'slack-sales'],
         )
         tc = Sample(
             id="TC010", name="Lead dispatch", domain="sales", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="New lead: John Doe, john@acme.com, Acme Corp, Enterprise", target="lead-dispatcher")],
+            steps=['New lead: John Doe, john@acme.com, Acme Corp, Enterprise'],
             modifications=[_mod("lead-dispatcher")],
             events=[_event("lead-dispatcher", "Lead form submitted", "CRM contact, task, and Slack notification")],
             mock_tools=[],
@@ -384,7 +372,7 @@ class TestMissingStepData:
         tc = Sample(
             id="TC011", name="Helpdesk routing", domain="support", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="New support ticket from priya.nair", target="helpdesk-router")],
+            steps=['New support ticket from priya.nair'],
             modifications=[_mod("helpdesk-router")],
             events=[Event(
                 id="E001", call_type="send_event", source="zendesk",
@@ -413,7 +401,7 @@ class TestMissingStepData:
         tc = Sample(
             id="TC012", name="Engineering intake", domain="engineering", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="Engineering intake form submitted: need dashboard feature", target="jira-handler")],
+            steps=['Engineering intake form submitted: need dashboard feature'],
             modifications=[_mod("jira-handler")],
             events=[Event(
                 id="E001", call_type="send_event", source="form",
@@ -441,7 +429,7 @@ class TestMissingStepData:
         tc = Sample(
             id="TC013", name="Helpdesk routing", domain="support", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="New ticket from priya.nair, route to #support-queue", target="helpdesk-router")],
+            steps=['New ticket from priya.nair, route to #support-queue'],
             modifications=[_mod("helpdesk-router")],
             events=[Event(
                 id="E001", call_type="send_event", source="zendesk",
@@ -471,7 +459,7 @@ class TestMissingStepData:
         tc = Sample(
             id="TC014", name="Helpdesk routing", domain="support", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="New ticket TICK-001 from priya.nair", target="helpdesk-router")],
+            steps=['New ticket TICK-001 from priya.nair'],
             modifications=[_mod("helpdesk-router")],
             events=[Event(
                 id="E001", call_type="send_event", source="zendesk",
@@ -508,7 +496,7 @@ class TestThresholdEvaluationInExpectations:
         tc = Sample(
             id="TC015", name="Call coaching", domain="sales", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="Call recording from rep Alice available", target="call-coach")],
+            steps=['Call recording from rep Alice available'],
             modifications=[_mod("call-coach")],
             events=[Event(
                 id="E001", call_type="send_event", source="gong",
@@ -541,7 +529,7 @@ class TestThresholdEvaluationInExpectations:
         tc = Sample(
             id="TC016", name="Call coaching", domain="sales", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="Call recording from rep Bob available", target="call-coach")],
+            steps=['Call recording from rep Bob available'],
             modifications=[_mod("call-coach")],
             events=[Event(
                 id="E001", call_type="send_event", source="gong",
@@ -571,7 +559,7 @@ class TestThresholdEvaluationInExpectations:
         tc = Sample(
             id="TC017", name="Expense monitoring", domain="finance", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="Expense from Alice for team lunch", target="expense-monitor")],
+            steps=['Expense from Alice for team lunch'],
             modifications=[_mod("expense-monitor")],
             events=[Event(
                 id="E001", call_type="send_event", source="expensify",
@@ -632,7 +620,7 @@ class TestTriggerDataQuality:
         tc = Sample(
             id="TC018", name="Email chain", domain="sales", source_type="zapier",
             objects=self._base_objects(),
-            steps=[Step(text="Send follow-up email to alice@company.com", target="email-handler")],
+            steps=['Send follow-up email to alice@company.com'],
             modifications=[_mod("email-handler")],
             events=[_event("email-handler", "Email send requested", "Email dispatched")],
             mock_tools=[mock],
@@ -656,7 +644,7 @@ class TestTriggerDataQuality:
         tc = Sample(
             id="TC019", name="Email chain", domain="sales", source_type="zapier",
             objects=self._base_objects(),
-            steps=[Step(text="Send follow-up email", target="email-handler")],
+            steps=['Send follow-up email'],
             modifications=[_mod("email-handler")],
             events=[_event("email-handler", "Email send requested", "Email dispatched")],
             mock_tools=[mock],
@@ -686,7 +674,7 @@ class TestTriggerDataQuality:
         tc = Sample(
             id="TC020", name="Ticket creation", domain="support", source_type="zapier",
             objects=self._base_objects(),
-            steps=[Step(text="Create ticket for login issue", target="email-handler")],
+            steps=['Create ticket for login issue'],
             modifications=[_mod("email-handler")],
             events=[_event("email-handler", "Ticket created", "Slack notified")],
             mock_tools=[mock],
@@ -699,7 +687,7 @@ class TestTriggerDataQuality:
         tc = Sample(
             id="TC021", name="Trigger chain", domain="sales", source_type="zapier",
             objects=self._base_objects(),
-            steps=[Step(text="Send email to alice@company.com", target="email-handler")],
+            steps=['Send email to alice@company.com'],
             modifications=[_mod("email-handler")],
             events=[
                 Event(
@@ -735,7 +723,7 @@ class TestTriggerDataQuality:
         tc = Sample(
             id="TC022", name="Email to Slack chain", domain="sales", source_type="zapier",
             objects=self._base_objects(),
-            steps=[Step(text="Send follow-up to alice@company.com, subject: Q2 deal", target="email-handler")],
+            steps=['Send follow-up to alice@company.com, subject: Q2 deal'],
             modifications=[_mod("email-handler")],
             events=[
                 Event(
@@ -778,10 +766,7 @@ class TestInvalidPeerDeclarations:
             role="Dispatches new leads",
             behavior="Send to hubspot-crm and missing-service.",
             event_sources=["typeform"],
-            peers=[
-                PeerDecl(object_id="hubspot-crm",    relationship="Create CRM contact"),
-                PeerDecl(object_id="missing-service", relationship="Send notification"),
-            ],
+            neighbors=['hubspot-crm', 'missing-service'],
         )
         tc = Sample(
             id="TC023", name="Lead dispatch", domain="sales", source_type="zapier",
@@ -790,7 +775,7 @@ class TestInvalidPeerDeclarations:
                 ObjectDef(object_id="hubspot-crm", role="HubSpot CRM", behavior="Create contact."),
                 # missing-service is NOT in objects
             ],
-            steps=[Step(text="New lead: Jane Smith", target="lead-dispatcher")],
+            steps=['New lead: Jane Smith'],
             modifications=[_mod("lead-dispatcher")],
             events=[_event("lead-dispatcher", "Lead received", "CRM contact created")],
             mock_tools=[],
@@ -805,10 +790,7 @@ class TestInvalidPeerDeclarations:
             role="Dispatches leads",
             behavior="Send to hubspot-crm and slack-sales.",
             event_sources=["typeform"],
-            peers=[
-                PeerDecl(object_id="hubspot-crm", relationship="Create CRM contact"),
-                PeerDecl(object_id="slack-sales",  relationship="Notify sales team"),
-            ],
+            neighbors=['hubspot-crm', 'slack-sales'],
         )
         tc = Sample(
             id="TC024", name="Lead dispatch", domain="sales", source_type="zapier",
@@ -817,7 +799,7 @@ class TestInvalidPeerDeclarations:
                 ObjectDef(object_id="hubspot-crm", role="HubSpot CRM",         behavior="Create contact."),
                 ObjectDef(object_id="slack-sales",  role="Slack sales channel", behavior="Post message."),
             ],
-            steps=[Step(text="New lead: Jane Smith, jane@acme.com", target="lead-dispatcher")],
+            steps=['New lead: Jane Smith, jane@acme.com'],
             modifications=[_mod("lead-dispatcher")],
             events=[_event("lead-dispatcher", "Lead received", "CRM and Slack notified")],
             mock_tools=[],
@@ -839,12 +821,12 @@ class TestPeerGraphDeadEnds:
             role="Routes incoming support tickets",
             behavior="Process and route tickets to the support team.",
             event_sources=["zendesk"],
-            peers=[],
+            neighbors=[],
         )
         tc = Sample(
             id="TC025", name="Ticket routing", domain="support", source_type="zapier",
             objects=[entry, ObjectDef(object_id="support-team", role="Handles tickets", behavior="Respond.")],
-            steps=[Step(text="New ticket from customer", target="ticket-router")],
+            steps=['New ticket from customer'],
             modifications=[_mod("ticket-router")],
             events=[_event("ticket-router", "Ticket received", "Ticket routed")],
             mock_tools=[],
@@ -858,12 +840,12 @@ class TestPeerGraphDeadEnds:
             role="Routes incoming support tickets",
             behavior="Send each ticket to support-team.",
             event_sources=["zendesk"],
-            peers=[PeerDecl(object_id="support-team", relationship="Forward ticket")],
+            neighbors=['support-team'],
         )
         tc = Sample(
             id="TC026", name="Ticket routing", domain="support", source_type="zapier",
             objects=[entry, ObjectDef(object_id="support-team", role="Handles tickets", behavior="Respond.")],
-            steps=[Step(text="New ticket from customer", target="ticket-router")],
+            steps=['New ticket from customer'],
             modifications=[_mod("ticket-router")],
             events=[_event("ticket-router", "Ticket received", "Ticket routed")],
             mock_tools=[],
@@ -877,12 +859,12 @@ class TestPeerGraphDeadEnds:
             role="Sends outbound notifications directly",
             behavior="Send the notification email.",
             event_sources=["webhook"],
-            peers=[],
+            neighbors=[],
         )
         tc = Sample(
             id="TC027", name="Notification", domain="comms", source_type="zapier",
             objects=[solo],
-            steps=[Step(text="Send notification to alice@company.com", target="notification-sender")],
+            steps=['Send notification to alice@company.com'],
             modifications=[_mod("notification-sender")],
             events=[_event("notification-sender", "Notification triggered", "Email sent")],
             mock_tools=[],
@@ -905,7 +887,7 @@ class TestUnreachableObjects:
             role="Routes tickets",
             behavior="Send to support-team.",
             event_sources=["zendesk"],
-            peers=[PeerDecl(object_id="support-team", relationship="Forward ticket")],
+            neighbors=['support-team'],
         )
         orphan = ObjectDef(
             object_id="audit-logger",
@@ -919,7 +901,7 @@ class TestUnreachableObjects:
                 ObjectDef(object_id="support-team", role="Handles tickets", behavior="Respond."),
                 orphan,
             ],
-            steps=[Step(text="New ticket from customer", target="ticket-router")],
+            steps=['New ticket from customer'],
             modifications=[_mod("ticket-router")],
             events=[_event("ticket-router", "Ticket received", "Ticket handled")],
             mock_tools=[],
@@ -934,10 +916,7 @@ class TestUnreachableObjects:
             role="Routes tickets",
             behavior="Send to support-team.",
             event_sources=["zendesk"],
-            peers=[
-                PeerDecl(object_id="support-team", relationship="Forward ticket"),
-                PeerDecl(object_id="audit-logger",  relationship="Log ticket event"),
-            ],
+            neighbors=['support-team', 'audit-logger'],
         )
         tc = Sample(
             id="TC029", name="Ticket routing", domain="support", source_type="zapier",
@@ -946,7 +925,7 @@ class TestUnreachableObjects:
                 ObjectDef(object_id="support-team", role="Handles tickets", behavior="Respond."),
                 ObjectDef(object_id="audit-logger",  role="Logs events",     behavior="Record."),
             ],
-            steps=[Step(text="New ticket from customer", target="ticket-router")],
+            steps=['New ticket from customer'],
             modifications=[_mod("ticket-router")],
             events=[_event("ticket-router", "Ticket received", "Ticket handled and logged")],
             mock_tools=[],
@@ -958,7 +937,7 @@ class TestUnreachableObjects:
         tc = Sample(
             id="TC030", name="Send", domain="comms", source_type="zapier",
             objects=[solo],
-            steps=[Step(text="Send email", target="sender")],
+            steps=['Send email'],
             modifications=[_mod("sender")],
             events=[_event("sender", "Triggered", "Email sent")],
             mock_tools=[],
@@ -987,7 +966,7 @@ class TestMissingMockTools:
         tc = Sample(
             id="TC031", name="FAQ lookup", domain="hr", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="Question about parental leave from Maya Chen", target="faq-knowledge-base")],
+            steps=['Question about parental leave from Maya Chen'],
             modifications=[_mod("faq-knowledge-base")],
             events=[_event("faq-knowledge-base", "FAQ question received", "Reply with answer")],
             mock_tools=[],  # no mock tool for faq_knowledge_base_data
@@ -1013,7 +992,7 @@ class TestMissingMockTools:
         tc = Sample(
             id="TC032", name="FAQ lookup", domain="hr", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="Question about parental leave from Maya Chen", target="faq-knowledge-base")],
+            steps=['Question about parental leave from Maya Chen'],
             modifications=[_mod("faq-knowledge-base")],
             events=[_event("faq-knowledge-base", "FAQ question received", "Reply with parental leave policy")],
             mock_tools=[mock],
@@ -1032,7 +1011,7 @@ class TestMissingMockTools:
         tc = Sample(
             id="TC033", name="Email sending", domain="comms", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="Send email to alice@company.com", target="email-sender")],
+            steps=['Send email to alice@company.com'],
             modifications=[_mod("email-sender")],
             events=[_event("email-sender", "Email triggered", "Email sent")],
             mock_tools=[],
@@ -1067,7 +1046,7 @@ class TestUnnaturalIdentifiers:
         return Sample(
             id="TC034", name="Helpdesk", domain="support", source_type="zapier",
             objects=[obj],
-            steps=[Step(text="New ticket TICK-001", target="helpdesk-router")],
+            steps=['New ticket TICK-001'],
             modifications=[_mod("helpdesk-router")],
             events=[Event(
                 id="E001", call_type="send_event", source="zendesk",

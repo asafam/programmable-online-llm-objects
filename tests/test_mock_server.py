@@ -21,7 +21,6 @@ from src.data.schema import (
     OrchestratorScript,
     OrchestratorTrigger,
     Sample,
-    Step,
     Modification,
     ModType,
     Ambiguity,
@@ -151,7 +150,7 @@ class TestResolveMockConfigs:
             source_type="test",
             link="",
             objects=[obj],
-            steps=[Step(text="do thing", target="test-obj")],
+            steps=["do thing"],
             modifications=[],
             events=[],
         )
@@ -245,7 +244,7 @@ class TestResolveOrchestration:
             source_type="test",
             link="",
             objects=[obj],
-            steps=[Step(text="do thing", target="test-obj")],
+            steps=["do thing"],
             modifications=[],
             events=events,
         )

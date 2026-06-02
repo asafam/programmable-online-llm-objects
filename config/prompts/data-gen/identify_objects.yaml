@@ -1,7 +1,10 @@
 prompt: |
-  # Task: Design the Distributed LLM-Object System
+  # Task: Derive the Agent Graph
 
-  You are a system architect. Given a concrete automation scenario, design the distributed LLM-object system that implements it.
+  You are a system architect. Given a concrete automation scenario described as a
+  sequence of business-level steps, derive the **agent graph** — a directed graph
+  G = (V, E) that is paradigm-agnostic and does not commit to any particular
+  multi-agent framework.
 
   ---
 
@@ -17,57 +20,104 @@ prompt: |
 
   ## Instructions
 
-  Identify every object needed and define it precisely. Each object is an LLM-agent with its own state, behavior, and peer relationships.
+  ### Node types
 
-  ### Object categories
+  Every node has exactly one of four roles:
 
-  1. **Service objects** — represent external systems (databases, messaging platforms, data stores, directory services, notification systems, etc.). Named by function as a slug (e.g., `notifications`, `record-store`, `org-directory`). One object per external system.
+  1. **`ingest_service`** — an entry-point node that receives events from an external
+     system. It has `event_sources` and at least one neighbor (the `business_logic`
+     node it forwards events to). Named after the external system (e.g.,
+     `airtable-submissions`, `zendesk-tickets`, `slack-events`).
 
-     - **Read services** represent external data APIs (org directories, product catalogs, user directories). They hold NO data in their own state — they retrieve it on demand by calling a tool. The behavior field MUST end with: "When answering queries, call the `{object_id}_data` tool to retrieve data." — replace `{object_id}` with this object's actual slug (using underscores, e.g., `org_directory_data`). Read services MUST reply with the requested data.
+  2. **`read_service`** — a data-lookup node. It holds NO mutable state; it retrieves
+     data on demand by calling its `{object_id}_data` tool. Its behavior MUST end
+     with: "When answering queries, call the `{object_id}_data` tool to retrieve data."
+     (replace `{object_id}` with this node's slug, using underscores). Named after the
+     data source (e.g., `org-directory`, `product-catalog`, `policy-store`).
 
-       **Important:** Any service that holds persistent data AND must answer lookup queries (e.g., a knowledge base, a Notion database used as a FAQ store, a policy document, a ticket store queried for status) MUST be a read service — NOT a write service. If a business logic object needs to ask a service a question and wait for the answer, that service is a read service with a `_data` tool.
+     **Important:** Any node that must answer lookup queries (knowledge bases, employee
+     directories, policy documents, ticket stores, etc.) is a `read_service`, even if
+     it is also a write target. A `business_logic` node that needs factual external data
+     not in the event payload must route to a `read_service`.
 
-     - **Write services** record what they receive and have initially empty state. Their state becomes the audit trail. Entry-point write services (those with `event_sources`) MUST declare the business logic object as a peer — without this peer, incoming events dead-end and the automation never runs.
+  3. **`write_service`** — an output-channel node. It records what it receives; its
+     state is an audit trail. Initially empty state. Named after the output channel
+     (e.g., `slack-notifications`, `airtable-records`, `email-delivery`).
 
-     - **Dual-role objects** (a service that is BOTH a write target AND an event entry-point — e.g., a channel that receives outbound posts AND inbound user action events) MUST still declare the business logic object as a peer. A dual-role object's behavior MUST include: "When [action event] arrives, forward it to [business-logic-object] via peer message." The peer entry MUST be listed.
+  4. **`business_logic`** — a decision-making node. It embodies a specific domain:
+     it knows the rules, applies them to incoming messages, and routes outputs to
+     neighbors. Named as a domain noun (e.g., `approval-policy`, `triage-rules`,
+     `routing-logic`). **Never** name a node "orchestrator", "manager",
+     "coordinator", or any generic control-flow role.
 
-  2. **Business logic objects** — one per distinct domain of responsibility. Named as domain slugs (nouns describing *what they know*, not what they do): e.g., `approval-policy`, `incident-triage`, `onboarding-rules`, `pricing-engine`. **Never** name an object "orchestrator", "manager", "coordinator", "dispatcher", or any other generic control-flow role — those are architecture smells. Each object embodies a specific domain: it knows the rules of that domain, applies them to incoming messages, and sends outputs to its peers. There is no captain. Objects work in tandem — each one acts on its slice of the domain, forwarding to the next peer when its responsibility ends.
+  ### Edge semantics
+
+  Each edge (u → v) means: node u is permitted to send messages to node v. Express
+  this as v's id in u's `neighbors` list. The edge direction is always from sender
+  to receiver.
 
   ### Mandatory checklist
 
-  Before writing any objects, answer these four questions:
+  Before writing any nodes, answer these four questions:
 
-  1. **What external systems send triggers, and how many distinct event types?** → One entry-point service object per DISTINCT event type. If the automation responds to multiple independent trigger types that each start a different workflow (e.g., Zendesk sends both `ticket.created` and `ticket.solved`, each causing different behavior), create a separate entry-point object for each. If all triggers are the same event type with different data values, one entry-point is correct. Never assign multiple unrelated event types to a single entry-point object's `event_sources`. Each entry-point must have a peer to the business logic object — without it, the trigger dead-ends.
-  2. **What domain-specific decisions are required?** → One business logic object per domain. If the automation classifies, routes, approves, assigns, or enforces policy — there MUST be a business logic object named after that domain (e.g., `approval-policy`, `triage-rules`, `routing-logic`). It holds the rules; it does not orchestrate.
-  3. **What factual external data does the business logic need to look up?** → For each lookup of factual data that is NOT already in the event payload (e.g., org charts, employee directories, product catalogs) — a read service object. If the data arrives in the trigger event itself (e.g., quote details, ticket fields, form values), do NOT create a read service for it — the business logic object reads it directly from the message. Business rules and approval policies go in the business logic object's behavior, NOT in a read service.
-  4. **What external outputs does the automation produce?** → For each output channel (message sent, record written, notification triggered, ticket created) — a write service object.
+  1. **What external systems send triggers, and how many distinct event types?**
+     One `ingest_service` per distinct event type. Each must have at least one
+     neighbor pointing to the `business_logic` node — without it, events dead-end.
 
-  ### Object fields
+  2. **What domain-specific decisions are required?**
+     One `business_logic` node per domain. If the automation classifies, routes,
+     approves, assigns, or enforces policy — it needs a `business_logic` node named
+     after that domain.
 
-  For each object, provide:
+  3. **What factual external data does the business logic need to look up?**
+     One `read_service` per external data source not already in the event payload.
+     If the data arrives in the trigger itself, no `read_service` is needed for it.
 
-  1. `object_id` — slug format (lowercase, hyphens, e.g., `support-triage`, `org-directory`)
-  2. `role` — one sentence: what is this object and what does it do
-  3. `state_description` — what mutable state this object tracks at runtime (e.g., "Tracks open tickets with priority, assignee, and resolution status")
-  4. `behavior` — domain logic rules using when/then patterns. Do NOT include communication instructions — peers handle routing. For read services, this MUST end with "When answering queries, call the `{object_id}_data` tool to retrieve data."
+  4. **What external outputs does the automation produce?**
+     One `write_service` per output channel (message sent, record written,
+     notification triggered, ticket created).
 
-     **Fan-out rule:** When multiple peers must be notified or written simultaneously, describe them as a flat simultaneous list: "Send to X, Y, and Z." NEVER use sequential confirmation language ("after X confirms", "when X responds", "once X replies", "after X creates the record") for write services or notification services — callers must not wait for confirmation from write or notification peers. If the next step genuinely needs data that only a peer can provide (e.g., a generated document ID, a record key), model that peer as a read service with a `_data` tool, not a write service.
+  ### Node fields
 
-     **Slack channel names:** When a write service object posts to a Slack channel, the behavior MUST name the exact channel (e.g., `"post to the #sales-alerts channel"`). Never use vague descriptions like "the sales team channel" or "the relevant Slack channel" — the channel name must be a specific slug prefixed with `#` so downstream expectations can reference it exactly.
-  5. `peers` — directional: only objects this one SENDS messages to. Each peer:
-     - `object_id` — slug of the target
-     - `relationship` — what is sent and when (e.g., "Forward quote details when a new quote arrives")
-     Entry-point objects with `event_sources` MUST have at least one peer pointing to the business logic object.
-  6. `skills` — purely internal capabilities requiring no external system calls (e.g., `calculate-totals`, `format-summary`). Omit if none.
-  7. `subscriptions` — pub/sub topics this object listens to. Omit if none.
-  8. `event_sources` — external triggers from outside the system boundary (e.g., `webhook: action event`, `external system: record created`). Only for entry-point service objects.
+  For each node, provide:
+
+  1. `object_id` — slug format (lowercase, hyphens, e.g., `support-triage`)
+  2. `node_type` — one of: `ingest_service`, `read_service`, `write_service`,
+     `business_logic`
+  3. `role` — one sentence: what is this node and what does it do
+  4. `state_description` — what mutable state this node tracks at runtime.
+     Empty string for `read_service` nodes (they hold no state).
+  5. `behavior` — domain logic using when/then patterns. For `read_service` nodes,
+     MUST end with: "When answering queries, call the `{object_id}_data` tool to
+     retrieve data." Do NOT include routing instructions — neighbors handle that.
+
+     **Fan-out rule:** When multiple neighbors must be notified simultaneously,
+     describe them as a flat list: "Send to X, Y, and Z." Never use sequential
+     confirmation language ("after X confirms", "once X replies") for `write_service`
+     or notification neighbors.
+
+     **Slack channel names:** If a `write_service` posts to Slack, name the exact
+     channel (e.g., `#sales-alerts`), never a vague description.
+
+  6. `neighbors` — list of node IDs this node sends messages to (directed edges).
+     `ingest_service` nodes MUST list at least one neighbor.
+  7. `tools` — list of external tool names this node calls directly (e.g.,
+     `openai_generate_audio`, `slack_send_message`). `read_service` nodes list their
+     `{object_id}_data` tool here. Omit if none.
+  8. `skills` — purely internal capabilities requiring no external calls (e.g.,
+     `calculate-totals`). Omit if none.
+  9. `event_sources` — external triggers from outside the system boundary (e.g.,
+     `webhook: record-created`, `external: ticket-submitted`). Only for
+     `ingest_service` nodes.
 
   ### Validation checklist
 
   Before finalizing:
-  - Every object with `event_sources` has at least one peer (no dead-ends)
-  - Every factual data lookup has a read service with the `_data` tool behavior ending
-  - Business rules / domain policies are in business logic object behavior, NOT in a read service
-  - Every output action has a write service object
-  - At least one business logic object exists if the automation makes any decisions — and it is named after its domain, NOT "orchestrator" / "manager" / "coordinator"
-  - Every peer `object_id` references an object that exists in the output
+  - Every `ingest_service` node has at least one neighbor (no dead-ends)
+  - Every `read_service` node's behavior ends with the `_data` tool call instruction
+  - Business rules and domain policies are in `business_logic` nodes, NOT in
+    `read_service` nodes
+  - Every output action has a `write_service` node
+  - At least one `business_logic` node exists if the automation makes any decisions
+  - Every neighbor ID in every node's `neighbors` list exists in the output
+  - No node is named "orchestrator", "manager", "coordinator", or "dispatcher"

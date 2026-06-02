@@ -17,7 +17,6 @@ import pytest
 from src.data.schema import (
     MockToolDef,
     ObjectDef,
-    PeerDecl,
     Sample,
 )
 from src.lnl.openclaw_export import (
@@ -48,8 +47,7 @@ def sample() -> Sample:
                 role="ingest_service",
                 behavior="ALPHA_BEHAVIOR_MARKER receives widget submissions.",
                 state_description="",
-                peers=[PeerDecl(object_id="beta-orchestrator",
-                                relationship="forwards to")],
+                neighbors=["beta-orchestrator"],
                 skills=[],
                 event_sources=["alpha:submitted"],
             ),
@@ -58,7 +56,7 @@ def sample() -> Sample:
                 role="business_logic",
                 behavior="BETA_BEHAVIOR_MARKER routes approval requests.",
                 state_description="",
-                peers=[],
+                neighbors=[],
                 skills=[],
                 event_sources=[],
             ),

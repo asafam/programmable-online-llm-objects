@@ -217,28 +217,38 @@ class Modification(BaseModel):
     ambiguity: Ambiguity
 
 # Object definition schemas (Pydantic mirrors of LNL runtime dataclasses)
-class PeerDecl(BaseModel):
-    object_id: str
-    relationship: str  # communication contract: "Notify with ticket details when unresolved request arrives"
 
-    @field_validator("object_id")
-    @classmethod
-    def slugify_object_id(cls, v: str) -> str:
-        return slugify(v)
+class NodeRole(str, Enum):
+    """Typed role classification for agent-graph nodes (paradigm-agnostic generic form)."""
+    ingest_service = "ingest_service"   # entry-point; has event_sources; forwards to business_logic
+    read_service   = "read_service"     # data lookup; calls a _data tool; no mutable state
+    write_service  = "write_service"    # output channel; records what it receives
+    business_logic = "business_logic"   # decision-making; routes between read and write nodes
+
 
 class ObjectDef(BaseModel):
     object_id: str
-    role: str
+    node_type: NodeRole = NodeRole.business_logic
+    role: str                                              # one-sentence description (used in runtime system prompt)
     state_description: str = ""
     behavior: str
-    peers: list[PeerDecl] = Field(default_factory=list)
-    skills: list[str] = Field(default_factory=list)
+    neighbors: list[str] = Field(default_factory=list)    # IDs of nodes this node sends messages to
+    tools: list[str] = Field(default_factory=list)         # external tool names this node calls
+    skills: list[str] = Field(default_factory=list)        # internal capabilities (legacy; kept for compat)
     subscriptions: list[str] = Field(default_factory=list)
     event_sources: list[str] = Field(default_factory=list)
+
     @field_validator("object_id")
     @classmethod
     def slugify_object_id(cls, v: str) -> str:
         return slugify(v)
+
+    @field_validator("neighbors", mode="before")
+    @classmethod
+    def slugify_neighbors(cls, v: object) -> list[str]:
+        if not isinstance(v, list):
+            return []
+        return [slugify(n) if isinstance(n, str) else str(n) for n in v]
 
 class Step(BaseModel):
     """A single workflow step: an NL text addressed to a specific LLM-object."""
@@ -295,10 +305,12 @@ class MockConfig(BaseModel):
 class LLMClassDef(BaseModel):
     """An llm-class template: a reusable blueprint for spawning llm-object instances."""
     class_id: str
+    node_type: NodeRole = NodeRole.business_logic
     role: str
     state_description: str = ""
     behavior: str
-    peers: list[PeerDecl] = Field(default_factory=list)
+    neighbors: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     subscriptions: list[str] = Field(default_factory=list)
     event_sources: list[str] = Field(default_factory=list)
@@ -908,10 +920,7 @@ def to_lnl_class_definition(cls_def: LLMClassDef) -> ObjectDefinition:
         object_id=cls_def.class_id,
         role=cls_def.role,
         behavior=cls_def.behavior,
-        peers=[
-            PeerDeclaration(object_id=p.object_id, relationship=p.relationship)
-            for p in cls_def.peers
-        ],
+        peers=[PeerDeclaration(object_id=n, relationship="neighbor") for n in cls_def.neighbors],
         skills=list(cls_def.skills),
         subscriptions=list(cls_def.subscriptions),
         event_sources=list(cls_def.event_sources),
@@ -925,10 +934,7 @@ def to_lnl_definition(obj: ObjectDef) -> ObjectDefinition:
         object_id=obj.object_id,
         role=obj.role,
         behavior=obj.behavior,
-        peers=[
-            PeerDeclaration(object_id=p.object_id, relationship=p.relationship)
-            for p in obj.peers
-        ],
+        peers=[PeerDeclaration(object_id=n, relationship="neighbor") for n in obj.neighbors],
         skills=list(obj.skills),
         subscriptions=list(obj.subscriptions),
         event_sources=list(obj.event_sources),

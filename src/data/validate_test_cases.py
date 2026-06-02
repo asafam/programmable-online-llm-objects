@@ -82,10 +82,6 @@ def find_read_write_misclassifications(tc: "Sample") -> list[str]:
     event_sources and no _data skill, the querying object will set PENDING and
     wait forever — the chain stalls permanently.
     """
-    QUERY_KEYWORDS = re.compile(
-        r"\b(query|queries|look up|lookup|retrieve|fetch|request data|ask|check for|get)\b",
-        re.IGNORECASE,
-    )
     WRITE_ONLY_BEHAVIOR = re.compile(
         r"\bdo not reply\b|\bnot? reply\b|\bwrite.only\b|\bnever respond\b",
         re.IGNORECASE,
@@ -94,22 +90,21 @@ def find_read_write_misclassifications(tc: "Sample") -> list[str]:
     issues = []
 
     for obj in tc.objects:
-        for peer in obj.peers:
-            if not QUERY_KEYWORDS.search(peer.relationship):
-                continue
-            target = object_map.get(peer.object_id)
+        for neighbor_id in obj.neighbors:
+            target = object_map.get(neighbor_id)
             if target is None:
                 continue
-
+            # Flag read_service targets that have write-only behavior — they cannot
+            # respond to queries, so any caller that awaits a reply will stall.
+            is_write_only = bool(WRITE_ONLY_BEHAVIOR.search(target.behavior))
             has_event_sources = bool(target.event_sources)
-            has_any_skill     = bool(target.skills)
-            is_write_only     = bool(WRITE_ONLY_BEHAVIOR.search(target.behavior))
-
-            if (not has_event_sources and not has_any_skill) or is_write_only:
+            has_any_skill = bool(target.skills)
+            if is_write_only or (not has_event_sources and not has_any_skill):
+                pass  # benign write services are common neighbors; only flag read services
+            if is_write_only and target.node_type and "read" in str(target.node_type):
                 issues.append(
-                    f"Object '{obj.object_id}' queries '{target.object_id}' "
-                    f"('{peer.relationship}') but '{target.object_id}' cannot respond"
-                    + (" — has write-only behavior" if is_write_only else " — no event_sources or skills")
+                    f"Object '{obj.object_id}' routes to read_service '{target.object_id}' "
+                    f"but it has write-only behavior and cannot respond"
                 )
     return issues
 
@@ -356,11 +351,11 @@ def find_invalid_peer_declarations(tc: "Sample") -> list[str]:
     object_ids = {o.object_id for o in tc.objects}
     issues = []
     for obj in tc.objects:
-        for peer in obj.peers:
-            if peer.object_id not in object_ids:
+        for neighbor_id in obj.neighbors:
+            if neighbor_id not in object_ids:
                 issues.append(
-                    f"Object '{obj.object_id}' declares peer '{peer.object_id}' "
-                    f"but no object with that ID exists — sends to this peer "
+                    f"Object '{obj.object_id}' declares neighbor '{neighbor_id}' "
+                    f"but no object with that ID exists — sends to this neighbor "
                     f"will be silently dropped at runtime"
                 )
     return issues
@@ -397,7 +392,7 @@ def find_undeclared_peer_references(tc: "Sample") -> list[str]:
     issues = []
 
     for obj in tc.objects:
-        declared_peer_ids = {p.object_id for p in obj.peers}
+        declared_peer_ids = set(obj.neighbors)
         # Find all positions where an outgoing-action verb appears in the behavior
         for verb_match in OUTGOING_VERBS.finditer(obj.behavior):
             # Look at the text immediately after the verb for an object_id
@@ -433,7 +428,7 @@ def find_peer_graph_dead_ends(tc: "Sample") -> list[str]:
 
     issues = []
     for obj in tc.objects:
-        if obj.event_sources and not obj.peers:
+        if obj.event_sources and not obj.neighbors:
             issues.append(
                 f"Object '{obj.object_id}' has event_sources {obj.event_sources} "
                 f"but no peers — incoming events terminate here and cannot propagate"
@@ -461,7 +456,7 @@ def find_unreachable_objects(tc: "Sample") -> list[str]:
         return []
 
     peer_map: dict[str, set[str]] = {
-        o.object_id: {p.object_id for p in o.peers}
+        o.object_id: set(o.neighbors)
         for o in tc.objects
     }
 
@@ -577,7 +572,7 @@ def find_write_service_without_tools(tc: "Sample") -> list[str]:
     for obj in tc.objects:
         if obj.skills:
             continue
-        if obj.event_sources or obj.peers:
+        if obj.event_sources or obj.neighbors:
             continue
         if _WRITE_SERVICE_RE.search(obj.behavior):
             issues.append(
@@ -607,7 +602,7 @@ def find_peer_graph_cycles(tc: "Sample") -> list[str]:
         return []
 
     peer_map: dict[str, list[str]] = {
-        o.object_id: [p.object_id for p in o.peers]
+        o.object_id: list(o.neighbors)
         for o in tc.objects
     }
     object_ids = set(peer_map)

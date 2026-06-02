@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.data.schema import ObjectDef, PeerDecl, Step, Sample
+from src.data.schema import ObjectDef, Step, Sample
 from src.data.mock_server import merge_tc_mock_tools, resolve_mock_configs
 from src.lnl.openclaw_export import (
     export_single_agent_workspace,
@@ -84,10 +84,7 @@ LEAD_CAPTURE_TC = Sample(
                 "(Full Name, Email Address, Phone Number, Company Name, Message) to "
                 "lead-capture-policy."
             ),
-            peers=[PeerDecl(
-                object_id="lead-capture-policy",
-                relationship="Forward complete lead submission payload when a new form submission is received",
-            )],
+            neighbors=["lead-capture-policy"],
             event_sources=["external system: Zapier Interfaces form submission"],
         ),
         ObjectDef(
@@ -103,20 +100,14 @@ LEAD_CAPTURE_TC = Sample(
                 "and call email_send to notify the Sales Manager with the lead's Full Name, "
                 "Email Address, Phone Number, Company Name, and Message."
             ),
-            peers=[],
+            neighbors=[],
         ),
     ],
     steps=[
-        Step(
-            text=(
-                "A user submits the Contact Us form: Full Name: Sarah Mitchell, "
-                "Email Address: sarah.mitchell@techcorp.com, Phone: +1-415-555-0192, "
-                "Company: TechCorp Solutions, "
-                "Message: 'We are interested in your enterprise pricing and integration options.'"
-            ),
-            target="contact-form",
-            source="Zapier Interfaces form submission",
-        ),
+        "A user submits the Contact Us form: Full Name: Sarah Mitchell, "
+        "Email Address: sarah.mitchell@techcorp.com, Phone: +1-415-555-0192, "
+        "Company: TechCorp Solutions, "
+        "Message: 'We are interested in your enterprise pricing and integration options.'"
     ],
     modifications=[],
     events=[],

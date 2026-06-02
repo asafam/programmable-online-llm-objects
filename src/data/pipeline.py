@@ -231,16 +231,15 @@ def _autopatch_sample(sample, blocking: dict) -> tuple[bool, dict]:
     # This catches the common data-gen mistake where an intermediate processor
     # forgets to declare its downstream write/notify service as a peer.
     if "find_unreachable_objects" in remaining:
-        from src.data.schema import PeerDecl
         from collections import deque
 
         def _reachable(objs):
             entries = {o.object_id for o in objs if o.event_sources}
-            peer_map = {o.object_id: {p.object_id for p in o.peers} for o in objs}
+            neighbor_map = {o.object_id: set(o.neighbors) for o in objs}
             visited, q = set(entries), deque(entries)
             while q:
                 n = q.popleft()
-                for nb in peer_map.get(n, set()):
+                for nb in neighbor_map.get(n, set()):
                     if nb not in visited:
                         visited.add(nb); q.append(nb)
             return visited
@@ -256,7 +255,7 @@ def _autopatch_sample(sample, blocking: dict) -> tuple[bool, dict]:
             # Find dead-end objects whose behavior text mentions the unreachable id
             dead_ends = [
                 o for o in sample.objects
-                if not o.peers and not o.event_sources
+                if not o.neighbors and not o.event_sources
                 and unreachable_id.replace("-", "[ -]") and
                 re.search(re.escape(unreachable_id), o.behavior, re.IGNORECASE)
             ]
@@ -271,10 +270,7 @@ def _autopatch_sample(sample, blocking: dict) -> tuple[bool, dict]:
                 fixed_unreachable.append(issue)
                 continue
 
-            donor.peers.append(PeerDecl(
-                object_id=unreachable_id,
-                relationship=f"Forward processed output to {unreachable_id}",
-            ))
+            donor.neighbors.append(unreachable_id)
             changed = True
 
             # Check if this resolved the unreachability

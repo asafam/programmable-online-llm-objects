@@ -83,11 +83,10 @@ def _format_template(template: dict) -> str:
 def _format_objects(graph: ObjectGraph) -> str:
     lines = []
     for obj in graph.objects:
-        lines.append(f"- {obj.object_id} ({obj.role})")
+        lines.append(f"- {obj.object_id} [{obj.node_type}] ({obj.role})")
         lines.append(f"  behavior: {obj.behavior[:200]}")
-        if obj.peers:
-            peer_ids = ", ".join(p.object_id for p in obj.peers)
-            lines.append(f"  peers: {peer_ids}")
+        if obj.neighbors:
+            lines.append(f"  neighbors: {', '.join(obj.neighbors)}")
         if obj.event_sources:
             lines.append(f"  event_sources: {'; '.join(obj.event_sources)}")
     return "\n".join(lines)
@@ -120,15 +119,21 @@ def _identify_objects(llm, grounded: GroundedTemplate, template: dict, prompt_cf
     def _validate_object_graph(r: ObjectGraph) -> bool:
         if not r.objects:
             raise ValueError("No objects were generated")
-        # Every entry-point object (has event_sources) must declare at least one peer.
-        # Without a peer, incoming events dead-end and the automation never runs.
+        all_ids = {obj.object_id for obj in r.objects}
         for obj in r.objects:
-            if obj.event_sources and not obj.peers:
+            # Every ingest_service (entry-point) must have at least one neighbor.
+            if obj.event_sources and not obj.neighbors:
                 raise ValueError(
-                    f"Object '{obj.object_id}' has event_sources but no peers — "
-                    f"incoming events will dead-end and the automation will never run. "
-                    f"Add at least one peer (the business logic object it forwards to)."
+                    f"Node '{obj.object_id}' has event_sources but no neighbors — "
+                    f"incoming events will dead-end. Add at least one neighbor "
+                    f"(the business_logic node it forwards to)."
                 )
+            # All neighbor references must resolve to existing nodes.
+            for nid in obj.neighbors:
+                if nid not in all_ids:
+                    raise ValueError(
+                        f"Node '{obj.object_id}' lists neighbor '{nid}' which does not exist."
+                    )
         return True
 
     return generate_with_retries(

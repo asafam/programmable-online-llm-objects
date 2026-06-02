@@ -128,31 +128,20 @@ PATCHABLE_FIELDS: list[PatchableField] = [
     ),
     PatchableField(
         name="peers",
-        title="Peers",
+        title="Neighbors",
         json_schema={
             "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "object_id": {"type": "string"},
-                    "relationship": {"type": "string"},
-                },
-                "required": ["object_id", "relationship"],
-                "additionalProperties": False,
-            },
+            "items": {"type": "string"},
         },
         description=(
-            "who you may message and the contract for each relationship."
+            "the IDs of nodes this node is permitted to send messages to."
         ),
         list_semantics_note=(
-            "To add a peer, include the full list with the new entry. "
-            "To remove a peer, include the full list without it. "
-            "To change a relationship, include the full list with the edited "
-            "entry. Peers you omit from the list are removed."
+            "Provide the full intended list. IDs omitted from the list are removed."
         ),
         coercer=_coerce_peers,
         renderer=_render_peers,
-        example_literal='[ {"object_id": "...", "relationship": "..."} ]',
+        example_literal='[ "node-id-a", "node-id-b" ]',
     ),
     PatchableField(
         name="skills",

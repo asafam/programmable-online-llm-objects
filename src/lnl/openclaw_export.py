@@ -118,7 +118,7 @@ def _agents_md(
     _t = peer_message_timeout
     timeout_str = str(int(_t)) if float(_t).is_integer() else str(_t)
     if obj.peers:
-        peers_block = "\n".join(f"- **{p.object_id}**: {p.relationship}" for p in obj.peers)
+        peers_block = "\n".join(f"- **{p.object_id}**" for p in obj.peers)
         peer_ids = [p.object_id for p in obj.peers]
 
         # Per-peer timeout: leaf write-service peers (no peers of their own) use
@@ -137,7 +137,7 @@ def _agents_md(
         # sessions_send targets a peer. Custom session names (e.g. "eval-ma-6")
         # do NOT get auto-created and cause "pairing required" errors.
         peer_examples = "\n".join(
-            f'  - To message `{pid}`: `sessions_send(sessionKey="agent:{pid}:main", message="<your message>", timeoutSeconds={_pt_str(pid)})`'
+            f'  - To message `{pid}`: `sessions_send(sessionKey="agent:{pid}:{session_name}", message="<your message>", timeoutSeconds={_pt_str(pid)})`'
             for pid in peer_ids
         )
 
@@ -176,7 +176,7 @@ def _agents_md(
             f"Only delegate to a peer the actions that peer's behavior owns.\n"
         )
     else:
-        peers_block = "(No peers defined.)"
+        peers_block = "(No neighbors defined.)"
         comm_section = (
             f"## Communication\n\n"
             f"This agent has no peers. Call the available external tools directly for all actions.\n"
@@ -250,7 +250,7 @@ def _agents_md(
         f"# Agent: {name}\n\n"
         f"## Role\n\n{obj.role}\n\n"
         f"## Behavior\n\n{behavior}\n\n"
-        f"## Peers\n\n{peers_block}\n\n"
+        f"## Neighbors\n\n{peers_block}\n\n"
         f"## State\n\n"
         f"Your current operational state is tracked in `state.md` in this workspace.\n"
         f"Read it at the start of each interaction to restore context.\n"
@@ -290,6 +290,106 @@ def _state_md(obj: ObjectDefinition) -> str:
 def _skill_stub_md(skill: str, object_id: str) -> str:
     name = skill.replace("-", " ").title()
     return f"# {name}\n\n_Skill definition for {object_id}. Fill in the implementation details._\n"
+
+
+def _steps_agents_md(sample) -> str:
+    """Build steps-based AGENTS.md from Sample.steps (not object decomposition)."""
+    lines = [
+        f"# {sample.name}\n\n"
+        "You are a single workflow agent responsible for executing the complete workflow described below. "
+        "Process each incoming event by following the workflow steps in order, calling the appropriate tools.\n\n"
+        "**CRITICAL:** Do NOT use agentToAgent or attempt to message other agents. "
+        "You are the only agent. Execute all actions directly using the available tools.\n\n"
+        "## Workflow Steps\n\n",
+    ]
+    for i, step in enumerate(sample.steps, start=1):
+        lines.append(f"{i}. {step}\n")
+
+    lines.append(
+        "\n## Available Tools\n\n"
+        "Use these tools for any external system action:\n"
+        "- `slack_send_message(channel, message)` — post a message to a Slack channel\n"
+        "- `slack_list_channels()` — list Slack channels\n"
+        "- `slack_add_reaction(message_id, emoji)` — add a reaction to a Slack message\n"
+        "- `slack_get_user(user)` — get Slack user info\n"
+        "- `zapier_tables_create_record(table, data)` — write a record to a Zapier Table\n"
+        "- `zapier_tables_list_records(table, filter)` — read records from a Zapier Table\n"
+        "- `email_send(to, subject, body)` — send an email\n"
+        "- `email_list_inbox(folder)` — list emails in inbox\n"
+        "- `email_read(message_id)` — read an email\n"
+        "- `jira_create_issue(project, summary, description)` — create a Jira issue\n"
+        "- `jira_update_issue(issue_id, status)` — update a Jira issue\n"
+        "- `jira_get_issue(issue_id)` — get a Jira issue\n"
+        "- `jira_list_issues(project, status)` — list Jira issues\n"
+        "- `webhook_post(url, payload)` — call an external webhook\n"
+        "- `calendar_create_event(title, start, end, attendees, description)` — create a calendar event\n"
+        "- `calendar_update_event(event_id, title, start, end)` — update a calendar event\n"
+        "- `calendar_get_event(event_id)` — get a calendar event\n"
+        "- `calendar_list_events(calendar_id, time_min, time_max)` — list calendar events\n"
+        "- `stripe_create_charge(amount, currency, customer, description)` — create a Stripe charge\n"
+        "- `stripe_get_charge(charge_id)` — get a Stripe charge\n"
+        "- `stripe_list_charges(customer, limit)` — list Stripe charges\n"
+        "- `stripe_refund_charge(charge_id, amount)` — refund a Stripe charge\n"
+        "- `monday_create_item(board_id, item_name, column_values)` — create a Monday.com item\n"
+        "- `monday_update_item(item_id, column_values)` — update a Monday.com item\n"
+        "- `monday_get_item(item_id)` — get a Monday.com item\n"
+        "- `monday_list_items(board_id)` — list Monday.com items\n"
+        "- `salesforce_create_record(object_type, fields)` — create a Salesforce record\n"
+        "- `salesforce_update_record(object_type, record_id, fields)` — update a Salesforce record\n"
+        "- `salesforce_get_record(object_type, record_id)` — get a Salesforce record\n"
+        "- `salesforce_list_records(object_type, filter)` — list Salesforce records\n"
+        "- `airtable_create_record(base_id, table, fields)` — create an Airtable record\n"
+        "- `airtable_update_record(base_id, table, record_id, fields)` — update an Airtable record\n"
+        "- `airtable_get_record(base_id, table, record_id)` — get an Airtable record\n"
+        "- `airtable_list_records(base_id, table, filter)` — list Airtable records\n"
+        "- `hubspot_create_contact(email, first_name, last_name, properties)` — create a HubSpot contact\n"
+        "- `hubspot_update_contact(contact_id, properties)` — update a HubSpot contact\n"
+        "- `hubspot_create_deal(deal_name, amount, stage, contact_id)` — create a HubSpot deal\n"
+        "- `hubspot_update_deal(deal_id, properties)` — update a HubSpot deal\n"
+        "- `hubspot_get_deal(deal_id)` — get a HubSpot deal\n"
+        "- `github_create_issue(repo, title, body, labels)` — create a GitHub issue\n"
+        "- `github_update_issue(repo, issue_number, title, state, body)` — update a GitHub issue\n"
+        "- `github_get_issue(repo, issue_number)` — get a GitHub issue\n"
+        "- `github_list_issues(repo, state)` — list GitHub issues\n"
+        "- `sheets_create_row(spreadsheet_id, sheet, values)` — append a row to Google Sheets\n"
+        "- `sheets_update_row(spreadsheet_id, row, values, sheet)` — update a row in Google Sheets\n"
+        "- `sheets_get_row(spreadsheet_id, row, sheet)` — get a row from Google Sheets\n"
+        "- `sheets_list_rows(spreadsheet_id, sheet, max_rows)` — list rows from Google Sheets\n"
+        "- `asana_create_task(project_id, name, notes, assignee, due_on)` — create an Asana task\n"
+        "- `asana_update_task(task_id, name, completed, notes)` — update an Asana task\n"
+        "- `asana_get_task(task_id)` — get an Asana task\n"
+        "- `asana_list_tasks(project_id, completed)` — list Asana tasks\n"
+        "- `notion_create_page(parent_id, title, content, properties)` — create a Notion page\n"
+        "- `notion_update_page(page_id, title, properties)` — update a Notion page\n"
+        "- `notion_get_page(page_id)` — get a Notion page\n"
+        "- `notion_query_database(database_id, filter)` — query a Notion database\n"
+        "- `twilio_send_sms(to, message, from)` — send an SMS via Twilio\n"
+        "- `twilio_send_message(to, message, channel)` — send a message via Twilio\n\n"
+        "## State\n\n"
+        "Your workflow state is in `state.md`. Read it at the start of each interaction and update it after.\n\n"
+        "## Instructions\n\n"
+        "- Follow the workflow steps in order for each incoming event\n"
+        "- Call tools to take all required external actions\n"
+        "- **NEVER use agentToAgent.** You are the only agent.\n"
+        "- Update `state.md` after each interaction\n"
+    )
+    return "".join(lines)
+
+
+def _steps_soul_md(sample) -> str:
+    """Build SOUL.md for steps-based single-agent mode."""
+    return (
+        f"# {sample.name}\n\n"
+        f"You are a unified workflow agent executing the '{sample.name}' workflow.\n\n"
+        "Your purpose: receive events and execute the complete workflow end-to-end using the available tools.\n\n"
+        "You are the only agent — do NOT use agentToAgent.\n\n"
+        "Execute all steps completely. Never stop at 'I would forward this' — complete the full action chain.\n"
+    )
+
+
+def _steps_state_md() -> str:
+    """Initial empty state for steps-based single-agent mode."""
+    return "# State\n\nEmpty — no workflow runs have completed yet.\n"
 
 
 def _combined_agents_md(objects: list[ObjectDefinition]) -> str:
@@ -468,6 +568,19 @@ def _build_openclaw_json(objects: list[ObjectDefinition], output_dir: Path) -> d
 
     all_ids = [obj.object_id for obj in objects]
 
+    event_bindings = []
+    for obj in objects:
+        for src in obj.event_sources:
+            binding = _classify_event_source(src)
+            entry: dict = {"agentId": obj.object_id, "type": binding.kind, "descriptor": src}
+            if binding.kind == "webhook":
+                entry["webhookName"] = binding.webhook_name
+            elif binding.kind == "cron":
+                entry["cron"] = binding.cron_expr
+            if binding.warning:
+                entry["warning"] = binding.warning
+            event_bindings.append(entry)
+
     return {
         "agents": {"list": agent_list},
         "tools": {
@@ -480,6 +593,11 @@ def _build_openclaw_json(objects: list[ObjectDefinition], output_dir: Path) -> d
             # Trust loopback + Docker bridge so inter-agent sessions_send routing
             # isn't blocked by the WS handshake hardening (issue #21236).
             "trustedProxies": ["127.0.0.1", "::1", "172.16.0.0/12"],
+        },
+        "eventBindings": event_bindings,
+        "_meta": {
+            "object_count": len(objects),
+            "source": str(output_dir),
         },
     }
 
@@ -639,11 +757,11 @@ def rewrite_agents_md(
     except ImportError:
         obj_defs = list(objects)
 
-    # Leaf peers are write-service objects that have no peers of their own.
+    # Leaf nodes are write-service objects that have no neighbors of their own.
     # They are called fire-and-forget (timeoutSeconds=0) so the cascade does
-    # not compound: if a brain agent calls two leaf write services sequentially
-    # with timeoutSeconds=150 each, the chain takes 300s — exceeding the 150s
-    # budget of the parent that called the brain agent.
+    # not compound: if a business_logic node calls two leaf write services
+    # sequentially with timeoutSeconds=150 each, the chain takes 300s —
+    # exceeding the 150s budget of the parent that called the business_logic node.
     leaf_ids_base: set[str] = {o.object_id for o in obj_defs if not o.peers}
     leaf_ids: frozenset[str] = frozenset(
         f"{oid}{slot_suffix}" for oid in leaf_ids_base
@@ -655,7 +773,7 @@ def rewrite_agents_md(
         if not ws.exists():
             continue
         if slot_suffix:
-            # Rewrite peer IDs with slot suffix so sessionKey refs are slot-correct
+            # Rewrite neighbor IDs with slot suffix so sessionKey refs are slot-correct
             slotted_peers = [
                 replace(p, object_id=f"{p.object_id}{slot_suffix}")
                 for p in obj.peers
@@ -748,11 +866,7 @@ def export_single_agent_workspace(
     Returns:
         Workspace directory path.
     """
-    from src.data.schema import ObjectDef, to_lnl_definition
-    obj_defs = [
-        to_lnl_definition(o) if isinstance(o, ObjectDef) else o
-        for o in objects
-    ]
+    from src.data.schema import ObjectDef, Sample, to_lnl_definition
     output_dir = Path(output_dir)
     ws = output_dir / f"workspace-{agent_id}"
     ws.mkdir(parents=True, exist_ok=True)
@@ -767,9 +881,18 @@ def export_single_agent_workspace(
         except OSError:
             pass
 
-    _write(ws / "AGENTS.md", _combined_agents_md(obj_defs))
-    _write(ws / "SOUL.md", _combined_soul_md(obj_defs))
-    _write(ws / "state.md", _combined_state_md(obj_defs))
+    if isinstance(objects, Sample):
+        _write(ws / "AGENTS.md", _steps_agents_md(objects))
+        _write(ws / "SOUL.md", _steps_soul_md(objects))
+        _write(ws / "state.md", _steps_state_md())
+    else:
+        obj_defs = [
+            to_lnl_definition(o) if isinstance(o, ObjectDef) else o
+            for o in objects
+        ]
+        _write(ws / "AGENTS.md", _combined_agents_md(obj_defs))
+        _write(ws / "SOUL.md", _combined_soul_md(obj_defs))
+        _write(ws / "state.md", _combined_state_md(obj_defs))
 
     # Ensure the agentDir exists (OpenClaw needs it for auth profiles etc.)
     ad = output_dir / "agents" / agent_id / "agent"
@@ -787,15 +910,18 @@ def reset_single_agent_state(
     agent_id: str = "lnl-eval",
 ) -> None:
     """Reset state.md for the combined single agent to all objects' initial states."""
-    from src.data.schema import ObjectDef, to_lnl_definition
-    obj_defs = [
-        to_lnl_definition(o) if isinstance(o, ObjectDef) else o
-        for o in objects
-    ]
+    from src.data.schema import ObjectDef, Sample, to_lnl_definition
     ws = Path(output_dir) / f"workspace-{agent_id}"
     ws.mkdir(parents=True, exist_ok=True)
     state_file = ws / "state.md"
-    state_file.write_text(_combined_state_md(obj_defs))
+    if isinstance(objects, Sample):
+        state_file.write_text(_steps_state_md())
+    else:
+        obj_defs = [
+            to_lnl_definition(o) if isinstance(o, ObjectDef) else o
+            for o in objects
+        ]
+        state_file.write_text(_combined_state_md(obj_defs))
     try:
         import os as _os
         _os.chmod(state_file, 0o666)
@@ -824,7 +950,7 @@ def apply_modification(
         FileNotFoundError: If workspace or AGENTS.md does not exist.
         ValueError: If field is not supported.
     """
-    supported = {"role": "Role", "behavior": "Behavior", "peers": "Peers"}
+    supported = {"role": "Role", "behavior": "Behavior", "neighbors": "Neighbors"}
     if field not in supported:
         raise ValueError(f"Unsupported field {field!r}. Must be one of: {sorted(supported)}")
 
@@ -866,7 +992,8 @@ def _load_objects(object_dir: Path) -> list[ObjectDefinition]:
     errors = []
     for f in md_files:
         try:
-            objects.append(parse_object_file(f))
+            obj_def, _ = parse_object_file(f)
+            objects.append(obj_def)
         except (ValueError, Exception) as e:
             errors.append(f"{f.name}: {e}")
     if errors:

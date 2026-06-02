@@ -30,7 +30,6 @@ from src.data.schema import (
     ModType,
     Ambiguity,
     ObjectDef,
-    PeerDecl,
     Step,
     Sample,
 )
@@ -44,7 +43,7 @@ ROUTER_OBJ = ObjectDef(
         "When a message arrives, forward it to message-sink via sessions_send. "
         "Record the dispatch in state."
     ),
-    peers=[PeerDecl(object_id="message-sink", relationship="Forward all messages")],
+    neighbors=["message-sink"],
     skills=["slack"],
     state_description="Idle — no messages routed.",
 )
@@ -53,7 +52,7 @@ SINK_OBJ = ObjectDef(
     object_id="message-sink",
     role="Terminal sink: calls slack_send_message for all received messages.",
     behavior="Call slack_send_message with the message content to #general.",
-    peers=[],
+    neighbors=[],
     skills=["slack"],
     state_description="Idle — awaiting messages.",
 )
@@ -66,17 +65,7 @@ ROUTER_SINK_TC = Sample(
     source_type="test",
     link="",
     objects=[ROUTER_OBJ, SINK_OBJ],
-    steps=[
-        Step(
-            text="Route this message: hello world",
-            target="message-router",
-            source="external",
-            expect=EventExpect(
-                action="slack_send_message was called with hello world",
-                reason="router forwards to sink which calls slack_send_message",
-            ),
-        )
-    ],
+    steps=["Route this message: hello world"],
     modifications=[],
     events=[],
     mock_tools=[],

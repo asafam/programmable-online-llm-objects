@@ -692,16 +692,12 @@ def _slot_objects(objects: list, slot_suffix: str) -> list:
     """
     if not slot_suffix:
         return objects
-    from src.data.schema import ObjectDef, PeerDecl
     slotted = []
     for obj in objects:
-        slotted_peers = [
-            PeerDecl(object_id=f"{p.object_id}{slot_suffix}", relationship=p.relationship)
-            for p in obj.peers
-        ]
+        slotted_neighbors = [f"{n}{slot_suffix}" for n in obj.neighbors]
         slotted.append(obj.model_copy(update={
             "object_id": f"{obj.object_id}{slot_suffix}",
-            "peers": slotted_peers,
+            "neighbors": slotted_neighbors,
         }))
     return slotted
 
