@@ -141,21 +141,94 @@ the `--tool-dispatch` CLI default in `evaluate.py`. Update the docstring at
 
 ---
 
+## Dataset-prep note
+
+The picked TCs (`turn-granola-notes-into-tasks-temporal-TC001`,
+`ai-email-assistant-temporal-TC001`, `expenses-tracker-temporal-TC001`)
+came from `outputs/data/zapier/20260522_rev/workflows-mods.jsonl`, where
+every object's `neighbors` field is empty — a pre-existing data-generation
+gap unrelated to async work. With no graph edges the workflow can't route
+messages past the entry-point service, and both sync and async run at 0%.
+We hand-patched neighbors per TC (inferred from the per-object `behavior`
+text) before benchmarking. The patched file lives at
+`outputs/data/zapier/async_validation/workflows-mods.jsonl`.
+
 ## Iterations
 
 > Each row is **steps-only** on `outputs/data/zapier/async_validation/workflows-mods.jsonl`
-> with `--model gpt-5.4-mini --judge-model gpt-5.4 --runs 1`.
-> "Score" is the fraction of step-judgements with verdict=PASS across all
-> steps in the 3 TCs.
+> with `--model gpt-5.4-mini --judge-model gpt-5.4 --judge-provider azure
+> --runs 1`. "Score" is the fraction of step-judgements with verdict=PASS
+> across all 3 TCs (one S001 step per TC).
 
-| Iter | Dispatch | Change            | Score | Δ vs sync | Notes |
-|-----:|----------|-------------------|------:|----------:|-------|
-| 0a   | sync     | baseline (stable) |   TBD |       0.0 | reference |
-| 0b   | async    | current state     |   TBD |       TBD | reproduce regression |
-| 1    | async    | F1 (assistant turn preserved) | TBD | TBD | |
-| 2    | async    | F1+F2 (batched replies, if needed) | TBD | TBD | |
+| Iter | Dispatch | Code        | Steps pass | Wall (run) | Cost  | Notes |
+|-----:|----------|-------------|-----------:|-----------:|------:|-------|
+| 0a   | sync     | post-F1 (a052f32+F1) | 2/3 = 0.667 | 01:55 | $0.28 | reference |
+| 0b   | async    | pre-F1 (stable a052f32) | 2/3 = 0.667 | 01:44 | $0.27 | reproduce regression — none observed |
+| 1    | async    | post-F1 (f3617fc)       | 2/3 = 0.667 | 01:01 | $0.17 | assistant-turn preserved |
 
-(Filled in as runs land.)
+Pass/fail breakdown (identical across all three rows):
+- `turn-granola-notes-into-tasks-…` — **FAIL**. Judge: the agent created
+  4/5 Asana tasks (or, in sync, "more than 5") — a behavioral issue around
+  multi-item dispatch, **not** an async-tool issue. Same failure mode in
+  sync and async, with and without F1.
+- `ai-email-assistant-…` — **PASS** in all three rows.
+- `expenses-tracker-…` — **PASS** in all three rows.
+
+### Reading the result
+
+On this 3-TC validation set:
+
+- **Async ≡ sync** at 0.667 pass rate. The "async regresses" pattern
+  documented in `runtime.py:138` is not reproduced here.
+- **F1 is neutral on score** (pre-F1 == post-F1 at this small N) but is
+  correct-by-construction: the unit test
+  `TestAsyncDispatchPreservesAssistantTurn` locks in the invariant that
+  the LLM's prior tool_call round-trips as a real `role=assistant` message
+  in the continuation prompt.
+- **Async is materially faster and cheaper**: 01:01 vs 01:55 wall, $0.17
+  vs $0.28 cost — async's batched tool execution overlaps with peer-message
+  processing.
+
+### Why F1 may still matter (on larger sets)
+
+The three TCs in this set each fire **one tool call per step** through a
+linear neighbor graph (entry → business-logic → write-service), so the
+async path's "lost-intent" failure mode — where the LLM in the
+continuation turn sees a tool result without seeing the call it made —
+gets masked by the rendered active_plan step's `result:` line (which
+encodes "this tool was called and returned X"). The failure mode is most
+likely to bite when:
+
+- the LLM dispatches **multiple tools in a batch** (so multiple REPLYs
+  arrive in separate turns and the active_plan can only encode the last);
+- the planner is off, so there is no active_plan to fall back on;
+- the conversation is long enough that the LLM needs the explicit
+  `assistant(tool_call) → user(result)` pairing to attribute the result
+  correctly.
+
+The next ablation should run F1 on/off on a tool-heavier subset (3+
+tools/step, fan-out branches) or with `--no-enable-planner`. We did not
+do this here to keep the spend bounded.
+
+---
+
+## Outstanding work
+
+1. **Validate on a tool-heavier subset.** The current 3-TC set is too
+   simple to exercise F1's intended fix. Pick TCs with ≥3 tool calls per
+   step (or fan-out plans), or run a planner-off ablation.
+2. **Flip the default to async** once (1) confirms epsilon delta.
+   `SystemConfig.tool_dispatch` (`runtime.py:143`) and `--tool-dispatch`
+   (`evaluate.py:2685`) both default to `"sync"`. The docstring at
+   `runtime.py:138–142` will need a rewrite to reflect "post-F1, async is
+   the default".
+3. **Backfill the data-generation pipeline** so freshly-generated
+   workflows (20260522_rev style) ship with populated `neighbors` lists.
+   Currently the graph is encoded only in `behavior` prose and the
+   identify_objects prompt expects the model to set neighbors explicitly.
+4. **Optional F2 (batch tool REPLYs in `read()`)** — only needed if a
+   tool-heavier ablation still shows a gap. Sketched in the fix-plan
+   above; not implemented.
 
 ---
 
