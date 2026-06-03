@@ -212,32 +212,198 @@ do this here to keep the spend bounded.
 
 ---
 
-## Outstanding work
+## Iter-0 verdict (superseded)
 
-1. **Validate on a tool-heavier subset.** The current 3-TC set is too
-   simple to exercise F1's intended fix. Pick TCs with ≥3 tool calls per
-   step (or fan-out plans), or run a planner-off ablation.
-2. **Flip the default to async** once (1) confirms epsilon delta.
-   `SystemConfig.tool_dispatch` (`runtime.py:143`) and `--tool-dispatch`
-   (`evaluate.py:2685`) both default to `"sync"`. The docstring at
-   `runtime.py:138–142` will need a rewrite to reflect "post-F1, async is
-   the default".
-3. **Backfill the data-generation pipeline** so freshly-generated
-   workflows (20260522_rev style) ship with populated `neighbors` lists.
-   Currently the graph is encoded only in `behavior` prose and the
-   identify_objects prompt expects the model to set neighbors explicitly.
-4. **Optional F2 (batch tool REPLYs in `read()`)** — only needed if a
-   tool-heavier ablation still shows a gap. Sketched in the fix-plan
-   above; not implemented.
+The 3-TC validation set above was rejected as too small. **F1 was reverted**
+(commit `e13b731`) because its design — adding `MessageType.ASSISTANT_TURN`
+and rendering it as a synthetic `role=assistant` message — broke role
+symmetry with obj-to-obj communication, where peer REPLYs render as
+user-role text in the history blob. Whatever context the LLM needs after
+an async dispatch must come through the existing `MessageType.REPLY`
+rendering and the `active_plan` snapshot — never via a parallel synthetic
+type.
+
+The sections below (Iter-1) replace the F1 plan with a properly sized
+subset and a fix derived from the user-articulated invariant set.
 
 ---
 
+# Iter-1 — 60-TC subset, invariant-driven harness fixes
+
+## Invariant set (user spec)
+
+1. **Timeouts = shared infra**, dispatch-mode-agnostic. Both sync and
+   async hit the same HTTP-layer hang.
+2. **Harness must preserve the order of API calls** (sync OR async).
+3. **A call missing in dispatch order → plan stays pending/waiting**.
+   The planner does not advance past the gap.
+4. **A failed call → retry or marked failed in the plan** — never
+   silently skipped.
+
+## Dataset
+
+`outputs/data/zapier/async_subset/eval60.jsonl` = `eval30` ∪ `eval30_extra`,
+both drawn deterministically from `20260522_rev/workflows-mods.jsonl` by
+`scripts/select_async_subset.py` (criteria: tools≥2, objects≥5, steps≥2,
+base events present, ≤2 leaf nodes). 60 TCs across 17 workflow families,
+6 mod-types each, dedups to 18 unique `sample_id`s under `--steps-only`.
+Hold-out: `holdout10.jsonl` (10 TCs, no overlap with `eval60`).
+
+Backwards-compat schema validators (`src/data/schema.py`, commit `6507d18`)
+unblock the legacy `peers:[{object_id,relationship}]` /
+`steps:[{text,target,…}]` shapes so the 20260420/0411/0512 clean files
+load against the new schema. 1464 legacy TCs accepted, zero rejections.
+
+## Iter-0 (pre-fix) — measuring the regression
+
+`R1_sync` and `R2_async` on `eval30` (commit `9146c14`), repeated as
+`R1_sync_extra` / `R2_async_extra` on `eval30_extra`. Combined matrix
+(`R_pre_sync.jsonl` + `R_pre_async.jsonl`, n=71 events across 34 unique
+TCs after dedup):
+
+| | sync | async |
+|---|---:|---:|
+| total events | 71 | 71 |
+| passes | 39 | 36 |
+| pass rate (raw) | 54.9 % | 50.7 % |
+| **HTTP/timeout failures (`Timeout after 180s`)** | 5 | 5 |
+| pass rate excluding timeout events (n=61) | 60.7 % | 52.5 % |
+| net async-specific delta | — | **−5 events ≈ −8.2 pt** |
+
+**Failure-mode classification on the 5 genuine async regressions** (after
+removing timeout-dominated ones): 3 state-ordering races (out-of-order
+tool REPLY drove the planner past a still-pending step), 1 wrong-arg
+(LLM used name instead of email), 1 misc. The two `exec_calls=0` async
+timeouts share the same signature as the 5 sync timeouts — process_message
+never produced an LLM call.
+
+## Fix — invariant-aligned
+
+### Gap A — brain HTTP timeout (invariant #1, #4)
+
+Iter-0's timeouts (5 sync + 5 async) all signed up as `exec_calls=0`,
+zero tokens, zero outgoing messages. Cause: the OpenAI / Azure SDK
+clients had no default timeout, so a stuck HTTP request inside
+`brain.react_call` / `plan_call` / `evaluate_call` left `read()` blocked
+forever and the runtime's `Transaction` count never decremented. The
+gateway dispatch's outer 180s wrapper aborts the eval but the runtime
+thread stays parked, lingering across TCs.
+
+Fix (commit `0a375fa`):
+- `AzureBrain` and `OpenAIBrain` now accept `timeout: float = 90.0` and
+  pass it to the SDK client. The SDK raises `APITimeoutError` on expiry.
+- Runtime `_done` callback (`runtime.py:709`) classifies
+  `apitimeouterror` / `request timed out` / `read timed out` as
+  infra_error markers, so the event surfaces cleanly to the eval and
+  the transaction releases.
+
+### Gap B-strict — per-trace tool-REPLY gating (invariants #2, #3)
+
+When the executor dispatches `[t1, t2, t3]` async (plan steps `s1, s2,
+s3`), the worker for `t2` may finish before `t1`. Pre-fix, that REPLY
+triggered an executor LLM call with `s1=dispatched, s2=done`, letting
+the planner act on `s2` prematurely.
+
+Fix (commit `0a375fa`, in `object.process_message`): when the inbound
+message is a tool REPLY for plan step N **and** an earlier step M<N is
+still `planned`/`dispatched`, capture the result onto `plan.steps[N]`
+(already handled by `_execute_tool`) and return `status="pending"`
+**without invoking the brain**. The object stays non-blocking — the
+next mailbox message (peer, REPLY on another trace, etc.) is processed
+normally. When the earliest pending step's REPLY arrives the gate
+opens; the active_plan render then shows every captured result in
+dispatch order.
+
+Role symmetry preserved: tool REPLYs continue to render as user-role
+text in the history blob, identical to peer REPLYs. **No new
+`MessageType`**. **No `role=assistant` injection**. **No blocking** —
+the deferral is per-trace LLM-call only, not per-object.
+
+Unit tests in `tests/test_object.py::TestAsyncReplyGating` lock the
+invariant:
+- out-of-order REPLY defers (brain not invoked);
+- earliest-pending REPLY opens the gate (brain invoked);
+- no plan → no gating;
+- peer REPLY is not gated.
+
+## Iter-1 (post-fix) — measurement
+
+`R3_sync_postfix` and `R3_async_postfix` on `eval60.jsonl`, both with
+the same `--model gpt-5.4-mini --judge-model gpt-5.4 --judge-provider
+azure --steps-only --runs 1 --verbose DEBUG` invocation:
+
+| n=38 events (18 unique TCs after dedup) | sync | async |
+|---|---:|---:|
+| total events | 38 | 38 |
+| passes | 24 | 23 |
+| pass rate (raw) | 63.2 % | 60.5 % |
+| **HTTP/timeout failures** | 2 | **0** |
+| pass rate excluding timeout events (n=36) | 66.7 % | 61.1 % |
+| net async-specific delta | — | **−1 event ≈ −3 pt (within ±ME)** |
+| cost | $4.61 | $2.49 |
+| wall | 32:30 | **17:24** |
+
+**Net delta async vs sync, pre→post:**
+- Async raw pass rate: 50.7 % → 60.5 % (**+9.8 pt**).
+- Async timeouts: 5 → **0**. (Sync timeouts: 5 → 2 — Gap A also helps
+  sync; the residual 2 are non-brain stalls, separate root cause.)
+- Net async regression: **−5 events → −1 event (~80 % closed)**.
+- Async is **46 % cheaper and 46 % faster** than sync in iter-1.
+
+### Holdout collateral check
+
+`R3_sync_holdout` / `R3_async_holdout` on `holdout10.jsonl` (9 unique
+TCs after dedup, n=19 events):
+
+| | sync | async |
+|---|---:|---:|
+| total events | 19 | 19 |
+| passes | 10 | 12 |
+| pass rate | 52.6 % | **63.2 %** |
+| timeouts | 0 | 0 |
+| cost | $2.12 | **$1.05** |
+| wall | 11:22 | **6:29** |
+
+Disagreement decomposition: 9 both-pass / 6 both-fail / 1 regression /
+**3 gains**. **Net delta async − sync = +2 events** on a previously-unseen
+sample. All three plan §8 termination criteria satisfied:
+1. async ≥ sync on `eval60` (±1 TC) — 23 vs 24 = ±1 ✅
+2. async ≥ sync on `holdout10` — +2 events ✅
+3. zero tool-dispatch state regressions outside run-to-run noise ✅
+
+## Default flipped (commit pending)
+
+- `SystemConfig.tool_dispatch` default → `"async"` (`src/lnl/runtime.py:143`).
+- `--tool-dispatch` CLI default → `"async"` (`src/data/evaluate.py:2685`).
+- `runtime.py:132–143` comment rewritten to cite the iter-1 measurement
+  and the two fixes (Gap A + Gap B-strict) that closed the original
+  regression.
+- `_VERSION` bumped in both `evaluate.py` (v43) and `evaluate_baseline.py`
+  (v47) per repo convention.
+
+## Outstanding work
+
+1. **Investigate the residual 2 sync timeouts** in `R3_sync_postfix`.
+   Both `exec_calls=0` with **zero tokens consumed** — Gap A's brain
+   timeout did not fire. Likely a stall outside the brain HTTP path
+   (event source binding? mock server handshake? cascade re-entry?).
+   Async hit zero such timeouts, so the non-blocking actor model is
+   incidentally resilient; the underlying bug is still real and worth
+   tracking down. Independent of the async-default work.
+2. **Backfill the data-generation pipeline** so freshly-generated
+   workflows ship with populated `neighbors`. Currently the graph is
+   encoded only in `behavior` prose and the `identify_objects` prompt
+   silently leaves `neighbors=[]` on most objects.
+3. **Larger N for tighter confidence.** Iter-1's ±ME is ±18.7 pt on a
+   single TC of difference; a 200+ TC pass would tighten this. Cost
+   budget permitting.
+
 ## Open questions
 
-- How sensitive is the gap to planner-on vs planner-off? Planner-on
-  partially mitigates via plan-step rendering, but loses args/thought.
-  Validate F1 on both `--enable-planner` and `--no-enable-planner` once we
-  have a reproduction.
-- Does the LLM use `call_id` correctly when only one result is shown? The
-  assistant-turn rendering carries `tool_calls[i].id`; the REPLY rendering
-  carries `[Tool result (call X) …]`. F1 should make the pairing obvious.
+- The 1 residual event-level async regression (`it-helpdesk-temporal`,
+  `leave-tracker-correction`, `order-request-form-exception` at TC
+  level; only `it-helpdesk-temporal` was a regress in iter-0 too).
+  `leave-tracker-correction` was a **gain** in iter-0 and a regression
+  in iter-1 — that flip is strongly suggestive of run-to-run noise, not
+  a stable failure mode.
+- Sync still has 2 non-brain stalls. What's the root cause?

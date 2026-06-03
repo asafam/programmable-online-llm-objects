@@ -336,7 +336,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-25 (v46): mock_server.py injects generic-name aliases so agents calling slack_send_message/email_send/etc. get the TC-seeded template instead of "no script configured".
+_VERSION: str = _build_version()  # bumped 2026-06-03 (v47): companion bump — evaluate.py default --tool-dispatch flipped to "async" (see ABLATIONS.md iter-1).
 
 # ── Infrastructure failure detection ─────────────────────────────────────────
 

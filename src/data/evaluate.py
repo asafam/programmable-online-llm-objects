@@ -69,7 +69,7 @@ def _build_version() -> str:
         from datetime import datetime
         return datetime.fromtimestamp(mtime).strftime("%Y%m%d_%H%M%S")
 
-_VERSION: str = _build_version()  # bumped 2026-05-25 (v42): companion bump — mock_server.py injects generic-name aliases so baseline agents get TC-seeded responses.
+_VERSION: str = _build_version()  # bumped 2026-06-03 (v43): --tool-dispatch default flipped to "async" after iter-1 closed the pre-fix regression (eval60 sync 63.2% vs async 60.5%, holdout10 sync 52.6% vs async 63.2%). See docs/ABLATIONS.md.
 
 from src.data.schema import (
     EvalSummary,
@@ -2682,15 +2682,18 @@ Examples:
     parser.add_argument(
         "--tool-dispatch",
         choices=["async", "sync"],
-        default="sync",
+        default="async",
         help=(
-            "Tool dispatch mode (default: sync). "
-            "'sync' — tools execute inline in the ReAct loop (single multi-turn LLM call); "
-            "the result is fed back as the next user message. Blocks the object thread "
-            "until all tools complete, but the LLM keeps its own prior tool_call in context. "
+            "Tool dispatch mode (default: async). "
             "'async' — tools submit to a per-object pool; the result arrives as a mailbox "
             "REPLY processed in a new process_message turn (non-blocking actor semantics; "
-            "the object can service peer/heartbeat messages while a tool runs)."
+            "the object can service peer/heartbeat messages while a tool runs). Per-trace "
+            "LLM-call gating in object.process_message defers brain calls when a REPLY "
+            "arrives for plan step N while an earlier step M<N is still pending, so the "
+            "order-of-API-calls invariant is preserved without blocking. "
+            "'sync' — tools execute inline in the ReAct loop (single multi-turn LLM call); "
+            "the result is fed back as the next user message. Blocks the object thread "
+            "until all tools complete."
         ),
     )
     parser.add_argument(

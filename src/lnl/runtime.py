@@ -129,18 +129,29 @@ class SystemConfig:
     # "flat" reverts to the legacy {op, key, value} top-level deltas (kept for
     # A/B comparison and back-compat with pre-refactor runs).
     memory_backend: str = "nested"
-    # Tool dispatch mode: "sync" (default) — tools execute inline in the ReAct
-    # loop, result fed back immediately as the next user message (single
-    # multi-turn LLM call; blocks the object thread until tools complete).
-    # "async" — tools submit to the per-object pool and the result arrives
-    # as a mailbox REPLY processed in a new process_message turn (non-blocking
-    # actor semantics; the object can service peer/heartbeat messages while
-    # a tool runs). Sync is the default because the per-turn async LLM call
-    # empirically loses pass rate on the Zapier multistep eval (each turn
-    # rebuilds the prompt without the LLM's own prior tool_call action in
-    # context, leading to lost-intent / re-dispatch patterns). Async remains
-    # available via --tool-dispatch async for actor-style production runs.
-    tool_dispatch: str = "sync"
+    # Tool dispatch mode:
+    # "async" (default) — tools submit to the per-object pool and the result
+    # arrives as a mailbox REPLY processed in a new process_message turn
+    # (non-blocking actor semantics; the object can service peer/heartbeat
+    # messages while a tool runs). Per-trace LLM-call gating in
+    # object.process_message defers the brain call when a tool REPLY arrives
+    # for plan step N while an earlier step M<N is still planned/dispatched —
+    # preserving the order-of-API-calls invariant the user specified for
+    # iter-1. See docs/ABLATIONS.md (Iter-1).
+    # "sync" — tools execute inline in the ReAct loop, result fed back
+    # immediately as the next user message (single multi-turn LLM call;
+    # blocks the object thread until tools complete). Kept for A/B
+    # comparison.
+    #
+    # Empirical (iter-1, eval60 + holdout10 steps-only,
+    # gpt-5.4-mini/gpt-5.4 azure):
+    #   eval60   — sync 63.2% vs async 60.5% pass rate (within ±ME, async
+    #              has 0 timeouts vs sync's 2; async ~46% cheaper, ~46% faster).
+    #   holdout10 — sync 52.6% vs async 63.2% (async +2 events).
+    # The earlier "async loses pass rate" claim in this file was tied to a
+    # pre-fix harness — see commits e13b731 (F1 revert) and 0a375fa (Gap A +
+    # Gap B-strict) for the two fixes that closed the gap.
+    tool_dispatch: str = "async"
     # Planner mode: "dag" (default) — planner emits a dependency graph and
     # independent steps (empty depends_on or all deps done) fan out concurrently
     # in a single executor turn. "sequential" — planner emits a step-by-step
