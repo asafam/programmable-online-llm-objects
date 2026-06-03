@@ -79,11 +79,16 @@ class PatchableField:
 def _coerce_peers(value: Any) -> list[PeerDeclaration]:
     if not isinstance(value, list):
         return []
-    return [
-        PeerDeclaration(object_id=p["object_id"], relationship=p["relationship"])
-        for p in value
-        if isinstance(p, dict) and "object_id" in p and "relationship" in p
-    ]
+    result = []
+    for p in value:
+        if isinstance(p, str) and p.strip():
+            result.append(PeerDeclaration(object_id=p.strip(), relationship="neighbor"))
+        elif isinstance(p, dict) and "object_id" in p:
+            result.append(PeerDeclaration(
+                object_id=p["object_id"],
+                relationship=p.get("relationship", "neighbor"),
+            ))
+    return result
 
 
 def _coerce_str_list(value: Any) -> list[str]:

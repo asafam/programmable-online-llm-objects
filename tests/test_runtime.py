@@ -669,14 +669,14 @@ class TestAdminEdgeCases:
         assert rt._bus.objects["worker"].definition.skills == ["valid", "also-valid"]
 
     def test_admin_peers_filters_malformed_entries(self):
-        """peers list filters out non-dict entries defensively."""
+        """peers list accepts dicts and strings; filters out None/numeric entries."""
         brain = MockBrain()
         brain.script_admin(
             reply="ok",
             updated_definition={
                 "peers": [
                     {"object_id": "good", "relationship": "ok"},
-                    "not-a-dict",
+                    "also-good",
                     None,
                     42,
                 ],
@@ -689,7 +689,7 @@ class TestAdminEdgeCases:
         rt.send_admin("worker", "Update peers.")
 
         peers = rt._bus.objects["worker"].definition.peers
-        assert [p.object_id for p in peers] == ["good"]
+        assert [p.object_id for p in peers] == ["good", "also-good"]
 
     def test_admin_history_includes_admin_message(self):
         """The admin message must be appended to history so subsequent turns

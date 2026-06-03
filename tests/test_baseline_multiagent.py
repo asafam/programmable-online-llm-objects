@@ -15,6 +15,7 @@ Coverage:
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import logging
 import threading
 from pathlib import Path
@@ -23,6 +24,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+
+_OPENCLAW_SDK_AVAILABLE = importlib.util.find_spec("openclaw_sdk") is not None
+_skip_no_openclaw = pytest.mark.skipif(
+    not _OPENCLAW_SDK_AVAILABLE,
+    reason="openclaw_sdk requires Python >=3.11; skipped in this environment",
+)
 
 from src.data.schema import (
     EventExpect,
@@ -186,7 +193,7 @@ class TestConcurrentSlotWorkspaces:
         assert "message-sink-c1" in ids
 
         router = next(o for o in slotted if "router" in o.object_id)
-        assert router.peers[0].object_id == "message-sink-c1"
+        assert router.neighbors[0] == "message-sink-c1"
 
     def test_slot_objects_noop_for_empty_suffix(self):
         """_slot_objects with empty suffix returns original objects unchanged."""
@@ -335,6 +342,7 @@ class TestMockServerSlotIsolation:
 
 # ── Part D: _wait_for_gateway raises TimeoutError ─────────────────────────────
 
+@_skip_no_openclaw
 class TestWaitForGatewayTimeout:
     """D: _wait_for_gateway raises asyncio.TimeoutError after timeout (not silent)."""
 
@@ -368,6 +376,7 @@ class TestWaitForGatewayTimeout:
 
 # ── Part A (integration): _execute_tc_async session naming ───────────────────
 
+@_skip_no_openclaw
 class TestExecuteTCAsyncSessionNaming:
     """A3+A4: _execute_tc_async uses unique session names and rewrites AGENTS.md."""
 
@@ -558,6 +567,7 @@ class TestExecuteTCAsyncSessionNaming:
 
 # ── Part E: Tool trigger KeyError logging ────────────────────────────────────
 
+@_skip_no_openclaw
 class TestToolTriggerKeyErrorLogging:
     """E: KeyError from trigger template produces WARNING log (not silent swallow)."""
 

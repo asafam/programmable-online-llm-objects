@@ -94,17 +94,15 @@ def find_read_write_misclassifications(tc: "Sample") -> list[str]:
             target = object_map.get(neighbor_id)
             if target is None:
                 continue
-            # Flag read_service targets that have write-only behavior — they cannot
-            # respond to queries, so any caller that awaits a reply will stall.
             is_write_only = bool(WRITE_ONLY_BEHAVIOR.search(target.behavior))
             has_event_sources = bool(target.event_sources)
             has_any_skill = bool(target.skills)
+            # A target that explicitly refuses to reply, or has no response mechanism at
+            # all, will stall any caller that awaits a reply from it.
             if is_write_only or (not has_event_sources and not has_any_skill):
-                pass  # benign write services are common neighbors; only flag read services
-            if is_write_only and target.node_type and "read" in str(target.node_type):
                 issues.append(
-                    f"Object '{obj.object_id}' routes to read_service '{target.object_id}' "
-                    f"but it has write-only behavior and cannot respond"
+                    f"Object '{obj.object_id}' has neighbor '{target.object_id}' "
+                    f"that cannot respond (write-only behavior or no event_sources/skills)"
                 )
     return issues
 
@@ -166,7 +164,8 @@ def find_missing_step_data(tc: "Sample") -> list[str]:
     - Slack channel names (#channel) in expected actions
     - Quoted ticket/record IDs (e.g., "PROJ-1042") in expected actions
     """
-    available_text = " ".join(step.input for step in tc.events if step.role == "base")
+    available_text = " ".join(tc.steps)
+    available_text += " " + " ".join(step.input for step in tc.events if step.role == "base")
     available_text += " " + " ".join(e.input for e in tc.events)
     available_text += " " + " ".join(o.behavior for o in tc.objects)
     available_text += " " + " ".join(m.intent for m in tc.modifications)
