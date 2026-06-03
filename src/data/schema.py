@@ -18,7 +18,7 @@ from schema import (  # noqa: E402 — mock/schema.py
     EventTrigger,
 )
 
-from pydantic import BaseModel, field_validator, Field
+from pydantic import BaseModel, field_validator, Field, model_validator
 from typing import Literal, Optional, Union
 from enum import Enum
 
@@ -250,6 +250,29 @@ class ObjectDef(BaseModel):
             return []
         return [slugify(n) if isinstance(n, str) else str(n) for n in v]
 
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_peers_to_neighbors(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        if data.get("neighbors"):
+            return data
+        peers = data.get("peers")
+        if not peers:
+            return data
+        ids: list[str] = []
+        for p in peers:
+            if isinstance(p, dict) and "object_id" in p:
+                ids.append(p["object_id"])
+            elif isinstance(p, str):
+                ids.append(p)
+        if ids:
+            new = {k: v for k, v in data.items() if k != "peers"}
+            new["neighbors"] = ids
+            return new
+        return data
+
+
 class Step(BaseModel):
     """A single workflow step: an NL text addressed to a specific LLM-object."""
     text: str        # Natural language message to send to the target object
@@ -349,6 +372,28 @@ class Sample(BaseModel):
     def all_events(self) -> "list[Event]":
         """Unified event list: base + mod events from self.events."""
         return self.events
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_step_dicts_to_strings(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        steps = data.get("steps")
+        if not isinstance(steps, list) or not steps:
+            return data
+        if not isinstance(steps[0], dict):
+            return data
+        flat: list[str] = []
+        for s in steps:
+            if isinstance(s, dict):
+                text = s.get("text", "")
+                target = s.get("target")
+                flat.append(f"{target}: {text}" if target else text)
+            elif isinstance(s, str):
+                flat.append(s)
+        new = dict(data)
+        new["steps"] = flat
+        return new
 
     def model_post_init(self, __context: object) -> None:
         # Merge legacy mock_tools into tools if tools is empty
