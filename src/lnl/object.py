@@ -90,7 +90,7 @@ class LLMObject:
         wait_matcher_prompt_file: str = "wait_matcher.yaml",
         default_wait_timeout_seconds: float = 86400.0,  # 24h default for wait steps
         memory_backend: "str | MemoryBackend" = "flat",
-        tool_dispatch: str = "sync",
+        tool_dispatch: str = "async",
     ) -> None:
         self._definition = definition
         self._brain = brain

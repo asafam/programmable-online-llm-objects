@@ -201,7 +201,12 @@ class TestProperties:
 
 class TestToolLoop:
     def test_no_tool_registry_processes_normally(self):
-        """Without a tool_registry, a tool_call step loops with an unavailability notice, then finishes."""
+        """Without a tool_registry, a tool_call step loops with an unavailability notice, then finishes.
+
+        Exercises sync mode explicitly — under the async default, the ReAct
+        cycle is one-shot so the second LLM response is never consulted in
+        the no-registry case; that path is covered separately.
+        """
         brain = MockBrain()
         brain.script("test-obj", LLMResponse(
             updated_state={}, reply="",
@@ -211,7 +216,7 @@ class TestToolLoop:
             updated_state={"status": "done"},
             reply="ok",
         ))
-        obj = LLMObject(_make_definition(), brain)
+        obj = LLMObject(_make_definition(), brain, tool_dispatch="sync")
         result = obj.process_message(_user_msg("go"))
         assert result.state_after == {"status": "done"}
 
