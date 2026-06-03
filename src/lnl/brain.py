@@ -1326,6 +1326,7 @@ class OpenAIBrain(LLMBrain):
         api_key: Optional[str] = None,
         temperature: float = 0.0,
         seed: Optional[int] = 42,
+        timeout: float = 90.0,
     ) -> None:
         try:
             from openai import OpenAI
@@ -1335,7 +1336,10 @@ class OpenAIBrain(LLMBrain):
         self.model = model
         self._temperature = temperature
         self._seed = seed
-        self._client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"])
+        # Per-request HTTP timeout (seconds). On expiry the SDK raises
+        # APITimeoutError so the caller can surface a "brain-timeout" failure
+        # rather than the runtime hanging on a stuck request.
+        self._client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"], timeout=timeout)
 
     def call(
         self,
@@ -1574,6 +1578,7 @@ class AzureBrain(LLMBrain):
         api_version: Optional[str] = None,
         temperature: float = 0.0,
         seed: Optional[int] = 42,
+        timeout: float = 90.0,
     ) -> None:
         try:
             from openai import AzureOpenAI
@@ -1590,10 +1595,15 @@ class AzureBrain(LLMBrain):
         resolved_key = api_key or os.environ.get("AZURE_OPENAI_API_KEY")
         if not resolved_key:
             raise ValueError("Azure API key required. Set AZURE_OPENAI_API_KEY or pass api_key=.")
+        # Per-request HTTP timeout (seconds). On expiry the SDK raises
+        # APITimeoutError so the caller can surface a "brain-timeout" failure
+        # rather than the runtime hanging on a stuck request — fixes the
+        # exec_calls=0 deadlocks observed in iter-0 (both sync and async).
         self._client = AzureOpenAI(
             api_key=resolved_key,
             azure_endpoint=resolved_endpoint,
             api_version=resolved_version,
+            timeout=timeout,
         )
 
     def call(

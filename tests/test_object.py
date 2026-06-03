@@ -371,6 +371,121 @@ class TestSyncDispatch:
         assert len(mock_exec.call_log) == 5  # default max_tool_rounds
 
 
+class TestAsyncReplyGating:
+    """Gap B-strict: when a tool REPLY arrives for plan step N but an earlier
+    step (M<N) is still planned/dispatched, the harness must capture the
+    result and defer the brain call. The brain only fires when the earliest
+    pending step's REPLY arrives, at which point the active_plan render shows
+    every captured result in dispatch order — preserving the order-of-API-
+    calls invariant. The object stays non-blocking; the deferred path just
+    returns a 'pending' result without a brain invocation.
+    """
+
+    def _make_obj(self):
+        from src.lnl.types import Plan, PlanStep
+        brain = MockBrain()
+        brain.set_default(LLMResponse(updated_state={}, reply="ok"))
+        obj = LLMObject(_make_definition(), brain, enable_planner=False, enable_evaluator=False)
+        return obj, brain, Plan, PlanStep
+
+    def _tool_reply(self, plan_step_index, trace_id, tool_name="t", call_id="c"):
+        return Message(
+            sender=f"__tool__:{tool_name}",
+            recipient="test-obj",
+            type=MessageType.REPLY,
+            content="ok",
+            trace_id=trace_id,
+            plan_step_index=plan_step_index,
+            id=f"tool-reply-{call_id}",
+            in_reply_to=call_id,
+            reference=call_id,
+            status="ok",
+        )
+
+    def test_out_of_order_reply_defers_brain_call(self):
+        obj, brain, Plan, PlanStep = self._make_obj()
+        trace_id = "tr-1"
+        # Two tools dispatched in plan order: s1 then s2.
+        # The worker for s2 finished first → s2 is 'done' on the plan.
+        # The worker for s1 hasn't replied yet → still 'dispatched'.
+        with obj._plans_lock:
+            obj._active_plans[trace_id] = Plan(
+                goal="g", trace_id=trace_id,
+                steps=[
+                    PlanStep(id="s1", kind="tool", target="alpha", description="first", status="dispatched"),
+                    PlanStep(id="s2", kind="tool", target="beta", description="second", status="done", result="42"),
+                ],
+            )
+        with obj._planned_traces_lock:
+            obj._planned_traces.add(trace_id)
+
+        result = obj.process_message(self._tool_reply(plan_step_index=1, trace_id=trace_id, tool_name="beta", call_id="c-s2"))
+
+        assert result.status == "pending"
+        assert len(brain.call_log) == 0, "brain must NOT be invoked when an earlier plan step is still pending"
+        # REPLY is appended to history so the future continuation prompt renders it.
+        assert any(e.message.sender == "__tool__:beta" for e in obj.history_entries)
+
+    def test_earliest_reply_unblocks_brain_call(self):
+        obj, brain, Plan, PlanStep = self._make_obj()
+        trace_id = "tr-2"
+        # s1 is the earliest pending step — its REPLY should drive a brain call.
+        with obj._plans_lock:
+            obj._active_plans[trace_id] = Plan(
+                goal="g", trace_id=trace_id,
+                steps=[
+                    PlanStep(id="s1", kind="tool", target="alpha", description="first", status="dispatched"),
+                    PlanStep(id="s2", kind="tool", target="beta", description="second", status="done", result="42"),
+                ],
+            )
+        with obj._planned_traces_lock:
+            obj._planned_traces.add(trace_id)
+
+        result = obj.process_message(self._tool_reply(plan_step_index=0, trace_id=trace_id, tool_name="alpha", call_id="c-s1"))
+
+        assert result.status != "pending", f"brain must fire when the earliest pending REPLY arrives, got status={result.status}"
+        assert len(brain.call_log) >= 1, "brain must be invoked once the gate opens"
+
+    def test_no_plan_no_gating(self):
+        obj, brain, Plan, PlanStep = self._make_obj()
+        # No active plan → no gating possible → brain fires normally.
+        result = obj.process_message(self._tool_reply(plan_step_index=5, trace_id="tr-no-plan"))
+        assert result.status != "pending"
+        assert len(brain.call_log) >= 1
+
+    def test_peer_reply_not_gated(self):
+        # Gating applies only to tool REPLYs (sender starting with "__tool__:"),
+        # not to peer REPLYs — peer reply ordering is governed by the existing
+        # plan-step semantics.
+        obj, brain, Plan, PlanStep = self._make_obj()
+        trace_id = "tr-peer"
+        with obj._plans_lock:
+            obj._active_plans[trace_id] = Plan(
+                goal="g", trace_id=trace_id,
+                steps=[
+                    PlanStep(id="s1", kind="ask", target="alpha", description="first", status="dispatched"),
+                    PlanStep(id="s2", kind="ask", target="beta", description="second", status="done", result="42"),
+                ],
+            )
+        with obj._planned_traces_lock:
+            obj._planned_traces.add(trace_id)
+
+        peer_reply = Message(
+            sender="beta",
+            recipient="test-obj",
+            type=MessageType.REPLY,
+            content="ok",
+            trace_id=trace_id,
+            plan_step_index=1,
+            id="peer-reply",
+            status="ok",
+        )
+        result = obj.process_message(peer_reply)
+        # No deferral — peer REPLY proceeds normally even though s1 is still pending.
+        assert result.status != "pending"
+        assert len(brain.call_log) >= 1
+
+
 class TestStateDelta:
     """State delta (state_update) tests — incremental, deliberate state changes."""
 

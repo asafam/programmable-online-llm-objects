@@ -970,6 +970,53 @@ class LLMObject:
             with self._pending_inbound_lock:
                 self._pending_inbound_asks[message.sender] = (message.id, message.plan_step_index)
 
+        # ── Per-trace tool-REPLY gating (Gap B-strict) ───────────────────────
+        # If this message is a tool REPLY for plan step N but an EARLIER step
+        # (index < N) is still planned/dispatched, capture the result and
+        # defer the LLM call: the brain only fires when the earliest pending
+        # step's REPLY arrives, at which point the active_plan render shows
+        # every result in dispatch order. The object stays non-blocking — the
+        # mailbox's next message (peer, REPLY for another trace, etc.) is
+        # processed normally.
+        if (
+            message.type == MessageType.REPLY
+            and isinstance(message.sender, str)
+            and message.sender.startswith("__tool__:")
+            and message.plan_step_index is not None
+        ):
+            _gate_plan = self.plan_for(trace_id)
+            if _gate_plan is not None:
+                earliest_pending: Optional[int] = None
+                with self._plans_lock:
+                    for _i, _s in enumerate(_gate_plan.steps):
+                        if _s.status in ("planned", "dispatched"):
+                            earliest_pending = _i
+                            break
+                if earliest_pending is not None and message.plan_step_index > earliest_pending:
+                    # Result already captured on plan.steps[i] by _execute_tool's
+                    # worker — defer the brain call. Append the REPLY to history
+                    # so the gated continuation prompt can render it.
+                    _t_g, _p_g = self._resolve_task_plan_ids(trace_id)
+                    self._append_history(message, _t_g, _p_g)
+                    processing_completed_at = datetime.datetime.now(datetime.timezone.utc)
+                    return ProcessingResult(
+                        object_id=self.object_id,
+                        reply="",
+                        outgoing_messages=[],
+                        state_before=_coerce_state(state_before),
+                        state_after=_coerce_state(self._state),
+                        metrics=InferenceMetrics(model=""),
+                        in_reply_to=message.sender,
+                        source_message_type=message.type,
+                        depth_remaining=message.depth_remaining,
+                        source_message_id=message.id,
+                        source_plan_step_index=message.plan_step_index,
+                        source_trace_id=message.trace_id,
+                        processing_started_at=processing_started_at,
+                        processing_completed_at=processing_completed_at,
+                        status="pending",
+                    )
+
         # Retire stale or excess plans before doing any work for this trace.
         self._sweep_stale_plans()
         # Auto-close stale completed plans so LLM sees a fresh view.

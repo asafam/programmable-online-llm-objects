@@ -711,6 +711,10 @@ class Runtime:
                     # Any HTTP 4xx/5xx from the provider — auth (401), quota (429),
                     # schema rejection (400), server errors (500/503), etc.
                     "http 4", "http 5", "5xx", "internal server error", "service unavailable",
+                    # Brain HTTP timeout (default 90s in AzureBrain/OpenAIBrain). Treated
+                    # as infra so the event surfaces as a clean failure rather than a silent
+                    # runtime stall — fixes the iter-0 exec_calls=0 deadlocks (4 sync + 2 async).
+                    "apitimeouterror", "request timed out", "read timed out",
                 )
                 if any(m in exc_str for m in _INFRA_EXC_MARKERS):
                     logger.warning("Error reading object %s: %s", _oid, exc)
