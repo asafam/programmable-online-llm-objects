@@ -26,14 +26,14 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from src.data.schema import Sample
 
-SRC = REPO_ROOT / "outputs/data/zapier/20260420_zapier_clean/test_cases.jsonl"
+SRC = REPO_ROOT / "outputs/data/zapier/20260522_rev/workflows-mods.jsonl"
 OUT_DIR = REPO_ROOT / "outputs/data/zapier/async_subset"
 EVAL_PATH = OUT_DIR / "eval30.jsonl"
 HOLDOUT_PATH = OUT_DIR / "holdout10.jsonl"
 
 EVAL_SIZE = 30
 HOLDOUT_SIZE = 10
-PER_FAMILY = 2  # mod-type variants per workflow family
+PER_FAMILY = 3  # mod-type variants per workflow family
 SEED = 42
 
 
@@ -52,6 +52,15 @@ def main() -> int:
             print(f"skip unparseable: {record.get('id')} ({exc})", file=sys.stderr)
             continue
         if len(s.tools) < 2 or len(s.objects) < 5 or len(s.steps) < 2:
+            continue
+        # Steps-only eval requires `role=base` events to exist; the older
+        # zapier_clean dataset doesn't carry them.
+        if not any(ev.role == "base" for ev in s.events):
+            continue
+        # Most objects must have routing (some write-services are
+        # legitimately terminal — allow up to 2 leaves with no neighbors).
+        leaves = sum(1 for o in s.objects if not o.neighbors)
+        if leaves > 2:
             continue
         by_family[s.sample_id].append((s, raw))
 
