@@ -371,63 +371,6 @@ class TestSyncDispatch:
         assert len(mock_exec.call_log) == 5  # default max_tool_rounds
 
 
-class TestAsyncDispatchPreservesAssistantTurn:
-    """tool_dispatch='async' — the LLM's prior tool_call must appear as a real
-    role=assistant message in the continuation turn's prompt, so the model can
-    pair the inbound tool REPLY with the call it actually made. Without this,
-    Turn 2 sees a tool result with no record of the call (the 'lost intent /
-    re-dispatch' pattern documented in runtime.py:138).
-    """
-
-    def test_assistant_tool_call_round_trips_into_continuation_turn(self):
-        import json
-        brain = MockBrain()
-        brain.script("test-obj", LLMResponse(
-            updated_state={}, reply="",
-            reasoning="I need to call my_tool with x=1",
-            tool_calls=[ToolCall(id="t1", tool="my_tool", arguments={"x": 1})],
-        ))
-        brain.script("test-obj", LLMResponse(
-            updated_state={"status": "async done"}, reply="finished async",
-        ))
-
-        mock_exec = MockToolExecutor()
-        mock_exec.script("async output")
-        reg = ToolRegistry()
-        reg.register("my_tool", mock_exec)
-
-        obj = LLMObject(_make_definition(), brain, tool_registry=reg, tool_dispatch="async")
-        result = _process_with_tools(obj, _user_msg("go"))
-
-        assert result is not None
-        assert result.reply == "finished async"
-        assert len(brain.call_log) == 2, "Expected two brain calls (dispatch turn + continuation turn)"
-
-        cont_msgs = brain.call_log[1].messages
-        # The assistant turn from the dispatch call must round-trip as a real
-        # role=assistant message in the continuation turn, not be folded into
-        # the past-messages user blob.
-        assistant_turns = [m for m in cont_msgs if m["role"] == "assistant"
-                           and m["content"] != "Understood. What is the new message?"]
-        assert len(assistant_turns) >= 1, "No persisted assistant tool_call turn found in continuation prompt"
-        parsed = json.loads(assistant_turns[-1]["content"])
-        assert parsed["action"] == "tool_call"
-        assert parsed["tool_calls"][0]["id"] == "t1"
-        assert parsed["tool_calls"][0]["tool"] == "my_tool"
-        assert parsed["tool_calls"][0]["arguments"] == {"x": 1}
-        assert "my_tool" in parsed["thought"] or "tool" in parsed["thought"].lower() or parsed["thought"]
-
-        # The assistant turn must appear immediately before the user (tool
-        # REPLY) turn — that ordering is what makes the call→result pairing
-        # legible to the LLM.
-        last_assistant_idx = max(i for i, m in enumerate(cont_msgs)
-                                 if m["role"] == "assistant" and m["content"] != "Understood. What is the new message?")
-        tool_reply_idxs = [i for i, m in enumerate(cont_msgs)
-                           if m["role"] == "user" and "[Tool result" in m["content"]]
-        assert tool_reply_idxs, "No tool reply user message found in continuation prompt"
-        assert last_assistant_idx < tool_reply_idxs[-1], "Assistant tool_call must precede the tool result user message"
-
-
 class TestStateDelta:
     """State delta (state_update) tests — incremental, deliberate state changes."""
 

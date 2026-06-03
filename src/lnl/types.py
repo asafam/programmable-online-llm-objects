@@ -16,7 +16,6 @@ class MessageType(Enum):
     REPLY = "reply"  # used for both peer-to-peer replies and async tool results (sender distinguishes)
     HEARTBEAT = "heartbeat"
     PLAN = "plan"   # synthetic — never delivered; surfaces planner output in bus log
-    ASSISTANT_TURN = "assistant_turn"  # synthetic — never delivered; preserves the LLM's prior tool_call across async dispatch so the next turn's prompt can render it as a real role=assistant message
 
 
 @dataclass
