@@ -96,25 +96,25 @@ sequenceDiagram
 
   User->>HubSpot: Submit quote Q1 (discount $20K)
   HubSpot->>QuoteApprovals: New quote Q1, discount $20K
-  Note over QuoteApprovals: cumulative $0 + $20K = $20K, at or below $50K → normal routing
+  Note over QuoteApprovals: cumulative $0 + $20K = $20K, at or below $50K: normal routing
   QuoteApprovals->>Email: Send approval request for Q1
-  Note over QuoteApprovals: On approval, cumulative → $20K
+  Note over QuoteApprovals: On approval, cumulative: $20K
 
   User->>HubSpot: Submit quote Q2 (discount $25K)
   HubSpot->>QuoteApprovals: New quote Q2, discount $25K
-  Note over QuoteApprovals: cumulative $20K + $25K = $45K, at or below $50K → normal routing
+  Note over QuoteApprovals: cumulative $20K + $25K = $45K, at or below $50K: normal routing
   QuoteApprovals->>Email: Send approval request for Q2
-  Note over QuoteApprovals: On approval, cumulative → $45K
+  Note over QuoteApprovals: On approval, cumulative: $45K
 
   User->>HubSpot: Submit quote Q3 (discount $12K)
   HubSpot->>QuoteApprovals: New quote Q3, discount $12K
-  Note over QuoteApprovals: $45K + $12K = $57K, over $50K → would cross cap
+  Note over QuoteApprovals: $45K + $12K = $57K, over $50K: would cross cap
   QuoteApprovals->>Email: Escalate Q3 to VP of Sales for budget exception and hold quote
-  Note over QuoteApprovals: Q3 not approved → cumulative stays $45K
+  Note over QuoteApprovals: Q3 not approved: cumulative stays $45K
 
   User->>HubSpot: Submit quote Q4 (discount $8K)
   HubSpot->>QuoteApprovals: New quote Q4, discount $8K
-  Note over QuoteApprovals: $45K + $8K = $53K, over $50K → still over cap
+  Note over QuoteApprovals: $45K + $8K = $53K, over $50K: still over cap
   QuoteApprovals->>Email: Escalate Q4 to VP of Sales and hold quote
 ```
 
@@ -211,7 +211,7 @@ sequenceDiagram
   
   QuoteApprovals->>HubSpot: What is the original deal amount before discounts for this quote?
   HubSpot-->>QuoteApprovals: Original deal amount is $65K
-  Note over QuoteApprovals: Med-high amount signal → {enterprise: 0.7, standard: 0.3}
+  Note over QuoteApprovals: Med-high amount signal: {enterprise: 0.7, standard: 0.3}
   
   QuoteApprovals->>OrganizationDirectory: Who should approve quotes for Acme Corp?
   OrganizationDirectory-->>QuoteApprovals: Ted, director, from SMB and New Customers Sales is the approver for Acme Corp

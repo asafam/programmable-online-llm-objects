@@ -89,27 +89,27 @@ sequenceDiagram
   User->>LeadAssignment: New lead L1
   LeadAssignment->>SalesRepsTable: Rep in position 1?
   SalesRepsTable-->>LeadAssignment: Ana
-  Note over LeadAssignment: Ana today=0, under cap → assign. Now Ana=1, Ben=0
+  Note over LeadAssignment: Ana today=0, under cap: assign. Now Ana=1, Ben=0
   LeadAssignment->>SlackNotifications: Notify Ana (L1)
   LeadAssignment->>SalesRepsTable: Rotate Ana to back
 
-  Note over LeadAssignment: Leads L2–L4 processed the same way → Ana=2, Ben=2
+  Note over LeadAssignment: Leads L2–L4 processed the same way: Ana=2, Ben=2
 
   User->>LeadAssignment: New lead L5
   LeadAssignment->>SalesRepsTable: Rep in position 1?
   SalesRepsTable-->>LeadAssignment: Ana
-  Note over LeadAssignment: Ana today=2, under cap → assign. Now Ana=3, Ben=2
+  Note over LeadAssignment: Ana today=2, under cap: assign. Now Ana=3, Ben=2
   LeadAssignment->>SlackNotifications: Notify Ana (L5)
   LeadAssignment->>SalesRepsTable: Rotate Ana to back
 
   User->>LeadAssignment: New lead L6
   LeadAssignment->>SalesRepsTable: Rep in position 1?
   SalesRepsTable-->>LeadAssignment: Ana
-  Note over LeadAssignment: Ana today=3, at cap → SKIP Ana, rotate without assigning
+  Note over LeadAssignment: Ana today=3, at cap: SKIP Ana, rotate without assigning
   LeadAssignment->>SalesRepsTable: Rotate Ana to back (no assignment)
   LeadAssignment->>SalesRepsTable: Rep in position 1?
   SalesRepsTable-->>LeadAssignment: Ben
-  Note over LeadAssignment: Ben today=2, under cap → assign. Now Ana=3, Ben=3
+  Note over LeadAssignment: Ben today=2, under cap: assign. Now Ana=3, Ben=3
   LeadAssignment->>SlackNotifications: Notify Ben (L6)
   LeadAssignment->>SalesRepsTable: Rotate Ben to back
 

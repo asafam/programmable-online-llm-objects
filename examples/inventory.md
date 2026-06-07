@@ -84,26 +84,26 @@ sequenceDiagram
 
   User->>InventoryTable: Reorder request SKU-A (W01-1)
   InventoryTable->>ReorderPolicy: Forward SKU-A record
-  Note over ReorderPolicy: SKU-A sent in last 7d: 0, under cap → send. A sent on W01-1
+  Note over ReorderPolicy: SKU-A sent in last 7d: 0, under cap: send. A sent on W01-1
   ReorderPolicy->>EmailSender: Send reorder for SKU-A
 
   User->>InventoryTable: Reorder request SKU-A (W01-3)
   InventoryTable->>ReorderPolicy: Forward SKU-A record
-  Note over ReorderPolicy: SKU-A sent in last 7d: 1, under cap → send. A sent on W01-1, W01-3
+  Note over ReorderPolicy: SKU-A sent in last 7d: 1, under cap: send. A sent on W01-1, W01-3
   ReorderPolicy->>EmailSender: Send reorder for SKU-A
 
   User->>InventoryTable: Reorder request SKU-A (W01-5)
   InventoryTable->>ReorderPolicy: Forward SKU-A record
-  Note over ReorderPolicy: SKU-A sent in last 7d: 2, at cap → SUPPRESS auto-reorder
+  Note over ReorderPolicy: SKU-A sent in last 7d: 2, at cap: SUPPRESS auto-reorder
   ReorderPolicy->>EmailSender: Email ops manager to review SKU-A over-ordering
 
   User->>InventoryTable: Reorder request SKU-B (W01-5)
   InventoryTable->>ReorderPolicy: Forward SKU-B record
-  Note over ReorderPolicy: SKU-B sent in last 7d: 0, under cap → send (different SKU). B sent on W01-5
+  Note over ReorderPolicy: SKU-B sent in last 7d: 0, under cap: send (different SKU). B sent on W01-5
   ReorderPolicy->>EmailSender: Send reorder for SKU-B
 
   User->>InventoryTable: Reorder request SKU-A (W03-1)
   InventoryTable->>ReorderPolicy: Forward SKU-A record
-  Note over ReorderPolicy: W01-1, W01-3 now older than 7d → aged out. SKU-A in last 7d: 0 → send
+  Note over ReorderPolicy: W01-1, W01-3 now older than 7d: aged out. SKU-A in last 7d is 0, so send
   ReorderPolicy->>EmailSender: Send reorder for SKU-A
 ```
