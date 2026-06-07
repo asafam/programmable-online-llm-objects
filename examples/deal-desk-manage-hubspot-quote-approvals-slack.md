@@ -69,6 +69,55 @@ sequenceDiagram
   QuoteApprovals->>Slack: Send reminder if not approved in 24 hours
 ```
 
+### Scenario: State-dependent rule — cumulative discount cap
+
+**Workflow rule (to QuoteApprovals):**
+
+```
+Track the cumulative approved discount dollars for the current quarter. While the
+running total is at or below $50K, route quotes through the normal approval flow.
+If approving a quote would push the cumulative total above $50K, do not route it
+normally — escalate to the VP of Sales for a budget exception and hold the quote
+(do not mark it approved or add it to the total).
+```
+
+Unlike the per-quote rules above, this constraint is **value-dependent across requests**: whether a quote can follow the normal flow depends on a running total of discounts already approved this quarter — a figure that lives in no single quote. The object must accumulate that total as state, test each new quote against the $50K ceiling, and switch to escalation once a quote would cross it (and keep escalating, since the cap stays exceeded).
+
+With traditional programming this requires a persistent quarter-to-date accumulator, a reset at quarter boundaries, and branch logic for the crossing case. Here the rule is stated once and the object maintains the total itself.
+
+#### Event sequence (cumulative cap = $50K/quarter)
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant HubSpot
+  participant QuoteApprovals
+  participant Email
+
+  User->>HubSpot: Submit quote Q1 (discount $20K)
+  HubSpot->>QuoteApprovals: New quote Q1, discount $20K
+  Note over QuoteApprovals: cumulative $0 + $20K = $20K, at or below $50K → normal routing
+  QuoteApprovals->>Email: Send approval request for Q1
+  Note over QuoteApprovals: On approval, cumulative → $20K
+
+  User->>HubSpot: Submit quote Q2 (discount $25K)
+  HubSpot->>QuoteApprovals: New quote Q2, discount $25K
+  Note over QuoteApprovals: cumulative $20K + $25K = $45K, at or below $50K → normal routing
+  QuoteApprovals->>Email: Send approval request for Q2
+  Note over QuoteApprovals: On approval, cumulative → $45K
+
+  User->>HubSpot: Submit quote Q3 (discount $12K)
+  HubSpot->>QuoteApprovals: New quote Q3, discount $12K
+  Note over QuoteApprovals: $45K + $12K = $57K, over $50K → would cross cap
+  QuoteApprovals->>Email: Escalate Q3 to VP of Sales for budget exception and hold quote
+  Note over QuoteApprovals: Q3 not approved → cumulative stays $45K
+
+  User->>HubSpot: Submit quote Q4 (discount $8K)
+  HubSpot->>QuoteApprovals: New quote Q4, discount $8K
+  Note over QuoteApprovals: $45K + $8K = $53K, over $50K → still over cap
+  QuoteApprovals->>Email: Escalate Q4 to VP of Sales and hold quote
+```
+
 ### Scenario: Simple conflict resolution
 
 **Modification 1 (to QuoteApprovals):**
@@ -242,11 +291,11 @@ sequenceDiagram
   participant QuoteApprovals
   participant Email
 
-  Operator->>QuoteApprovals: If quote includes concessions with >20% discount, flag for CFO approval
-  QuoteApprovals->>QuoteApprovals: Check for open concessions with >20% discount that did not require CFO approval
+  Operator->>QuoteApprovals: If quote includes concessions with over 20% discount, flag for CFO approval
+  QuoteApprovals->>QuoteApprovals: Check for open concessions with over 20% discount that did not require CFO approval
   alt Found any
     QuoteApprovals->>Email: Send approval request to CFO
-  else No open concessions with >20% discount without CFO approval
+  else No open concessions with over 20% discount without CFO approval
     Note right of QuoteApprovals: No action needed for existing quotes
   end
 ```
@@ -420,15 +469,15 @@ sequenceDiagram
   participant QuoteApprovals
 
   Operator->>QuoteApprovals: Big deals need CFO approval
-  QuoteApprovals->>QuoteApprovals: What is "big"? Propose: >$100K
+  QuoteApprovals->>QuoteApprovals: What is "big"? Propose: over $100K
   QuoteApprovals->>OrganizationDirectory: What is typical "big deal" threshold?
   OrganizationDirectory-->>QuoteApprovals: Alice belongs to the premium sales team, check their average deal size
   QuoteApprovals->>HubSpot: What is the average deal size for Alice's team?
   HubSpot-->>QuoteApprovals: They deal with quotes above $75K
-  QuoteApprovals-->>QuoteApprovals: Counter-propose: >$75K
-  QuoteApprovals->>Slack: "Big deals" need CFO approval. Based on historical data, I propose defining "big deal" as >$75K. Does this sound right?
+  QuoteApprovals-->>QuoteApprovals: Counter-propose: over $75K
+  QuoteApprovals->>Slack: "Big deals" need CFO approval. Based on historical data, I propose defining "big deal" as over $75K. Does this sound right?
   Slack-->>QuoteApprovals: This year, the CFO approved deals above $100K, but for new customers the threshold is $50K
   QuoteApprovals-->>QuoteApprovals: Refine rule with context
-  Note over QuoteApprovals: "Big deal" = >$50K (new) or >$100K (existing)
-  QuoteApprovals->>Operator: Define "big deal" as >$50K for new customers and >$100K for existing customers. Is that correct?
+  Note over QuoteApprovals: "Big deal" = over $50K (new) or over $100K (existing)
+  QuoteApprovals->>Operator: Define "big deal" as over $50K for new customers and over $100K for existing customers. Is that correct?
 ```
