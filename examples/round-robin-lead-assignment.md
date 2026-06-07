@@ -64,8 +64,8 @@ sequenceDiagram
 **Workflow rule (to LeadAssignment):**
 
 ```
-Assign leads round-robin, but no rep may receive more than 3 leads per day.
-When the rep in position 1 has already been assigned 3 leads today, skip them
+Assign leads round-robin, but no rep may receive more than 2 leads per day.
+When the rep in position 1 has already been assigned 2 leads today, skip them
 (rotate to the back without assigning) and assign the next eligible rep. If every
 rep has hit the daily cap, do not auto-assign — hold the lead and alert the sales
 manager. Reset the per-rep daily counts at the start of each day.
@@ -75,7 +75,7 @@ Unlike the base round-robin (which depends only on *who* is in position 1), this
 
 With traditional programming this would require an explicit per-rep daily counter, a reset job at day boundaries, and branch logic for "skip" vs. "hold all-capped" — each an edge case that must be hand-coded. Here the rule is stated once and the object maintains the state itself.
 
-#### Event sequence (two reps, Ana and Ben; cap = 3/day)
+#### Event sequence (two reps, Ana and Ben; cap = 2/day)
 
 ```mermaid
 sequenceDiagram
@@ -84,36 +84,34 @@ sequenceDiagram
   participant SalesRepsTable
   participant SlackNotifications
 
-  Note over LeadAssignment: Start of day — Ana=0, Ben=0 today
+  Note over LeadAssignment: Earlier today Ana already took one lead. Counts Ana=1, Ben=0. Queue order Ana, Ben
 
   User->>LeadAssignment: New lead L1
   LeadAssignment->>SalesRepsTable: Rep in position 1?
   SalesRepsTable-->>LeadAssignment: Ana
-  Note over LeadAssignment: Ana today=0, under cap: assign. Now Ana=1, Ben=0
+  Note over LeadAssignment: Ana today=1, under cap. Assign. Now Ana=2, Ben=0
   LeadAssignment->>SlackNotifications: Notify Ana (L1)
-  LeadAssignment->>SalesRepsTable: Rotate Ana to back
+  LeadAssignment->>SalesRepsTable: Rotate Ana to back (queue Ben, Ana)
 
-  Note over LeadAssignment: Leads L2–L4 processed the same way: Ana=2, Ben=2
-
-  User->>LeadAssignment: New lead L5
-  LeadAssignment->>SalesRepsTable: Rep in position 1?
-  SalesRepsTable-->>LeadAssignment: Ana
-  Note over LeadAssignment: Ana today=2, under cap: assign. Now Ana=3, Ben=2
-  LeadAssignment->>SlackNotifications: Notify Ana (L5)
-  LeadAssignment->>SalesRepsTable: Rotate Ana to back
-
-  User->>LeadAssignment: New lead L6
-  LeadAssignment->>SalesRepsTable: Rep in position 1?
-  SalesRepsTable-->>LeadAssignment: Ana
-  Note over LeadAssignment: Ana today=3, at cap: SKIP Ana, rotate without assigning
-  LeadAssignment->>SalesRepsTable: Rotate Ana to back (no assignment)
+  User->>LeadAssignment: New lead L2
   LeadAssignment->>SalesRepsTable: Rep in position 1?
   SalesRepsTable-->>LeadAssignment: Ben
-  Note over LeadAssignment: Ben today=2, under cap: assign. Now Ana=3, Ben=3
-  LeadAssignment->>SlackNotifications: Notify Ben (L6)
-  LeadAssignment->>SalesRepsTable: Rotate Ben to back
+  Note over LeadAssignment: Ben today=0, under cap. Assign. Now Ana=2, Ben=1
+  LeadAssignment->>SlackNotifications: Notify Ben (L2)
+  LeadAssignment->>SalesRepsTable: Rotate Ben to back (queue Ana, Ben)
 
-  User->>LeadAssignment: New lead L7
-  Note over LeadAssignment: Ana=3, Ben=3 — all reps at daily cap
-  LeadAssignment->>SlackNotifications: Hold L7 and alert sales manager (no eligible rep today)
+  User->>LeadAssignment: New lead L3
+  LeadAssignment->>SalesRepsTable: Rep in position 1?
+  SalesRepsTable-->>LeadAssignment: Ana
+  Note over LeadAssignment: Ana today=2, at cap. SKIP Ana, rotate without assigning
+  LeadAssignment->>SalesRepsTable: Rotate Ana to back, no assignment (queue Ben, Ana)
+  LeadAssignment->>SalesRepsTable: Rep in position 1?
+  SalesRepsTable-->>LeadAssignment: Ben
+  Note over LeadAssignment: Ben today=1, under cap. Assign. Now Ana=2, Ben=2
+  LeadAssignment->>SlackNotifications: Notify Ben (L3)
+  LeadAssignment->>SalesRepsTable: Rotate Ben to back (queue Ana, Ben)
+
+  User->>LeadAssignment: New lead L4
+  Note over LeadAssignment: Ana=2, Ben=2 — all reps at daily cap
+  LeadAssignment->>SlackNotifications: Hold L4 and alert sales manager (no eligible rep today)
 ```
