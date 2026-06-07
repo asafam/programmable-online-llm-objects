@@ -102,8 +102,10 @@ sequenceDiagram
   Note over ReorderPolicy: SKU-B sent in last 7d: 0, under cap: send (different SKU). B sent on W01-5
   ReorderPolicy->>EmailSender: Send reorder for SKU-B
 
+  Note over User,EmailSender: More than a week passes — now W03-1, about 14 days after the first reorder
+
   User->>InventoryTable: Reorder request SKU-A (W03-1)
   InventoryTable->>ReorderPolicy: Forward SKU-A record
-  Note over ReorderPolicy: W01-1, W01-3 now older than 7d: aged out. SKU-A in last 7d is 0, so send
+  Note over ReorderPolicy: Earlier sends W01-1, W01-3 are now older than 7 days, so they drop out of the window. SKU-A in last 7d is 0, so send
   ReorderPolicy->>EmailSender: Send reorder for SKU-A
 ```
