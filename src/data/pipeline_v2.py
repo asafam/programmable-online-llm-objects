@@ -73,10 +73,14 @@ def _common(args, **over):
     return SimpleNamespace(**base)
 
 
-def _upload_to_firestore(unified_path: Path, service_account: Path | None, run_id: str | None = None) -> None:
+def _upload_to_firestore(unified_path: Path, service_account: Path | None, run_id: str | None = None,
+                         dataset_name: str | None = None, dataset_version: str | None = None) -> None:
     """Upload workflows-mods.jsonl to Firestore.
 
+    A dataset is identified by a unique (name, version) pair, enforced here.
+
     Versioning:
+    - datasets/{name@version} one doc per dataset version — must be UNIQUE (refuses dupes)
     - samples/{id}          frozen on first write — never overwritten
     - sample_summaries/{id} always refreshed (order, run_id)
     - runs/{run_id}         metadata doc per upload
@@ -98,7 +102,19 @@ def _upload_to_firestore(unified_path: Path, service_account: Path | None, run_i
     lines = [l for l in unified_path.read_text().splitlines() if l.strip()]
     samples = [json.loads(l) for l in lines]
     run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    print(f"\nUploading {len(samples)} samples to Firestore (run={run_id})...")
+
+    # Dataset identity = unique (name, version). Refuse a duplicate so each upload is a
+    # distinct, named, versioned dataset.
+    ds_key = None
+    if dataset_name and dataset_version:
+        ds_key = f"{dataset_name}@{dataset_version}"
+        if db.collection("datasets").document(ds_key).get().exists:
+            raise ValueError(
+                f"dataset '{dataset_name}' version '{dataset_version}' already uploaded "
+                f"(datasets/{ds_key}). Bump the version to upload a new one."
+            )
+    print(f"\nUploading {len(samples)} samples to Firestore "
+          f"(dataset={dataset_name or '?'} v={dataset_version or '?'}, run={run_id})...")
 
     # Fetch existing IDs to avoid overwriting frozen docs
     existing_ids = {ref.id for ref in db.collection("samples").list_documents()}
@@ -121,11 +137,20 @@ def _upload_to_firestore(unified_path: Path, service_account: Path | None, run_i
             total += len(entries[i:i + BATCH_SIZE])
             print(f"  {label}: {total}/{len(entries)} committed")
 
-    # Only write new full docs
-    commit_batches(
-        [(db.collection("samples").document(s["id"]), s) for s in new_samples],
-        "samples",
-    )
+    # Full sample docs are ~24KB; use small batches to stay under Firestore's 10MB/batch limit
+    FULL_BATCH_SIZE = 20
+    full_entries = [(db.collection("samples").document(s["id"]), s) for s in new_samples]
+    if not full_entries:
+        print("  samples: nothing to write")
+    else:
+        total = 0
+        for i in range(0, len(full_entries), FULL_BATCH_SIZE):
+            batch = db.batch()
+            for ref, data in full_entries[i:i + FULL_BATCH_SIZE]:
+                batch.set(ref, data)
+            batch.commit()
+            total += len(full_entries[i:i + FULL_BATCH_SIZE])
+            print(f"  samples: {total}/{len(full_entries)} committed")
 
     # Replace sample_summaries entirely so stale entries from old runs don't linger
     old_summary_refs = list(db.collection("sample_summaries").list_documents())
@@ -137,12 +162,23 @@ def _upload_to_firestore(unified_path: Path, service_account: Path | None, run_i
             batch.commit()
         print(f"  Deleted {len(old_summary_refs)} old summary docs.")
 
-    summary_entries = []
+    # Build version map: sample_id → all ids (ordered as in JSONL)
+    versions_by_sample_id: dict[str, list[str]] = {}
+    for s in samples:
+        sid = s.get("sample_id", s["id"])
+        versions_by_sample_id.setdefault(sid, []).append(s["id"])
+
+    # Deduplicate by sample_id — keep only the last entry per group
+    latest: dict[str, tuple[int, dict]] = {}
     for idx, sample in enumerate(samples):
+        latest[sample.get("sample_id", sample["id"])] = (idx, sample)
+    summary_entries = []
+    for idx, sample in latest.values():
         first_mod = (sample.get("modifications") or [{}])[0]
+        sid = sample.get("sample_id", sample["id"])
         summary_entries.append((db.collection("sample_summaries").document(sample["id"]), {
             "id": sample["id"],
-            "sample_id": sample.get("sample_id", ""),
+            "sample_id": sid,
             "name": sample.get("name", ""),
             "domain": sample.get("domain", ""),
             "source_type": sample.get("source_type", ""),
@@ -151,12 +187,16 @@ def _upload_to_firestore(unified_path: Path, service_account: Path | None, run_i
             "ambiguity": first_mod.get("ambiguity"),
             "order": idx,
             "run_id": run_id,
+            "versions": versions_by_sample_id.get(sid, [sample["id"]]),
         }))
+    print(f"  {len(samples)} samples → {len(summary_entries)} unique workflows (deduplicated by sample_id).")
     commit_batches(summary_entries, "sample_summaries")
 
     # Record run metadata
     db.collection("runs").document(run_id).set({
         "run_id": run_id,
+        "dataset_name": dataset_name,
+        "dataset_version": dataset_version,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "input_file": str(unified_path),
         "total_samples": len(samples),
@@ -164,6 +204,18 @@ def _upload_to_firestore(unified_path: Path, service_account: Path | None, run_i
         "skipped_samples": skipped,
     })
     print(f"  Recorded run metadata → runs/{run_id}")
+
+    # Record the dataset (name, version) — unique by construction (checked above).
+    if ds_key:
+        db.collection("datasets").document(ds_key).set({
+            "name": dataset_name,
+            "version": dataset_version,
+            "run_id": run_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "sample_ids": [s["id"] for s in samples],
+            "templates": versions_by_sample_id,
+        })
+        print(f"  Recorded dataset → datasets/{ds_key}")
     print(f"  Upload complete. {len(new_samples)} new, {skipped} frozen (skipped).")
 
 
@@ -172,6 +224,12 @@ def run(args: argparse.Namespace) -> Path:
         args.provider = infer_provider(args.model)
     td = args.target_dir
     td.mkdir(parents=True, exist_ok=True)
+
+    # Dataset identity = (name, version). Defaults to the target-dir name + "v1" so the
+    # run is always a named, versioned dataset; the sample ids embed it.
+    dataset_name = getattr(args, "dataset_name", None) or td.name
+    dataset_version = getattr(args, "dataset_version", None) or "v1"
+    run_tag = f"{dataset_name}-{dataset_version}"
 
     infused_path = td / "spec-infused.jsonl"
     spec_path = td / "spec.jsonl"
@@ -200,9 +258,9 @@ def run(args: argparse.Namespace) -> Path:
 
     # ── Phase 2: derive graph + bind → unified ───────────────────────────────
     print("\n" + "=" * 60 + "\nPHASE 2: DERIVE GRAPH + BIND → UNIFIED\n" + "=" * 60)
-    # run_tag versions the sample id ({template}__{run_tag}) so each run uploads as new,
-    # re-annotatable samples (the Firestore upload freezes existing ids).
-    bind_spec.run(_common(args, input=mods_path, output=unified_path, run_tag=td.name))
+    # run_tag = {dataset_name}-{version} versions the sample id ({template}__{run_tag}) so
+    # each dataset version uploads as new, re-annotatable samples (upload freezes existing ids).
+    bind_spec.run(_common(args, input=mods_path, output=unified_path, run_tag=run_tag))
 
     print("\n--- Phase 2 validation ---")
     _validate_unified(unified_path)
@@ -211,7 +269,8 @@ def run(args: argparse.Namespace) -> Path:
     print(f"Artifacts: {infused_path.name}, {spec_path.name}, {mods_path.name}, {unified_path.name}")
 
     if args.upload:
-        _upload_to_firestore(unified_path, args.service_account, getattr(args, "run_id", None))
+        _upload_to_firestore(unified_path, args.service_account, getattr(args, "run_id", None),
+                             dataset_name=dataset_name, dataset_version=dataset_version)
 
     return unified_path
 
@@ -221,6 +280,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Two-phase pipeline: object-agnostic spec → derived agent graph.")
     p.add_argument("--input", "-i", type=Path, required=True, help="Raw templates YAML")
     p.add_argument("--target-dir", "-t", type=Path, required=True, help="Directory for all artifacts")
+    p.add_argument("--dataset-name", dest="dataset_name", default=None,
+                   help="Dataset name (default: target-dir name). With --dataset-version forms the unique dataset identity and the sample-id suffix.")
+    p.add_argument("--dataset-version", dest="dataset_version", default=None,
+                   help="Dataset version, e.g. v1/v2 (default: v1). A (name, version) pair must be unique on upload.")
     p.add_argument("--mod-type", type=str, choices=list(MODIFICATION_TYPES.keys()) + ["mixed"], default=None)
     p.add_argument("--mods-per-scenario", type=int, default=1)
     p.add_argument("--ambiguity", type=str, choices=list(AMBIGUITY_DESCRIPTIONS.keys()) + ["random"], default="random")
