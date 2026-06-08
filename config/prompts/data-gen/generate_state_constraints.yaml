@@ -61,7 +61,23 @@ user_prompt: |
        - 1 request after the crossing proving the rule still holds (still blocked), or —
          for counter/rate_limit — an INDEPENDENT key handled normally, or a post-reset
          request handled normally.
+       - a CONCURRENT pair at the threshold: TWO requests with the SAME `when` and the SAME
+         `concurrent_group` label (e.g. "cg_limit") such that admitting both would breach the
+         limit — exactly ONE is admitted and the other blocked/denied. This shows the rule
+         holds even when requests arrive at the same time (only one can take the last slot).
      Use concrete, unambiguous NUMBERS so the running total/count is computable.
+
+  EVENT INPUTS ARE EXTERNAL STIMULI ONLY — do NOT mix in state. Each `input` is the request
+  exactly as it ARRIVES from outside, carrying ONLY its own payload (the lead's details, the
+  quote's discount amount, the SKU being requested). It must NOT state the system's internal
+  or accumulated state — NO current inventory quantity, NO roster of active reps, NO running
+  count, NO "clean start for the day", NO "current data shows quantity 4". The system ACQUIRES
+  that state itself by interacting with its data objects. The threshold-crossing is driven by
+  the SEQUENCE of arriving requests, never by state asserted inside any single input.
+    - GOOD: "Reorder request arrives for SKU NSO-A100-XL (reply-to: ops@acme.test)."
+    - BAD:  "Reorder request for SKU NSO-A100-XL; current inventory shows quantity 4."  (feeds state)
+    - GOOD: "New lead arrives: Olivia Chen, Northwind Bio, enterprise plan."
+    - BAD:  "New lead arrives. Reps Maya, Jordan, Sofia are active and it's a clean start."  (mixes roster state)
 
   DECOUPLING — this is critical. Do NOT assume or mention HOW the rule is implemented.
   Do NOT reference any specific object as "the owner", and do NOT use internal mechanics
@@ -80,9 +96,10 @@ user_prompt: |
     id (E001, E002, … ascending),
     call_type = "send_event",
     source = "__external__",
-    input = the concrete request text WITH the numbers,
-    when = "W01-1T09:00" style, strictly ascending,
+    input = the arriving request's OWN payload only (no internal/accumulated state),
+    when = "W01-1T09:00" style, ascending (the concurrent pair shares one `when`),
     role = "base",
+    concurrent_group = a label (e.g. "cg_limit") on the two simultaneous events; null otherwise,
     expect = { action, reason }   (observable outcome, no internal mechanism).
 
   Return only the JSON object (constraint_type, threshold, description, base_events).

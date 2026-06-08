@@ -30,7 +30,10 @@ prompt: |
     people; if it references Lead #1..#8, give each a distinct realistic id.
   - PRESERVE EXACTLY: every number, the invariant logic, which request is admitted vs
     blocked/held/skipped, the ordering, and each event's `id`, `role`, `when`,
-    `triggered_by`, `depends_on`. Only the entity NAMES change.
+    `triggered_by`, `depends_on`, and `concurrent_group` (the concurrent pair keeps its
+    shared `when` and label). Only the entity NAMES change.
+  - Do NOT add any system/accumulated state to an input (inventory levels, rosters, running
+    counts). Inputs stay pure external stimuli; you only replace placeholder names.
   - Keep expects observable (a named external effect); do NOT introduce internal object names.
 
   Return `base_events`: the same events, with placeholders replaced by concrete names.

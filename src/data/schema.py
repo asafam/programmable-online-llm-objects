@@ -694,6 +694,7 @@ class SpecEventWithExpect(BaseModel):
     triggered_by: Optional[str] = None
     trigger_delay_minutes: float = 0.0
     trigger_delay_seconds: float = 0.0
+    concurrent_group: Optional[str] = None  # same label + same `when` → concurrent arrivals
     expect: Optional[EventExpect] = None
 
 class SpecModification(BaseModel):

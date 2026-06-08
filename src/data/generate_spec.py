@@ -96,10 +96,14 @@ def _process_spec(llm, spec: WorkflowSpec, ground_cfg, steps_cfg, ground_be_cfg)
     # metadata. (Replaces the transient append previously done in bind_spec.)
     if spec.state_constraint:
         sc = spec.state_constraint
-        spec.grounded_steps.append(
-            f"State constraint — enforce across ALL requests (accumulated state, not a single "
-            f"request): {sc.description} Limit: {sc.threshold}."
-        )
+        # Phrase as a NATURAL business rule — annotators rejected the explicit "State
+        # constraint" label. The invariant signals in the description still let object
+        # identification detect the invariant and create a custodian.
+        rule = (sc.description or "").strip()
+        if sc.threshold and sc.threshold.lower() not in rule.lower():
+            rule = (f"{rule} ({sc.threshold})" if rule else sc.threshold).strip()
+        if rule:
+            spec.grounded_steps.append(rule)
     spec_steps = _write_steps_spec(llm, grounded, spec.id, steps_cfg)
     if not spec_steps:
         return None
