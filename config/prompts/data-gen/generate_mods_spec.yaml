@@ -16,6 +16,16 @@ user_prompt: |
     - `intent` — the NL instruction, of type **{MODIFICATION_TYPE}** ({MODIFICATION_TYPE_DESCRIPTION}),
       phrased as the user would say it ("From now on, quotes under $10K auto-approve").
       Do NOT name an object/target — just the behavior change.
+    - INVARIANT-AWARENESS (critical): if the spec lists a "State invariant under test", your
+      modification must NOT restate or re-describe that invariant's existing behavior — the base
+      scenario already demonstrates it, so restating it is a no-op/conflict (e.g. the invariant
+      already says "over $50K → hold for exception handling"; a mod that says "alert the exception
+      team when over $50K" is forbidden). Choose ONE instead:
+        (a) change an ORTHOGONAL aspect the invariant does NOT govern (a notification channel, an
+            added field, a routing rule on a different dimension, an SLA timer), OR
+        (b) an explicit CHANGE to the invariant's own threshold/scope ("raise the quarterly cap to
+            $75,000", "allow 3 leads per rep per day instead of 2") — and then the post_mod events
+            MUST exercise the NEW threshold (cross the old limit but stay under the new one).
 
   - `events`: external stimuli that test the workflow, OBJECT-FREE (no recipient). Each:
     - `id` (E001, E002, …), `call_type` = "send_event", `source` = "__external__",

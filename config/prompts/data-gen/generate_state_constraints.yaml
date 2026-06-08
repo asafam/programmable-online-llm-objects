@@ -53,20 +53,41 @@ user_prompt: |
 
   3. `description` — one line stating the invariant in observable terms.
 
-  4. `base_events` — an ordered role="base" sequence that drives the workflow's entry
-     point(s). Author it as ONE coherent unit from a clean initial state:
-       - 1–3 below-threshold requests the system handles NORMALLY (the accumulator moves);
-       - the request that CROSSES the threshold — the system must BLOCK / HOLD / ESCALATE
-         it (do not complete the normal action);
-       - 1 request after the crossing proving the rule still holds (still blocked), or —
-         for counter/rate_limit — an INDEPENDENT key handled normally, or a post-reset
-         request handled normally.
-       - REQUIRED — a CONCURRENT pair at the threshold (include this for EVERY workflow): TWO
-         requests that share the SAME non-empty `when` (e.g. both "W01-1T11:00") and the SAME
-         `concurrent_group` label (e.g. "cg_limit"), such that admitting both would breach the
-         limit — exactly ONE is admitted and the other blocked/denied. This shows the rule
-         holds even when requests arrive at the same instant (only one can take the last slot).
-     Use concrete, unambiguous NUMBERS so the running total/count is computable.
+  4. `base_events` — an ordered role="base" sequence, authored as ONE coherent unit from a
+     clean initial state.
+
+     THE ACTION CHAIN (the crux — get this right). Each request is a pure external stimulus;
+     the system then READS its state (via its data objects), performs THE GATED ACTION this
+     workflow exists to do — sends a reorder, assigns a lead, approves a quote — and the
+     invariant GATES that action. Every `expect` must center THE GATED ACTION's outcome. A
+     workflow often ALSO does something incidental every time (reply with the data, log,
+     acknowledge); that incidental effect must NEVER stand in for the gated action. E.g. an
+     inventory flow always replies with data AND conditionally sends a reorder — the expect
+     must be about the REORDER, not the data reply.
+
+     Compose the sequence:
+       - 1–3 below-threshold requests handled NORMALLY — the gated ACTION IS TAKEN and the
+         expect SAYS SO explicitly: "a reorder request is sent to the supplier", "the lead is
+         assigned to Rep #1 and the assignment is posted", "the quote is approved AND the
+         approval is posted to the channel". (Show the action AND its notification — not a bare
+         "approved".) The accumulator moves with each.
+       - the request that CROSSES the threshold — the gated action is BLOCKED / HELD /
+         SUPPRESSED; the expect says the action did NOT happen, with a reason that REFERENCES
+         THE ACCUMULATED STATE: "2 reorders were already sent for this SKU within the last
+         7 days, so NO new reorder is sent (only the routine data reply goes out)".
+       - REQUIRED — a CONCURRENT pair at the threshold (every workflow): TWO requests sharing
+         the SAME non-empty `when` (e.g. both "W01-1T11:00") and the SAME `concurrent_group`
+         label (e.g. "cg_limit") such that admitting both would breach the limit — exactly ONE
+         gets the action, the other is blocked. Shows the rule holds for simultaneous arrivals.
+       - REQUIRED for `counter` and `rate_limit` — a RESET / WINDOW-EXPIRY event: a request for
+         the SAME key as a blocked one, timestamped PAST the period (the NEXT DAY for a per-day
+         counter; 8+ days later for a rolling-7-day limit), which is ALLOWED AGAIN — the action
+         IS taken — because the limit is PER-PERIOD, not absolute. Its expect must say the
+         action resumes and why: "it is now a new day, so the per-day count resets — the lead
+         IS assigned to Rep #1"; "more than 7 days have passed since the earlier reorders, so
+         the window no longer bars it — a new reorder IS sent". (Skip this only for `cap`.)
+     Use concrete, unambiguous NUMBERS and TIMESTAMPS so both the running count AND the period
+     boundaries are computable from the inputs alone.
 
   EVENT INPUTS ARE EXTERNAL STIMULI ONLY — do NOT mix in state. Each `input` is the request
   exactly as it ARRIVES from outside, carrying ONLY its own payload (the lead's details, the
@@ -84,14 +105,19 @@ user_prompt: |
   Do NOT reference any specific object as "the owner", and do NOT use internal mechanics
   (no "custodian", no "reserve/confirm/release", no "hold id", no per-object accumulator
   field). Phrase every `base_events[i].expect.action` purely in terms of the OBSERVABLE
-  OUTCOME — what the system does with the request and the request's resulting status —
-  so the expectation holds for ANY correct implementation. Examples:
-    - "Quote Q3 reaches the cumulative discount cap, so it is NOT approved through the
-      normal flow — it is escalated for a budget exception and left pending; no approval
-      is recorded."
-    - "Rep Jordan has already received 2 leads today (the daily cap), so lead L-1003 is
-      NOT assigned to Jordan — it goes to the next eligible rep (or is held if all are capped)."
-  Make the threshold-crossing unambiguous from the numbers in the inputs alone.
+  OUTCOME OF THE GATED ACTION — what the system does (or refuses to do) with the request —
+  so the expectation holds for ANY correct implementation. Each example below NAMES the
+  action and (when admitted) its notification:
+    - ADMITTED: "Quote Q-1001's discount keeps the quarter total at/under $50,000, so it is
+      approved AND the approval is posted to the channel."
+    - BLOCKED:  "Quote Q-1004 would push the quarter's approved discount over $50,000, so it
+      is NOT approved — it is escalated for a budget exception and left pending; no approval
+      is recorded or posted."
+    - BLOCKED:  "2 reorders were already sent for SKU #1 within the last 7 days, so NO new
+      reorder is sent for this request — only the routine inventory-data reply goes out."
+    - RESET:    "It is now a new day, so Rep #1's per-day count resets — lead #6 IS assigned
+      to Rep #1 and the assignment is posted."
+  Make the threshold-crossing AND the period reset unambiguous from the numbers/timestamps alone.
 
   Each base event has fields (OBJECT-AGNOSTIC — no recipient, no object_id):
     id (E001, E002, … ascending),

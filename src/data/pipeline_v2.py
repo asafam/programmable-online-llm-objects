@@ -45,9 +45,42 @@ def _validate_object_free(path: Path) -> int:
     return leaked
 
 
+_BLOCK_TERMS = (
+    "not approved", "no new reorder", "no reorder", "not sent", "not assigned", "blocked",
+    "is held", "held unassigned", "suppress", "denied", "remains pending", "escalat",
+    "not completed", "is not approved", "no approval",
+)
+_RESET_TERMS = (
+    "new day", "resets", "reset", "no longer", "more than 7", "more than seven", "next day",
+    "8 day", "eight day", "aged out", "outside the window", "per-day count", "window no longer",
+)
+
+
+def _scenario_coherence_issues(s) -> list[str]:
+    """Deterministic scenario-validity checks for state-infused samples — catches the
+    failures annotators flagged: a scenario that never blocks the gated action (so the
+    invariant is untestable) and a counter/rate_limit with no period-reset event."""
+    sc = getattr(s, "state_constraint", None)
+    if not sc:
+        return []
+    texts = [f"{e.expect.action} {e.expect.reason or ''}".lower()
+             for e in s.events if e.role == "base" and e.expect]
+    if not texts:
+        return []
+    issues = []
+    if not any(any(t in x for t in _BLOCK_TERMS) for x in texts):
+        issues.append("no base event shows the gated action blocked/held/suppressed — the "
+                      "invariant is never exercised (expects describe only the routine outcome)")
+    if getattr(sc.type, "value", sc.type) in ("counter", "rate_limit"):
+        if not any(any(t in x for t in _RESET_TERMS) for x in texts):
+            issues.append(f"{getattr(sc.type, 'value', sc.type)}: no reset/window-expiry event "
+                          "(same key, later period, action allowed again)")
+    return issues
+
+
 def _validate_unified(path: Path) -> int:
     """Deterministic: custodian-graph checks on the bound output (incl. invariant→custodian,
-    custodian reachability) + recipient/target membership."""
+    custodian reachability) + recipient/target membership + scenario coherence."""
     from src.data.schema import Sample
     from src.data.validate_workflow_objects import _custodian_graph_issues
     flagged = 0
@@ -57,11 +90,12 @@ def _validate_unified(path: Path) -> int:
         issues = list(_custodian_graph_issues(s))
         issues += [f"event {e.id} recipient '{e.recipient}' ∉ objects" for e in s.events if e.recipient not in ids]
         issues += [f"mod {m.id} target '{m.target}' ∉ objects" for m in s.modifications if m.target not in ids]
+        issues += _scenario_coherence_issues(s)
         if issues:
             flagged += 1
             for i in issues:
                 print(f"  [graph] {s.id}: {i}")
-    print(f"  graph/membership: {'OK' if not flagged else f'{flagged} workflow(s) flagged'}")
+    print(f"  graph/membership/coherence: {'OK' if not flagged else f'{flagged} workflow(s) flagged'}")
     return flagged
 
 

@@ -261,11 +261,13 @@ def _generate_mock_tool_data(llm, tool_name: str, description: str, step_texts: 
     step_context = ""
     if step_texts:
         step_context = (
-            "\n\nThe automation references these specific people, items, or identifiers:\n"
+            "\n\nThe automation references these specific people, items, or identifiers "
+            "(some appear inside descriptions of how requests were HANDLED):\n"
             + "\n".join(f"  - {t}" for t in step_texts)
-            + "\n\nYour data MUST include entries for every person, item, or entity "
-            "mentioned above (using exactly the same names), structured to match the "
-            "tool's data type described in the IMPORTANT note below."
+            + "\n\nInclude every such person/item/entity in your data (exact same names), "
+            "structured to match the tool's data type below — but as a STATIC reference "
+            "record (identity + standing attributes only). Do NOT carry over any "
+            "assignment, decision, status, outcome, or 'what happened' from the text above."
         )
 
     data_hint = _infer_data_hint(tool_name)
@@ -279,6 +281,15 @@ def _generate_mock_tool_data(llm, tool_name: str, description: str, step_texts: 
                 f"What it stores: {description}"
                 f"{step_context}\n\n"
                 f"IMPORTANT: {data_hint}\n\n"
+                "CRITICAL — your data is the reference state the system READS, never the results "
+                "it PRODUCES. Do NOT include any field that resolves, pre-decides, or records the "
+                "outcome of a request: no assignments/'assigned_to', no approval/'approved' status, "
+                "no held/blocked/pending/'eligible_for_assignment' decision flags, no per-entity "
+                "running counts ('received today', 'reorders this week', 'count so far', 'remaining'), "
+                "no event/assignment log, no 'roster_history' or 'assignment_reference'. Provide the "
+                "directory/roster/catalog AS IT STANDS BEFORE any request is processed — standing "
+                "facts only (who/what exists, positions, caps, prices, reorder levels). Including "
+                "outcomes or accumulated counts hands the system the answer and makes the test invalid.\n\n"
                 "Use field names and value formats that match how the description above "
                 "refers to the data — downstream objects will access fields by exact name. "
                 "Use realistic identifier formats: Slack user IDs must be 9 alphanumeric "
