@@ -34,10 +34,20 @@ class NestedDelta:
 
     `path` is a dotted string addressing a nested location (`"a.b.c"`).
     The empty string `""` addresses the root.
+
+    Guarded ops (incr/decr/reserve/confirm/release) target the leaf at `path`
+    and use the same optional params as the flat backend's StateDelta. See
+    docs/CUSTODIAN_SPEC.md.
     """
-    op: str               # "set" | "merge" | "delete" | "append"
+    op: str               # set | merge | delete | append | incr | decr | reserve | confirm | release
     path: str             # dotted path, "" = root
-    value: Any = None     # required for set/merge/append; ignored for delete
+    value: Any = None     # set/merge/append value; reserve: the amount to hold
+    # ── Guarded-op params (optional) ──────────────────────────────────────────
+    by: Any = None        # incr/decr: amount to add (decr negates it)
+    min: Any = None       # incr/decr: reject if result < min (decr defaults min=0)
+    max: Any = None       # incr: reject if result > max
+    cap: Any = None       # reserve: reject if committed + held + amount > cap
+    hold_id: Any = None   # reserve/confirm/release: hold identifier
 
 
 # --- Protocol ----------------------------------------------------------------
@@ -66,11 +76,26 @@ _FLAT_STATE_UPDATE_SCHEMA: dict[str, Any] = {
     "properties": {
         "op": {
             "type": "string",
-            "enum": ["set", "delete", "append"],
-            "description": "set: add/update a key. delete: remove a key. append: add to a list.",
+            "enum": ["set", "delete", "append", "incr", "decr", "reserve", "confirm", "release"],
+            "description": (
+                "set: add/update a key. delete: remove a key. append: add to a list. "
+                "GUARDED ops keep an invariant correct — a guarded op that would break "
+                "its bound does nothing: "
+                "incr: add `by` to the number at key (rejected if result > max or < min). "
+                "decr: subtract `by` (rejected if result < min, default 0). "
+                "reserve: hold `value` against `cap` in key's `holds` (rejected if "
+                "committed + already-held + value > cap); requires `hold_id`. "
+                "confirm: move `hold_id`'s amount into `committed`. "
+                "release: drop `hold_id` from `holds`."
+            ),
         },
         "key": {"type": "string", "description": "The state key to modify."},
-        "value": {"description": "New value (set/append). Omit for delete."},
+        "value": {"description": "New value (set/append); the amount to hold (reserve). Omit for delete."},
+        "by": {"type": "number", "description": "incr/decr: amount to add/subtract."},
+        "min": {"type": "number", "description": "incr/decr lower bound; a result below it is rejected."},
+        "max": {"type": "number", "description": "incr upper bound; a result above it is rejected."},
+        "cap": {"type": "number", "description": "reserve ceiling for committed + held + value."},
+        "hold_id": {"type": "string", "description": "reserve/confirm/release hold identifier."},
     },
     "required": ["op", "key"],
     "additionalProperties": False,
@@ -138,7 +163,11 @@ class FlatKeyValueMemory:
         key = raw.get("key")
         if not op or not key:
             return None
-        return StateDelta(op=op, key=key, value=raw.get("value"))
+        return StateDelta(
+            op=op, key=key, value=raw.get("value"),
+            by=raw.get("by"), min=raw.get("min"), max=raw.get("max"),
+            cap=raw.get("cap"), hold_id=raw.get("hold_id"),
+        )
 
     def state_update_schema(self) -> dict:
         return copy.deepcopy(_FLAT_STATE_UPDATE_SCHEMA)
@@ -165,7 +194,120 @@ def _apply_flat_delta(state: dict, delta: StateDelta) -> dict:
             lst = [lst]
         lst.append(delta.value)
         state[delta.key] = lst
+    elif delta.op in GUARDED_OPS:
+        new, changed = _apply_guarded(state.get(delta.key), delta)
+        if changed:
+            state[delta.key] = new
     return state
+
+
+# --- Guarded ops (shared by both backends) -----------------------------------
+#
+# These enforce an invariant deterministically: a guarded op that would violate
+# its bound is a no-op (returns changed=False, leaving the value untouched), so
+# the invariant holds regardless of what the LLM computed. Each helper takes the
+# CURRENT value at a location and returns (new_value, changed); the backend then
+# writes new_value only when changed. The delta carries the params (by/min/max/
+# cap/hold_id) — both StateDelta and NestedDelta expose them, so this logic is
+# backend-agnostic. See docs/CUSTODIAN_SPEC.md.
+
+GUARDED_OPS: tuple[str, ...] = ("incr", "decr", "reserve", "confirm", "release")
+
+
+def _num(v: Any, default: float = 0) -> float:
+    """Coerce to a number; bools and non-numbers fall back to `default`."""
+    if isinstance(v, bool):
+        return default
+    if isinstance(v, (int, float)):
+        return v
+    return default
+
+
+def _is_num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _hold_container(cur: Any) -> tuple[dict, float, list]:
+    """Normalize a reservation container `{committed, holds, cap?}`."""
+    c = cur if isinstance(cur, dict) else {}
+    committed = _num(c.get("committed", 0), 0)
+    holds = c.get("holds")
+    holds = holds if isinstance(holds, list) else []
+    return c, committed, holds
+
+
+def _guarded_incr(cur: Any, op: str, by: Any, lo: Any, hi: Any) -> tuple[Any, bool]:
+    amt = _num(by, 0)
+    if op == "decr":
+        amt = -amt
+        if lo is None:
+            lo = 0
+    base = _num(cur, 0)
+    new = base + amt
+    if hi is not None and _is_num(hi) and new > hi:
+        return cur, False        # would exceed max → reject
+    if lo is not None and _is_num(lo) and new < lo:
+        return cur, False        # would fall below min → reject
+    if new == base and _is_num(cur):
+        return cur, False        # no actual change
+    return new, True
+
+
+def _guarded_reserve(cur: Any, amount: Any, cap: Any, hold_id: Any) -> tuple[Any, bool]:
+    if hold_id is None:
+        return cur, False        # a hold needs an id
+    c, committed, holds = _hold_container(cur)
+    eff_cap = cap if cap is not None else c.get("cap")
+    amt = _num(amount, 0)
+    held = sum(_num(h.get("amount", 0), 0) for h in holds if isinstance(h, dict))
+    if eff_cap is not None and _is_num(eff_cap) and committed + held + amt > eff_cap:
+        return cur, False        # no headroom → reject
+    new = dict(c)
+    new["committed"] = committed
+    new["holds"] = list(holds) + [{"hold_id": hold_id, "amount": amt}]
+    if eff_cap is not None:
+        new["cap"] = eff_cap
+    return new, True
+
+
+def _guarded_confirm(cur: Any, hold_id: Any) -> tuple[Any, bool]:
+    c, committed, holds = _hold_container(cur)
+    match = next((h for h in holds if isinstance(h, dict) and h.get("hold_id") == hold_id), None)
+    if match is None:
+        return cur, False
+    new = dict(c)
+    new["committed"] = committed + _num(match.get("amount", 0), 0)
+    new["holds"] = [h for h in holds if h is not match]
+    return new, True
+
+
+def _guarded_release(cur: Any, hold_id: Any) -> tuple[Any, bool]:
+    c, committed, holds = _hold_container(cur)
+    if not any(isinstance(h, dict) and h.get("hold_id") == hold_id for h in holds):
+        return cur, False
+    new = dict(c)
+    new["committed"] = committed
+    new["holds"] = [h for h in holds if not (isinstance(h, dict) and h.get("hold_id") == hold_id)]
+    return new, True
+
+
+def _apply_guarded(cur: Any, delta: Any) -> tuple[Any, bool]:
+    """Dispatch a guarded op against the current value at a location.
+
+    `delta` is a StateDelta or NestedDelta — only the op-param attributes
+    (by/min/max/cap/hold_id/value) are read, never key/path."""
+    op = delta.op
+    if op in ("incr", "decr"):
+        by = delta.by if delta.by is not None else delta.value
+        return _guarded_incr(cur, op, by, delta.min, delta.max)
+    if op == "reserve":
+        amount = delta.value if delta.value is not None else delta.by
+        return _guarded_reserve(cur, amount, delta.cap, delta.hold_id)
+    if op == "confirm":
+        return _guarded_confirm(cur, delta.hold_id)
+    if op == "release":
+        return _guarded_release(cur, delta.hold_id)
+    return cur, False
 
 
 # --- Nested JSON backend -----------------------------------------------------
@@ -175,12 +317,19 @@ _NESTED_ACTION_SCHEMA: dict[str, Any] = {
     "properties": {
         "op": {
             "type": "string",
-            "enum": ["set", "merge", "delete", "append"],
+            "enum": ["set", "merge", "delete", "append", "incr", "decr", "reserve", "confirm", "release"],
             "description": (
                 "set: write value at path (auto-creates parent dicts). "
                 "merge: deep-merge a dict value into the existing dict at path. "
                 "delete: remove the leaf at path. "
-                "append: push value onto the array at path (creates [] if missing)."
+                "append: push value onto the array at path (creates [] if missing). "
+                "GUARDED ops keep an invariant correct — one that would break its bound does nothing: "
+                "incr: add `by` to the number at path (rejected if result > max or < min). "
+                "decr: subtract `by` (rejected if result < min, default 0). "
+                "reserve: hold `value` against `cap` in the container at path (rejected if "
+                "committed + already-held + value > cap); requires `hold_id`. "
+                "confirm: move `hold_id`'s amount into `committed`. "
+                "release: drop `hold_id`."
             ),
         },
         "path": {
@@ -190,7 +339,12 @@ _NESTED_ACTION_SCHEMA: dict[str, Any] = {
                 "Empty string '' addresses the root."
             ),
         },
-        "value": {"description": "New value (set/merge/append). Omit for delete."},
+        "value": {"description": "New value (set/merge/append); the amount to hold (reserve). Omit for delete."},
+        "by": {"type": "number", "description": "incr/decr: amount to add/subtract."},
+        "min": {"type": "number", "description": "incr/decr lower bound; a result below it is rejected."},
+        "max": {"type": "number", "description": "incr upper bound; a result above it is rejected."},
+        "cap": {"type": "number", "description": "reserve ceiling for committed + held + value."},
+        "hold_id": {"type": "string", "description": "reserve/confirm/release hold identifier."},
     },
     "required": ["op", "path"],
     "additionalProperties": False,
@@ -276,11 +430,15 @@ class NestedJsonMemory:
             return None
         op = raw.get("op")
         path = raw.get("path")
-        if op not in ("set", "merge", "delete", "append"):
+        if op not in ("set", "merge", "delete", "append") and op not in GUARDED_OPS:
             return None
         if not isinstance(path, str):
             return None
-        return NestedDelta(op=op, path=path, value=raw.get("value"))
+        return NestedDelta(
+            op=op, path=path, value=raw.get("value"),
+            by=raw.get("by"), min=raw.get("min"), max=raw.get("max"),
+            cap=raw.get("cap"), hold_id=raw.get("hold_id"),
+        )
 
     def state_update_schema(self) -> dict:
         return copy.deepcopy(_NESTED_STATE_UPDATE_SCHEMA)
@@ -329,7 +487,7 @@ def _apply_nested(state: dict, delta: NestedDelta) -> tuple[dict, bool]:
 
     # Walk to the parent of the leaf, creating dicts as needed for write ops.
     parent: Any = state
-    creating = op in ("set", "merge", "append")
+    creating = op in ("set", "merge", "append") or op in GUARDED_OPS
     for seg in segments[:-1]:
         if not isinstance(parent, dict):
             return state, False
@@ -342,6 +500,12 @@ def _apply_nested(state: dict, delta: NestedDelta) -> tuple[dict, bool]:
     if not isinstance(parent, dict):
         return state, False
     leaf = segments[-1]
+
+    if op in GUARDED_OPS:
+        new, changed = _apply_guarded(parent.get(leaf), delta)
+        if changed:
+            parent[leaf] = new
+        return state, changed
 
     if op == "set":
         if leaf in parent and parent[leaf] == delta.value:

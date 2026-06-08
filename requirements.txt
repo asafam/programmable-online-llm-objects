@@ -14,3 +14,4 @@ openclaw-sdk
 plotly>=5.18.0
 matplotlib>=3.8.0
 kaleido>=0.2.1
+firebase-admin>=6.5.0

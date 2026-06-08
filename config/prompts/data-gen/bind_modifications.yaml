@@ -1,0 +1,25 @@
+user_prompt: |
+  An automation workflow is implemented as a set of LLM-objects. Each MODIFICATION is a
+  natural-language instruction that changes the workflow's behavior. Your job is to map
+  each modification to the ONE object whose behavior the instruction actually changes —
+  the object that owns the rule/domain the modification is about.
+
+  ## Objects
+
+  {OBJECTS}
+
+  ## Modifications
+
+  {MODIFICATIONS}
+
+  For each modification, choose the single `object_id` (from the list above) whose
+  `behavior` the instruction modifies:
+  - Pick the **business-logic / decision object** that owns the relevant rule (routing,
+    approval, assignment, triage, policy) — the place the new rule belongs.
+  - Do NOT pick a pure entry-point/ingest object or a pure storage/notification sink,
+    unless the modified rule genuinely lives there.
+  - If a modification changes a shared invariant owned by a single-writer object, target
+    that owner.
+
+  Return `bindings`: one `{mod_id, object_id}` per modification. Every `object_id` MUST be
+  exactly one of the ids listed above.

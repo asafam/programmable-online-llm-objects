@@ -1,0 +1,31 @@
+prompt: |
+  # Task: Ground state-scenario expectations against real reference data
+
+  The base events below test a CROSS-REQUEST INVARIANT (a cap, counter, rate-limit, or
+  round-robin order). Their current `expect.action` was written with PLACEHOLDER entity
+  names (e.g. "Rep A", "Rep B", "the first rep") because the data did not exist yet.
+
+  Your job: rewrite each `expect.action` so it references the REAL entities from the
+  Reference Data — and NOTHING ELSE changes. The ordering, the threshold/cap reasoning,
+  which request is admitted vs blocked/held/skipped, and the running counts MUST stay
+  exactly as written. Only substitute the placeholder names with the concrete entities.
+
+  ## Reference Data (the real entities; map placeholders to these, IN ORDER)
+
+  {ROSTER}
+
+  ## Base events (in order) — input + current expect
+
+  {BASE_EVENTS}
+
+  ## Rules
+  - Map placeholders to real entities consistently and IN ORDER: the first placeholder
+    ("Rep A" / "position 1" / "the first rep") → the first entity in the roster, and so on.
+    The SAME placeholder must map to the SAME real entity across all events.
+  - Preserve the invariant logic verbatim: if the old expect said "assigned to Rep B, not
+    Rep A", the new one says "assigned to <2nd rep>, not <1st rep>". If it said "blocked —
+    cap reached", keep that, just ground any names.
+  - Keep it observable (a named external effect); do NOT introduce internal object names.
+  - If an expect has no placeholder to ground, return it unchanged.
+
+  Return `expectations`: one `{event_id, action, reason}` per base event.

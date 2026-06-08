@@ -44,12 +44,22 @@ def _load_prompt() -> str:
         return yaml.safe_load(f)["prompt"]
 
 
+def _step_text(st) -> str:
+    """A workflow step is a plain string in the canonical Workflow schema, but
+    some older artifacts carry Step-like objects with .text/.target. Read either."""
+    if isinstance(st, str):
+        return st
+    return getattr(st, "text", "") or ""
+
+
 def _format_steps(workflow: Workflow) -> str:
     if not workflow.steps:
         return "(no steps)"
     lines = []
     for i, st in enumerate(workflow.steps, 1):
-        lines.append(f"  [{i}] target={st.target}  text: {st.text}")
+        target = None if isinstance(st, str) else getattr(st, "target", None)
+        prefix = f"target={target}  " if target else ""
+        lines.append(f"  [{i}] {prefix}text: {_step_text(st)}")
     return "\n".join(lines)
 
 
@@ -102,7 +112,69 @@ def _health_check_object(workflow: Workflow, obj_index: int) -> list[str]:
     return issues
 
 
-def _aggregate_health(verdicts: list[ObjectVerdict]) -> str:
+# Phrases in the workflow steps that signal a cross-request / cross-instance
+# invariant (a cap, quota, rate-limit, running total, shared pool, round-robin
+# queue). When any appear, the graph should own that invariant in exactly one
+# single-writer Custodian object — see docs/SHARED_STATE_DESIGN.md.
+# Phrases are deliberately constraint-shaped (verbs / limits), not bare nouns:
+# a noun like "budget" is usually just a form field, whereas "cannot exceed"
+# or "no more than" names an actual invariant. Heuristic — tune as needed.
+_INVARIANT_SIGNALS = (
+    "no more than", "exceed", "running total", "cumulative",
+    "per day", "per-day", "per week", "per-week", "per quarter",
+    "rolling", "rate limit", "rate-limit", "round robin", "round-robin",
+    "daily cap", "daily limit", "quota", "reset at", "within any",
+    "shared pool", "leads per", "reorders for",
+)
+# Role markers used only as a fallback for legacy objects generated before the
+# explicit `is_custodian` flag existed.
+_CUSTODIAN_MARKERS = (
+    "single writer", "single-writer", "custodian", "sole owner",
+    "owns the", "owner of", "single owner",
+)
+
+
+def _is_custodian(obj) -> bool:
+    """Custodian status is an explicit categorical flag on the object. Fall back
+    to role-marker detection only for legacy data that predates the flag."""
+    if getattr(obj, "is_custodian", False):
+        return True
+    return any(m in f"{obj.role or ''} {obj.behavior or ''}".lower() for m in _CUSTODIAN_MARKERS)
+
+
+def _custodian_graph_issues(workflow: Workflow) -> list[str]:
+    """Deterministic graph-level checks for the shared-invariant / Custodian
+    pattern. Heuristic and advisory — flags graphs for review, mirroring how
+    health checks surface structural concerns."""
+    issues: list[str] = []
+    steps_text = " ".join(_step_text(st) for st in workflow.steps).lower()
+    matched = sorted({s for s in _INVARIANT_SIGNALS if s in steps_text})
+    custodians = [o for o in workflow.objects if _is_custodian(o)]
+
+    if matched and not custodians:
+        issues.append(
+            "stateful invariant signals in steps "
+            f"({', '.join(matched)}) but no single-writer Custodian object owns it"
+        )
+
+    # Each Custodian must be reachable — some other object must message it.
+    for cust in custodians:
+        inbound = any(
+            p.object_id == cust.object_id
+            for o in workflow.objects if o.object_id != cust.object_id
+            for p in o.peers
+        )
+        if not inbound:
+            issues.append(
+                f"Custodian '{cust.object_id}' has no inbound peers — "
+                "no object reserves/commits against it (unreachable owner)"
+            )
+    return issues
+
+
+def _aggregate_health(verdicts: list[ObjectVerdict], graph_issues: list[str] | None = None) -> str:
+    if graph_issues:
+        return "ISSUES"
     return "OK" if all(not v.health_issues for v in verdicts) else "ISSUES"
 
 
@@ -135,6 +207,7 @@ def _validate_workflow_objects(
 
     # Deterministic health pass first
     health_lists = [_health_check_object(workflow, i) for i in range(len(workflow.objects))]
+    custodian_issues = _custodian_graph_issues(workflow)
 
     # LLM judge — single call grades all objects + the graph
     prompt = (
@@ -175,9 +248,9 @@ def _validate_workflow_objects(
             n_objects=len(workflow.objects),
             object_verdicts=object_verdicts,
             graph_quality="POOR",
-            graph_issues=["(judge failed)"],
+            graph_issues=["(judge failed)"] + custodian_issues,
             graph_reasoning="LLM judge failed to produce a verdict.",
-            aggregate_health=_aggregate_health(object_verdicts),
+            aggregate_health=_aggregate_health(object_verdicts, custodian_issues),
             aggregate_quality="POOR",
         )
 
@@ -200,9 +273,9 @@ def _validate_workflow_objects(
         n_objects=len(workflow.objects),
         object_verdicts=object_verdicts,
         graph_quality=judgement.graph_quality,
-        graph_issues=list(judgement.graph_issues or []),
+        graph_issues=list(judgement.graph_issues or []) + custodian_issues,
         graph_reasoning=judgement.reasoning,
-        aggregate_health=_aggregate_health(object_verdicts),
+        aggregate_health=_aggregate_health(object_verdicts, custodian_issues),
         aggregate_quality=_aggregate_quality(object_verdicts, judgement.graph_quality),
     )
 

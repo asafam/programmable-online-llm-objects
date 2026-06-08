@@ -4,3 +4,4 @@
 - [Round Robin Lead Assignment](round-robin-lead-assignment.md)
 - [Inventory Reorder Automation](inventory.md)
 - [Personal Assistant Automation](personal-assistant.md)
+- [Custodian — shared / concurrent logic-state](custodian-shared-state.md)

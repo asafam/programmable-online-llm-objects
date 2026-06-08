@@ -1,0 +1,80 @@
+prompt: |
+  # Task: Write External Trigger Steps (object-agnostic)
+
+  Given a concrete automation scenario, write the external trigger steps that start
+  the automation. Describe WHAT happens observably — do NOT reference any internal
+  object, object_id, or service component. The system's decomposition into objects is
+  decided later; your steps must hold for any correct implementation.
+
+  ---
+
+  ## Automation
+
+  **Name:** {NAME}
+
+  **Scenario steps:**
+  {GROUNDED_STEPS}
+
+  ---
+
+  ## Instructions
+
+  Steps are **external triggers only** — events that ARRIVE from outside the system
+  boundary and cause the automation to run. They are NOT a trace of internal work.
+
+  A "trigger" is an event initiated from outside, NOT a response the workflow elicited.
+  When the workflow sends an approval message / request and later receives the answer,
+  that answer is CASCADE (part of the flow), not a separate Step. Test: could this event
+  arrive even if the workflow never ran? Yes → TRIGGER (a Step). No (it only happens
+  because the workflow asked) → CASCADE (not a Step).
+
+  **Emit ONE Step per distinct external trigger** — the initial event plus any later
+  ones (scheduled/time-based triggers, periodic reminders, secondary user actions,
+  external callbacks). Don't stop after the first; the benchmark must be able to test the
+  later triggers. Do not write multiple steps for different data instances of the same
+  trigger type.
+
+  ### Each step has these fields:
+
+  - `source` — the external system sending this trigger (e.g. a platform name, or
+    `"__external__"`). NOT an internal object.
+  - `text` — the natural-language description of THIS event arriving from outside, with
+    **concrete instance values**: specific names, IDs, amounts, dates, percentages. Invent
+    realistic, self-consistent values (e.g. "quote Q-2048 from James Brown, Account
+    Executive, for Acme Corp, 25% discount, Net 75"). Reuse the SAME entity names/IDs
+    across steps and events that refer to the same real-world entity — downstream mock data
+    will be generated to match these names.
+  - `expect` — what the system produces when run with no modifications:
+    - `action` — an EXHAUSTIVE list of TERMINAL, externally-observable side effects, named
+      in OBSERVABLE terms only:
+        1. State changes in NAMED EXTERNAL storage (a row inserted/updated, a status
+           flipped, a counter incremented in a named external system — a Sheet tab, an
+           Airtable base, a CRM record). NOT internal object state.
+        2. Outbound messages/notifications (email, Slack post/DM, SMS) — include recipient
+           + content summary.
+        3. Tool/API invocations — tool name + key args.
+        4. File/artifact writes.
+      Do NOT name internal objects or "forward to the X peer" — that is a first-hop dispatch,
+      not a terminal effect. Do NOT include internal scratchpad state.
+      **Stop at the next external-response boundary.** If the cascade sends a notification
+      that awaits an external reply, that notification IS the terminal output — the reply is
+      a SEPARATE future Step. Do not include the reply's eventual outcome here.
+    - `reason` — the rule that drives the outputs (one sentence), stated as a business rule,
+      not an object/peer path.
+
+  ### Rules
+  - Default to writing a concrete `expect`. A null `expect` is the exception — only for
+    pure scheduled/heartbeat triggers whose outcome depends on runtime state not in the
+    trigger text.
+  - Describe only natural-language messages and data writes — NOT interactive UI elements.
+  - Keep vendor/product names consistent with the scenario (don't swap Databricks→BigQuery).
+
+  ### Sequential coherence (verify before finalizing)
+  - **State compatibility:** can this event arrive given the state after all prior steps?
+    If a prior step's `expect.action` left a terminal state (rejected, closed), the next
+    step must resolve it or be independent.
+  - **Actor prerequisites:** if a step has an external actor responding, a prior step's
+    `expect.action` must have established they received the prerequisite (e.g. an approval
+    request was sent). If not, add it to the prior step's expect or add a setup step.
+  - **Isolated expect scope:** write step N's `expect.action` using ONLY step N's own
+    `text`. Do not fold in outcomes of later steps.

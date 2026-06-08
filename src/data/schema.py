@@ -39,6 +39,11 @@ class Ambiguity(str, Enum):
     vague = "vague"
     implicit = "implicit"
 
+class StateConstraintType(str, Enum):
+    cap = "cap"               # cumulative total across requests must stay at/below a ceiling (e.g. $50K discounts)
+    counter = "counter"       # per-key count within a period is capped (e.g. max 2 leads / rep / day)
+    rate_limit = "rate_limit" # at most N occurrences for the same key in a rolling window (e.g. 2 reorders / 7d)
+
 class EventExpect(BaseModel):
     action: str
     reason: str
@@ -117,6 +122,35 @@ class GeneratedEventWithExpect(BaseModel):
     trigger_delay_minutes: float = 0.0
     trigger_delay_seconds: float = 0.0
     expect: Optional[EventExpect] = None
+
+
+class StateConstraint(BaseModel):
+    """Spec-level descriptor of the cross-request invariant a workflow's base scenario
+    exercises — IMPLEMENTATION-AGNOSTIC.
+
+    It names no owning object and no mechanism: whether the invariant is realized by a
+    single-writer Custodian or otherwise is decided in object identification (Stage 1),
+    not here. Stage 1.5 records this descriptor and authors the base events that exercise
+    it; the expectations are phrased in observable terms, not internal mechanics.
+    """
+    type: StateConstraintType
+    threshold: str            # the limit, e.g. "$50,000 cumulative per quarter"
+    description: str = ""     # one line stating the invariant in observable terms
+
+
+class GeneratedStateConstraint(BaseModel):
+    """LLM output for Stage 1.5 — the state-infused base scenario, decoupled from
+    implementation.
+
+    The model reads the workflow (objects/steps describe its rules), classifies the
+    cross-request invariant, and authors a role='base' event sequence whose expects
+    state the OBSERVABLE outcome at each step (admitted vs blocked/held at the
+    threshold) — never any internal mechanism (no custodian, no reserve/confirm).
+    """
+    constraint_type: StateConstraintType
+    threshold: str
+    description: str
+    base_events: list["SpecEventWithExpect"]  # object-free; recipient bound in Phase 2
 
 
 class StateProbeScenario(BaseModel):
@@ -235,6 +269,13 @@ class ObjectDef(BaseModel):
     skills: list[str] = Field(default_factory=list)
     subscriptions: list[str] = Field(default_factory=list)
     event_sources: list[str] = Field(default_factory=list)
+    # Categorical: True iff this object is the single-writer owner of a
+    # cross-request/instance invariant (a Custodian — see identify_objects.yaml
+    # category 3). A custodian decides from its own state in one message and
+    # only replies; it has NO peers. Any peers emitted for a custodian are
+    # stripped at assembly (generate_workflows._assemble_sample), so the
+    # peerless / atomic property holds by construction.
+    is_custodian: bool = False
     @field_validator("object_id")
     @classmethod
     def slugify_object_id(cls, v: str) -> str:
@@ -332,6 +373,10 @@ class Sample(BaseModel):
         description="Deprecated alias for tools. Loaded from old JSONL; use .tools instead.",
         exclude=True,
     )
+    state_constraint: Optional[StateConstraint] = Field(
+        default=None,
+        description="Baseline state invariant enforced from the base scenario (Stage 1.5). None for ordinary test cases.",
+    )
 
     @property
     def all_events(self) -> "list[Event]":
@@ -388,6 +433,10 @@ class Workflow(BaseModel):
     flag_reasons: list[str] = Field(
         default_factory=list,
         description="Human-reviewed structural issues that were kept but not fixed. Flagged samples are included in Stage 2 but marked for manual follow-up.",
+    )
+    state_constraint: Optional[StateConstraint] = Field(
+        default=None,
+        description="Baseline state invariant injected by Stage 1.5 (generate_state_constraints). None unless --state-constraint was used.",
     )
 
     @property
@@ -603,6 +652,107 @@ class Scenario(BaseModel):
 
 class Scenarios(BaseModel):
     scenarios: list[Scenario]
+
+
+# ── Object-AGNOSTIC SPEC models (Phase 1) ─────────────────────────────────────
+# These mirror the bound models below but carry NO object reference (no target /
+# recipient / object_id). Phase 1 emits a WorkflowSpec; Phase 2 (bind_spec.py)
+# derives the agent graph and binds these into the unchanged bound models
+# (Event / Modification / Sample) so evaluate.py is unaffected.
+
+class SpecStep(BaseModel):
+    """A workflow step as an external stimulus — object-agnostic (no target)."""
+    text: str
+    source: str = "__external__"
+    expect: Optional[EventExpect] = None
+
+class SpecEvent(BaseModel):
+    """LLM/spec event with no recipient — bound to an object_id in Phase 2."""
+    id: str
+    call_type: str
+    source: str = "__external__"
+    input: str
+    when: str
+    triggered_by: Optional[str] = None
+    trigger_delay_minutes: float = 0.0
+    trigger_delay_seconds: float = 0.0
+    role: Optional[Literal["base", "pre_mod", "post_mod", "irrelevant"]] = None
+    after_mod_ids: list[str] = Field(default_factory=list)
+    concurrent_group: Optional[str] = None
+
+class SpecEventWithExpect(BaseModel):
+    """Spec event carrying its own expect (state-infused base events) — no recipient."""
+    id: str
+    call_type: str
+    source: str = "__external__"
+    input: str
+    when: str
+    role: Optional[Literal["base", "pre_mod", "post_mod", "irrelevant"]] = None
+    after_mod_ids: list[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list)
+    triggered_by: Optional[str] = None
+    trigger_delay_minutes: float = 0.0
+    trigger_delay_seconds: float = 0.0
+    expect: Optional[EventExpect] = None
+
+class SpecModification(BaseModel):
+    """A modification as an object-agnostic intent — target bound in Phase 2.
+    mod_type / ambiguity are still script-assigned."""
+    id: str
+    call_type: str = "send"
+    source: str = "__user__"
+    when: str
+    intent: str
+    mod_type: Optional[ModType] = None
+    ambiguity: Optional[Ambiguity] = None
+
+class SpecScenario(BaseModel):
+    """Object-agnostic analogue of Scenario (Phase-1 LLM output)."""
+    id: str = ""
+    sample_id: str = ""
+    description: str = ""
+    modifications: list[SpecModification]
+    events: list[SpecEvent]
+
+class WorkflowSpecScenarios(BaseModel):
+    scenarios: list[SpecScenario]
+
+class ModTargetBinding(BaseModel):
+    """Phase-2 LLM output: which object a modification addresses."""
+    mod_id: str
+    object_id: str
+
+class ModTargetBindings(BaseModel):
+    bindings: list[ModTargetBinding]
+
+class WorkflowSpec(BaseModel):
+    """The Phase-1 object-agnostic carrier: everything about WHAT the workflow does,
+    nothing about HOW it is decomposed into objects. No `objects`, no `tools`."""
+    id: str
+    name: str
+    domain: str
+    source_type: str
+    link: str = ""
+    template: list[str] = Field(default_factory=list)        # abstract template steps
+    grounded_steps: list[str] = Field(default_factory=list)  # grounded NL steps (no object_ids)
+    steps: list[SpecStep] = Field(default_factory=list)      # external-stimulus steps with observable expects
+    base_events: list[SpecEventWithExpect] = Field(default_factory=list)  # state-infused base scenario
+    modifications: list[SpecModification] = Field(default_factory=list)
+    events: list[SpecEvent] = Field(default_factory=list)    # mod/pre/post/irrelevant events
+    state_constraint: Optional[StateConstraint] = None
+    flagged: bool = False
+    flag_reasons: list[str] = Field(default_factory=list)
+
+class WorkflowSpecs(BaseModel):
+    specs: list[WorkflowSpec]
+
+class SpecWorkflowSteps(BaseModel):
+    """LLM output for object-free step writing (Phase 1) — steps with no target."""
+    steps: list[SpecStep]
+
+class SpecBaseEventsList(BaseModel):
+    """LLM output for grounding the infused base scenario — concrete entities, no recipient."""
+    base_events: list[SpecEventWithExpect]
 
 
 # ── Event sequence validation schemas (Stage 1e) ─────────────────────────────

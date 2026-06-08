@@ -42,6 +42,29 @@ prompt: |
 
   In `quality_issues`, list each specific complaint as a short string.
 
+  ## Shared-invariant / Custodian check
+
+  If the workflow enforces an invariant that spans multiple requests or instances
+  — a cumulative cap, quota, budget, running total, rate-limit ("no more than N
+  per day/week"), rolling window, shared pool, or round-robin queue — the graph
+  must own it correctly. Treat violations as graph-level problems:
+
+  - **Single owner.** Exactly ONE object (a "Custodian", e.g. `discount-budget`,
+    `lead-desk`, `reorder-window`) should be the single writer of that
+    accumulator. If two objects both mutate it, or a business logic object keeps
+    its own copy of the total, that is a POOR graph (lost-update risk).
+  - **Atomic decision.** The Custodian's behavior must read → check → reserve /
+    commit within a single step. If its behavior asks another object and waits
+    for a reply *between* the cap check and the commit, flag it — that reopens a
+    race. Slow/fallible work (e.g. asking a VP for an exception) must happen
+    AFTER a reservation, reconciled by confirm/release.
+  - **Lifecycle & window.** Where a fallible step follows the check, expect
+    hold/confirm/release (or equivalent). Where the count is time-bounded, expect
+    a reset/age-out rule (rolling window or per-period reset).
+
+  If no such invariant exists in the steps, skip this check — do not invent a
+  Custodian requirement.
+
   ## How to grade the graph as a whole
 
   - **GOOD** — could plausibly execute the workflow end to end; every

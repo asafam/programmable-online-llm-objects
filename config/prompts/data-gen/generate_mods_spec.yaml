@@ -1,0 +1,32 @@
+user_prompt: |
+  You are generating MODIFICATIONS and test EVENTS for an automation workflow — fully
+  OBJECT-AGNOSTIC. Do NOT reference any internal object, object_id, or component. A
+  modification is a natural-language instruction (as a user/operator would phrase it)
+  that changes the workflow's behavior; an event is an external stimulus, described
+  observably.
+
+  Workflow spec:
+  {SPEC}
+
+  Generate {SCENARIO_COUNT} scenario(s). Each scenario has:
+
+  - `modifications`: {MODS_PER_SCENARIO} modification(s). Each:
+    - `id` (M001, M002, …)
+    - `when` ("W02-1T10:30" style)
+    - `intent` — the NL instruction, of type **{MODIFICATION_TYPE}** ({MODIFICATION_TYPE_DESCRIPTION}),
+      phrased as the user would say it ("From now on, quotes under $10K auto-approve").
+      Do NOT name an object/target — just the behavior change.
+
+  - `events`: external stimuli that test the workflow, OBJECT-FREE (no recipient). Each:
+    - `id` (E001, E002, …), `call_type` = "send_event", `source` = "__external__",
+    - `input` — concrete request text with specific names/IDs/amounts,
+    - `when` — "W..-.T..:.." style; set so role matches timing relative to the mod `when`,
+    - `role`:
+        - `pre_mod`  — {EVENTS_BEFORE_COUNT} event(s) BEFORE the modification fires (test baseline),
+        - `post_mod` — {EVENTS_AFTER_COUNT} event(s) AFTER it fires that EXERCISE the modification's
+                       qualifying condition (a post_mod event MUST actually trigger the new behavior),
+        - `irrelevant` — {EVENTS_UNRELATED_COUNT} event(s) unrelated to the modification.
+    - `after_mod_ids` — for post_mod events, the modification id(s) that must have fired first.
+
+  Do NOT write `expect` on events — expectations are written later. Keep every input and
+  intent free of object/component names. Return the scenarios as JSON.

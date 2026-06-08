@@ -318,10 +318,26 @@ class ProcessingResult:
 
 @dataclass
 class StateDelta:
-    """A single state change operation emitted by the LLM at any ReAct step."""
-    op: str    # "set" | "delete" | "append"
+    """A single state change operation emitted by the LLM at any ReAct step.
+
+    Base ops: set | delete | append.
+
+    Guarded ops enforce an invariant deterministically (see
+    docs/CUSTODIAN_SPEC.md): incr/decr (bounded counters) and
+    reserve/confirm/release (two-phase holds). A guarded op that would violate
+    its bound is a no-op — the invariant holds regardless of what the LLM
+    computed, which is what lets an ordinary object own a shared cap/quota
+    safely.
+    """
+    op: str    # set | delete | append | incr | decr | reserve | confirm | release
     key: str
-    value: Any = None  # required for set/append; ignored for delete
+    value: Any = None  # set/append value; reserve: the amount to hold; ignored for delete
+    # ── Guarded-op params (optional; only read by the guarded ops) ─────────────
+    by: Any = None        # incr/decr: amount to add (decr negates it)
+    min: Any = None       # incr/decr: reject if result < min (decr defaults min=0)
+    max: Any = None       # incr: reject if result > max
+    cap: Any = None       # reserve: reject if committed + held + amount > cap
+    hold_id: Any = None   # reserve/confirm/release: hold identifier
 
 
 @dataclass

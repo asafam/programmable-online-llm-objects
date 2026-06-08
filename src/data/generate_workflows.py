@@ -338,6 +338,12 @@ def _assemble_sample(template: dict, grounded: GroundedTemplate, graph: ObjectGr
     """Combine stage outputs into a Workflow. Slugify ids. Mock tools generated separately."""
     for obj in graph.objects:
         obj.object_id = slugify(obj.object_id)
+        # A custodian decides from its own state in one message and only
+        # replies — it must have no peers, so nothing can suspend its decision
+        # mid-flight. Strip any peers the architect emitted (a correctly-defined
+        # custodian has none); requesters peer TO it, not the other way around.
+        if obj.is_custodian:
+            obj.peers = []
         for peer in obj.peers:
             peer.object_id = slugify(peer.object_id)
     for step in steps.steps:
@@ -371,7 +377,10 @@ def _assemble_sample(template: dict, grounded: GroundedTemplate, graph: ObjectGr
     )
 
 
-_DATA_TOOL_RE = re.compile(r"call the `([a-z][a-z0-9_]*_data)` tool", re.IGNORECASE)
+# Tolerate hyphens in the captured tool name (LLMs sometimes write
+# `sales-team-rotation-sheet_data` instead of the underscore convention); the name
+# is normalized to underscores in _add_mock_tools so behavior/skill/mock all agree.
+_DATA_TOOL_RE = re.compile(r"call the `([a-z][a-z0-9_-]*_data)` tool", re.IGNORECASE)
 
 # ── Write-tool identification ─────────────────────────────────────────────────
 
@@ -480,7 +489,9 @@ def _add_mock_tools(llm, sample: Workflow) -> None:
     Mutates sample.tools AND obj.skills (adds the tool name so the runtime exposes it).
     Read services are detected by: "call the `{object_id}_data` tool to retrieve data"
     """
-    step_texts = [s.text for s in sample.steps if s.text]
+    # Workflow.steps are plain strings (schema); tolerate legacy Step objects too.
+    step_texts = [(_s if isinstance(_s, str) else getattr(_s, "text", "")) for _s in sample.steps]
+    step_texts = [t for t in step_texts if t]
     existing_tool_names = {t.tool_name for t in sample.tools}
 
     # Read-side: generate realistic mock data per read-service object
@@ -488,7 +499,11 @@ def _add_mock_tools(llm, sample: Workflow) -> None:
         match = _DATA_TOOL_RE.search(obj.behavior or "")
         if not match:
             continue
-        tool_name = match.group(1)
+        raw_name = match.group(1)
+        # Normalize to the underscore convention; keep behavior/skill/mock consistent.
+        tool_name = raw_name.replace("-", "_")
+        if tool_name != raw_name:
+            obj.behavior = (obj.behavior or "").replace(raw_name, tool_name)
         if tool_name not in obj.skills:
             obj.skills.append(tool_name)
         if tool_name in existing_tool_names:

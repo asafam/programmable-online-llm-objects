@@ -33,6 +33,14 @@ prompt: |
 
   2. **Business logic objects** — one per distinct domain of responsibility. Named as domain slugs (nouns describing *what they know*, not what they do): e.g., `approval-policy`, `incident-triage`, `onboarding-rules`, `pricing-engine`. **Never** name an object "orchestrator", "manager", "coordinator", "dispatcher", or any other generic control-flow role — those are architecture smells. Each object embodies a specific domain: it knows the rules of that domain, applies them to incoming messages, and sends outputs to its peers. There is no captain. Objects work in tandem — each one acts on its slice of the domain, forwarding to the next peer when its responsibility ends.
 
+  3. **Custodian objects** — the **single writer** of an invariant that spans multiple requests or multiple object instances: a cumulative cap, a quota/budget, a rate-limit, a running total, a shared pool, or a round-robin queue. Named after the resource they own (e.g., `discount-budget`, `lead-desk`, `reorder-window`) — NOT "ledger"/"manager"/"tracker". A Custodian exists so the accumulator has exactly one owner; requesters message it and keep **no private copy** of the total. Create one ONLY when such a cross-request / cross-instance invariant exists — never for a decision that reads only the current message.
+
+     Being a custodian is a **categorical decision**: set `is_custodian: true` on that one object (and only that object), and begin its `role` with "Single-writer owner of ".
+
+     A Custodian has **NO peers**. It decides from its own state in a **single message** and **replies** with the decision — it never sends an outbound message and never `ask`s anyone mid-decision (that is what guarantees the decision is atomic and the running total can't be lost). Requesters declare the Custodian as *their* peer; the Custodian declares none. Persistence and any downstream side-effects are driven by the **requester** after it gets the reply, not by the Custodian. (Any `peers` you put on a custodian are ignored.)
+
+     A Custodian's `behavior` describes that single-message decision: read the current entry → (lazily reset/age it if its window or period expired) → check against the cap → maintain the accumulator in its own state and reply. Use **reserve → confirm / release** when a fallible/slow step follows the check at the *requester* (reserve holds the amount against the cap; the requester later asks for `confirm` on success or `release` on failure), or a single **admit + commit** when nothing fallible follows (e.g. round-robin assignment). For time-bounded counts, prefer a **lazy** window reset (drop/zero expired entries on touch).
+
   ### Mandatory checklist
 
   Before writing any objects, answer these four questions:
@@ -41,6 +49,7 @@ prompt: |
   2. **What domain-specific decisions are required?** → One business logic object per domain. If the automation classifies, routes, approves, assigns, or enforces policy — there MUST be a business logic object named after that domain (e.g., `approval-policy`, `triage-rules`, `routing-logic`). It holds the rules; it does not orchestrate.
   3. **What factual external data does the business logic need to look up?** → For each lookup of factual data that is NOT already in the event payload (e.g., org charts, employee directories, product catalogs) — a read service object. If the data arrives in the trigger event itself (e.g., quote details, ticket fields, form values), do NOT create a read service for it — the business logic object reads it directly from the message. Business rules and approval policies go in the business logic object's behavior, NOT in a read service.
   4. **What external outputs does the automation produce?** → For each output channel (message sent, record written, notification triggered, ticket created) — a write service object.
+  5. **Is there an invariant that spans multiple requests or instances?** → Look for a cap, quota, budget, running total, rate-limit ("no more than N per day/week"), rolling window, shared pool, or round-robin queue — anything where the correct decision depends on accumulated state, not just the current message. If yes, factor that invariant into ONE Custodian object that is its single writer, give it the atomic reserve/confirm/release (or admit+commit) protocol, and have the business logic object message it instead of holding the accumulator itself. If the decision reads only the current message, do NOT create a Custodian.
 
   ### Object fields
 
@@ -61,6 +70,7 @@ prompt: |
   6. `skills` — purely internal capabilities requiring no external system calls (e.g., `calculate-totals`, `format-summary`). Omit if none.
   7. `subscriptions` — pub/sub topics this object listens to. Omit if none.
   8. `event_sources` — external triggers from outside the system boundary (e.g., `webhook: action event`, `external system: record created`). Only for entry-point service objects.
+  9. `is_custodian` — boolean. `true` ONLY for a single-writer Custodian (category 3); a custodian has empty `peers`. Default `false` for every other object.
 
   ### Validation checklist
 
@@ -70,4 +80,6 @@ prompt: |
   - Business rules / domain policies are in business logic object behavior, NOT in a read service
   - Every output action has a write service object
   - At least one business logic object exists if the automation makes any decisions — and it is named after its domain, NOT "orchestrator" / "manager" / "coordinator"
+  - Any cross-request / cross-instance invariant (cap, quota, rate-limit, running total, shared pool, round-robin queue) is owned by exactly ONE object with `is_custodian: true` that requesters message; no business logic object keeps its own private copy of that accumulator
+  - Each Custodian has `is_custodian: true` and **empty `peers`** (it decides from its own state and only replies)
   - Every peer `object_id` references an object that exists in the output

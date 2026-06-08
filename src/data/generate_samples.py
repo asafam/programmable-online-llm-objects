@@ -194,6 +194,11 @@ def _rewrite_event_expectations(llm, test_case: Sample, sample: Workflow) -> Non
     mod_ids_set = {m.id for m in test_case.modifications}
     event_lines_parts = []
     for e in test_case.events:
+        # Skip events whose expectation is already authored (e.g. the state-constraint
+        # base events from Stage 1.5, whose expects encode cumulative reasoning the
+        # mock-data rewrite would clobber). They are not sent to the LLM nor overwritten.
+        if e.expect is not None:
+            continue
         # Prefer after_mod_ids when populated; fall back to timestamp inference
         if e.after_mod_ids:
             active = [mid for mid in e.after_mod_ids if mid in mod_ids_set]
@@ -203,6 +208,9 @@ def _rewrite_event_expectations(llm, test_case: Sample, sample: Workflow) -> Non
         event_lines_parts.append(
             f"{e.id} | {e.when}{mod_note} | recipient={e.recipient} | input: {e.input}"
         )
+    if not event_lines_parts:
+        # Every event already has an authored expectation (nothing to rewrite).
+        return
     event_lines = "\n".join(event_lines_parts)
 
     prompt = (raw_prompt
@@ -370,7 +378,31 @@ def scenario_to_test_case(
         Modification(**gen_mod.model_dump(), mod_type=mt, ambiguity=ambiguity)
         for gen_mod, mt in zip(scenario.modifications, mod_types)
     ]
-    events = [Event(**e.model_dump()) for e in scenario.events]
+    # Carry the workflow's base scenario (role="base" events injected by Stage 1.5)
+    # ahead of the generated mod events, so the state constraint precedes any
+    # modifications. Only present when a state constraint was generated.
+    base_events = (
+        [Event(**e.model_dump()) for e in sample.events if e.role == "base"]
+        if sample.state_constraint else []
+    )
+    scenario_events = [Event(**e.model_dump()) for e in scenario.events]
+
+    # Base events and scenario events are numbered independently (both start E001),
+    # so merging them collides. Offset scenario event ids past the base block and
+    # remap their cross-references, so the base events keep their cumulative-aware
+    # expects (otherwise _rewrite_event_expectations clobbers them by id match).
+    if base_events and scenario_events:
+        def _enum(eid: str):
+            return int(eid[1:]) if eid and eid[0] in "Ee" and eid[1:].isdigit() else None
+        offset = max((_enum(e.id) or 0) for e in base_events)
+        remap = {e.id: f"E{_enum(e.id) + offset:03d}" for e in scenario_events if _enum(e.id) is not None}
+        for e in scenario_events:
+            e.id = remap.get(e.id, e.id)
+            if isinstance(e.triggered_by, str):
+                e.triggered_by = remap.get(e.triggered_by, e.triggered_by)
+            e.depends_on = [remap.get(d, d) for d in e.depends_on]
+
+    events = base_events + scenario_events
     # Deterministic fix: clear triggered_by if it references a non-event ID
     # (LLMs sometimes generate triggered_by='M001' referencing a modification ID)
     event_ids = {e.id for e in events}
@@ -393,6 +425,7 @@ def scenario_to_test_case(
         modifications=modifications,
         events=events,
         tools=list(sample.tools),
+        state_constraint=sample.state_constraint,
     )
 
 

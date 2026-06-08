@@ -1,0 +1,36 @@
+prompt: |
+  # Task: Ground the state-scenario base events
+
+  An earlier step authored a base scenario that exercises a CROSS-REQUEST INVARIANT, but
+  it used PLACEHOLDER entity labels ("Rep #1", "Lead #2", "SKU #1") because grounding had
+  not happened yet. Now ground them: replace every placeholder with a concrete, realistic
+  entity that fits the grounded scenario below — consistently, and IN ORDER.
+
+  ## Grounded scenario
+
+  Name: {NAME}
+  Domain: {DOMAIN}
+
+  Grounded steps:
+  {GROUNDED_STEPS}
+
+  ## Base events to ground (in order) — input + expect
+
+  {BASE_EVENTS}
+
+  ## Rules
+  - Replace EVERY placeholder — named entities AND id-style labels — with ONE concrete
+    value, used consistently across ALL events and inside both `input` and `expect.action`:
+      - people / accounts: "Rep #1" → "Maya Patel", "Customer #1" → "Northwind Bio"
+      - **id-style labels: "Lead #1" → a realistic id like "LF-2026-0417", "SKU #1" →
+        "A100-XL", "Quote #1" → "Q-1001", "Order #1" → "ORD-5582"**
+    No "#N" / "#1" / "Rep A" token may survive anywhere in the output.
+  - Different placeholders → different concrete values. Define a complete cast: if the
+    scenario references Rep #1, Rep #2, Rep #3, ground all three to distinct realistic
+    people; if it references Lead #1..#8, give each a distinct realistic id.
+  - PRESERVE EXACTLY: every number, the invariant logic, which request is admitted vs
+    blocked/held/skipped, the ordering, and each event's `id`, `role`, `when`,
+    `triggered_by`, `depends_on`. Only the entity NAMES change.
+  - Keep expects observable (a named external effect); do NOT introduce internal object names.
+
+  Return `base_events`: the same events, with placeholders replaced by concrete names.

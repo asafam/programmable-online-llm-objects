@@ -1,0 +1,89 @@
+user_prompt: |
+  You are infusing a STRONG CROSS-REQUEST INVARIANT into an automation workflow and
+  authoring the base scenario that exercises it. A cross-request invariant is a rule whose
+  correct decision depends on STATE ACCUMULATED ACROSS MANY PRIOR REQUESTS — a cumulative
+  cap, a per-key quota/counter over a period, a rolling rate-limit, a running total, a
+  shared budget/pool, or a round-robin queue.
+
+  THE TEST (apply it strictly): would the correct handling of a request change if you
+  removed or reordered the EARLIER requests?
+    - YES → the decision depends on history → STRONG cross-request invariant. Use it.
+    - NO  → it depends only on the current request's own fields → WEAK per-message decision.
+            REJECT it; do NOT dress it up as a cap/rate-limit.
+
+  WEAK — reject (these read ONLY the current request):
+    - "reorder when THIS product's quantity is at/below its reorder level" (current product)
+    - "send a reminder 24h after THIS quote" / "escalate after 24h" (per-entity timing)
+    - "route THIS lead by its region / company size" (current lead)
+    - "require approval when THIS quote's discount is over 20%" (current quote)
+  STRONG — use (these accumulate across requests):
+    - cumulative approved discount this quarter must stay at/below $50,000 (running total vs ceiling)
+    - no more than 2 reorders for the SAME SKU within any rolling 7 days (rolling rate-limit)
+    - no sales rep receives more than N leads per day (per-key counter over a period)
+    - assign leads round-robin so reps take turns in order (shared rotation queue)
+    - requests draw against a shared $X budget pool (shared pool)
+
+  Pick the STRONGEST genuine invariant. If the template already implies one (e.g. a
+  round-robin rotation), exercise it. If the template's only stateful rule is WEAK /
+  per-message, you MUST INTRODUCE a realistic cross-request constraint that a real operator
+  would impose on THIS workflow — e.g. a quarterly discount-BUDGET cap for a quote-approval
+  flow, or a per-SKU reorder RATE-LIMIT for an inventory flow. Introducing a strong invariant
+  is REQUIRED over force-fitting a weak one.
+
+  This runs BEFORE grounding: keep all NUMBERS and the invariant LOGIC concrete and exact,
+  but use PLACEHOLDER labels for entities you don't yet know — e.g. "Rep #1", "Rep #2",
+  "Lead #1", "SKU #1". A later grounding step replaces these placeholders with concrete
+  names consistently. Use as many distinct placeholders as the scenario genuinely needs
+  (e.g. a 3-way round-robin needs Rep #1, Rep #2, Rep #3).
+
+  Template:
+  {WORKFLOW}
+
+  Author a role="base" event sequence that EXERCISES the invariant and crosses its
+  threshold, plus a short descriptor. Return JSON with:
+
+  1. `constraint_type` — one of:
+     - "cap": a cumulative total must stay at/below a ceiling;
+     - "counter": a per-key count within a period is capped (e.g. per-rep-per-day);
+     - "rate_limit": at most N occurrences for the same key in a rolling window.
+
+  2. `threshold` — the numeric limit of the invariant you chose or introduced
+     (e.g. "$50,000 cumulative per quarter", "2 leads per rep per day", "2 reorders per SKU / 7d").
+     It must be a limit on ACCUMULATED state, never a property of a single request.
+
+  3. `description` — one line stating the invariant in observable terms.
+
+  4. `base_events` — an ordered role="base" sequence that drives the workflow's entry
+     point(s). Author it as ONE coherent unit from a clean initial state:
+       - 1–3 below-threshold requests the system handles NORMALLY (the accumulator moves);
+       - the request that CROSSES the threshold — the system must BLOCK / HOLD / ESCALATE
+         it (do not complete the normal action);
+       - 1 request after the crossing proving the rule still holds (still blocked), or —
+         for counter/rate_limit — an INDEPENDENT key handled normally, or a post-reset
+         request handled normally.
+     Use concrete, unambiguous NUMBERS so the running total/count is computable.
+
+  DECOUPLING — this is critical. Do NOT assume or mention HOW the rule is implemented.
+  Do NOT reference any specific object as "the owner", and do NOT use internal mechanics
+  (no "custodian", no "reserve/confirm/release", no "hold id", no per-object accumulator
+  field). Phrase every `base_events[i].expect.action` purely in terms of the OBSERVABLE
+  OUTCOME — what the system does with the request and the request's resulting status —
+  so the expectation holds for ANY correct implementation. Examples:
+    - "Quote Q3 reaches the cumulative discount cap, so it is NOT approved through the
+      normal flow — it is escalated for a budget exception and left pending; no approval
+      is recorded."
+    - "Rep Jordan has already received 2 leads today (the daily cap), so lead L-1003 is
+      NOT assigned to Jordan — it goes to the next eligible rep (or is held if all are capped)."
+  Make the threshold-crossing unambiguous from the numbers in the inputs alone.
+
+  Each base event has fields (OBJECT-AGNOSTIC — no recipient, no object_id):
+    id (E001, E002, … ascending),
+    call_type = "send_event",
+    source = "__external__",
+    input = the concrete request text WITH the numbers,
+    when = "W01-1T09:00" style, strictly ascending,
+    role = "base",
+    expect = { action, reason }   (observable outcome, no internal mechanism).
+
+  Return only the JSON object (constraint_type, threshold, description, base_events).
+  Do not output any object definitions or modifications.
