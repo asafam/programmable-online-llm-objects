@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import random
+import re
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,7 +30,7 @@ from tqdm import tqdm
 load_dotenv()
 
 from src.data.schema import (
-    GroundedTemplate, SpecBaseEventsList, SpecEventWithExpect, SpecWorkflowSteps, WorkflowSpec,
+    EntityGroundingMap, GroundedTemplate, SpecEventWithExpect, SpecWorkflowSteps, WorkflowSpec,
 )
 from src.data.llm import create_llm
 from src.data.generate_workflows import _ground_template, _GROUND_PROMPT
@@ -73,9 +74,21 @@ def _normalize_concurrent_whens(events: list) -> list:
     return events
 
 
+_PLACEHOLDER_RE = re.compile(r"#\s?\d")  # leftover "#1", "# 2" → ungrounded placeholder
+
+
+def _apply_mapping(text: str, pairs: list[tuple[str, str]]) -> str:
+    for ph, val in pairs:
+        text = text.replace(ph, val)
+    return text
+
+
 def _ground_base_events(llm, grounded: GroundedTemplate, base_events: list, prompt_cfg: dict) -> list:
-    """Replace placeholder entities in the infused base scenario with one concrete cast,
-    preserving the invariant logic. Returns grounded events (falls back to input on failure)."""
+    """Ground the infused base scenario by DETERMINISTIC substitution: the LLM returns only a
+    placeholder→concrete map, which we apply in code to inputs AND expects. This preserves the
+    expect SEMANTICS (reset/block/concurrent language) by construction — the grounding LLM kept
+    rephrasing expects and dropping those clauses. All structural fields are untouched (we mutate
+    the infused events in place). Falls back to the ungrounded events on failure."""
     if not base_events:
         return base_events
     grounded_steps = "\n".join(f"- {s}" for s in grounded.grounded_steps)
@@ -86,27 +99,33 @@ def _ground_base_events(llm, grounded: GroundedTemplate, base_events: list, prom
     prompt = (prompt_cfg["prompt"]
               .replace("{NAME}", grounded.name).replace("{DOMAIN}", grounded.domain)
               .replace("{GROUNDED_STEPS}", grounded_steps).replace("{BASE_EVENTS}", be_text))
+
+    def _covers_all(m: EntityGroundingMap) -> bool:
+        if not m.mappings:
+            return False
+        pairs = sorted(((e.placeholder, e.value) for e in m.mappings), key=lambda p: -len(p[0]))
+        for e in base_events:  # no placeholder may survive substitution anywhere
+            blob = f"{e.input} {e.expect.action if e.expect else ''} {e.expect.reason if e.expect and e.expect.reason else ''}"
+            if _PLACEHOLDER_RE.search(_apply_mapping(blob, pairs)):
+                return False
+        return True
+
     res = generate_with_retries(
-        llm=llm, prompt=prompt, response_model=SpecBaseEventsList,
-        item_id="ground-base-events", validator=lambda r: len(r.base_events) == len(base_events),
+        llm=llm, prompt=prompt, response_model=EntityGroundingMap,
+        item_id="ground-base-events", validator=_covers_all,
     )
-    if not res or len(res.base_events) != len(base_events):
+    if not res:
         return base_events
-    out = []
-    for i, ge in enumerate(res.base_events):
-        # Grounding only substitutes entity NAMES in the text. Keep its grounded `input`
-        # and `expect`, but RESTORE all structural fields from the original (by position):
-        # LLMs unreliably preserve id/when/concurrent_group/triggered_by/depends_on (they
-        # were dropping the concurrent pair here).
-        orig = base_events[i]
-        ge.id = orig.id
-        ge.role = "base"
-        ge.when = orig.when
-        ge.concurrent_group = orig.concurrent_group
-        ge.triggered_by = orig.triggered_by
-        ge.depends_on = list(orig.depends_on)
-        out.append(ge)
-    return out
+    # longest placeholder first so "Lead #10" is replaced before "Lead #1"
+    pairs = sorted(((e.placeholder, e.value) for e in res.mappings), key=lambda p: -len(p[0]))
+    for e in base_events:
+        e.input = _apply_mapping(e.input, pairs)
+        e.role = "base"
+        if e.expect:
+            e.expect.action = _apply_mapping(e.expect.action, pairs)
+            if e.expect.reason:
+                e.expect.reason = _apply_mapping(e.expect.reason, pairs)
+    return base_events
 
 
 def _process_spec(llm, spec: WorkflowSpec, ground_cfg, steps_cfg, ground_be_cfg) -> WorkflowSpec | None:

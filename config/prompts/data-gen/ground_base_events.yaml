@@ -1,12 +1,13 @@
 prompt: |
-  # Task: Ground the state-scenario base events
+  # Task: Map the state-scenario's placeholder entities to concrete values
 
-  An earlier step authored a base scenario that exercises a CROSS-REQUEST INVARIANT, but
-  it used PLACEHOLDER entity labels ("Rep #1", "Lead #2", "SKU #1") because grounding had
-  not happened yet. Now ground them: replace every placeholder with a concrete, realistic
-  entity that fits the grounded scenario below — consistently, and IN ORDER.
+  An earlier step authored a base scenario that exercises a CROSS-REQUEST INVARIANT, but it
+  used PLACEHOLDER labels ("Rep #1", "Lead #2", "SKU #1", "Quote #1") because grounding had
+  not happened yet. Your ONLY job is to choose a concrete, realistic value for EACH distinct
+  placeholder. A downstream step substitutes them in by exact string match — so you do NOT
+  rewrite the events, you only produce the mapping.
 
-  ## Grounded scenario
+  ## Grounded scenario (for naming context)
 
   Name: {NAME}
   Domain: {DOMAIN}
@@ -14,26 +15,22 @@ prompt: |
   Grounded steps:
   {GROUNDED_STEPS}
 
-  ## Base events to ground (in order) — input + expect
+  ## Base events (placeholders appear in these)
 
   {BASE_EVENTS}
 
   ## Rules
-  - Replace EVERY placeholder — named entities AND id-style labels — with ONE concrete
-    value, used consistently across ALL events and inside both `input` and `expect.action`:
+  - List EVERY distinct placeholder that appears anywhere in the events above — both named
+    entities ("Rep #1", "Customer #2") and id-style labels ("Lead #1", "SKU #1", "Quote #1").
+    Scan the inputs AND the expects.
+  - Map each to ONE concrete, realistic value, used consistently:
       - people / accounts: "Rep #1" → "Maya Patel", "Customer #1" → "Northwind Bio"
-      - **id-style labels: "Lead #1" → a realistic id like "LF-2026-0417", "SKU #1" →
-        "A100-XL", "Quote #1" → "Q-1001", "Order #1" → "ORD-5582"**
-    No "#N" / "#1" / "Rep A" token may survive anywhere in the output.
-  - Different placeholders → different concrete values. Define a complete cast: if the
-    scenario references Rep #1, Rep #2, Rep #3, ground all three to distinct realistic
-    people; if it references Lead #1..#8, give each a distinct realistic id.
-  - PRESERVE EXACTLY: every number, the invariant logic, which request is admitted vs
-    blocked/held/skipped, the ordering, and each event's `id`, `role`, `when`,
-    `triggered_by`, `depends_on`, and `concurrent_group` (the concurrent pair keeps its
-    shared `when` and label). Only the entity NAMES change.
-  - Do NOT add any system/accumulated state to an input (inventory levels, rosters, running
-    counts). Inputs stay pure external stimuli; you only replace placeholder names.
-  - Keep expects observable (a named external effect); do NOT introduce internal object names.
+      - id-style labels: "Lead #1" → "LF-2026-0417", "SKU #1" → "A100-XL", "Quote #1" → "Q-1001",
+        "Order #1" → "ORD-5582"
+  - Different placeholders → DIFFERENT concrete values. Define the COMPLETE cast: if the
+    scenario references Rep #1..#3 and Lead #1..#10, map all of them.
+  - Each `placeholder` must be the EXACT label as it appears in the text (e.g. "Rep #1",
+    not "rep 1"), so string substitution matches.
+  - Do NOT invent placeholders that don't appear. Do NOT map the same placeholder twice.
 
-  Return `base_events`: the same events, with placeholders replaced by concrete names.
+  Return `mappings`: a list of {placeholder, value} covering every placeholder in the events.

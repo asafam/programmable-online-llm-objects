@@ -757,6 +757,17 @@ class SpecBaseEventsList(BaseModel):
     base_events: list[SpecEventWithExpect]
 
 
+class EntityMapEntry(BaseModel):
+    placeholder: str  # the abstract label, e.g. "Rep #1", "Lead #10", "SKU #1"
+    value: str        # the concrete grounded value, e.g. "Maya Patel", "LF-2026-0417"
+
+
+class EntityGroundingMap(BaseModel):
+    """LLM output: a placeholder→concrete map for grounding the infused base scenario by
+    DETERMINISTIC substitution (so expect semantics — reset/block/concurrent — are preserved)."""
+    mappings: list[EntityMapEntry]
+
+
 # ── Event sequence validation schemas (Stage 1e) ─────────────────────────────
 
 class EventVerdictOutput(BaseModel):
