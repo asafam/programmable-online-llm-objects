@@ -73,9 +73,17 @@ def _common(args, **over):
     return SimpleNamespace(**base)
 
 
-def _upload_to_firestore(unified_path: Path, service_account: Path | None) -> None:
-    """Upload workflows-mods.jsonl to Firestore (samples + sample_summaries collections)."""
+def _upload_to_firestore(unified_path: Path, service_account: Path | None, run_id: str | None = None) -> None:
+    """Upload workflows-mods.jsonl to Firestore.
+
+    Versioning:
+    - samples/{id}          frozen on first write — never overwritten
+    - sample_summaries/{id} always refreshed (order, run_id)
+    - runs/{run_id}         metadata doc per upload
+    - annotations/          never touched
+    """
     import json
+    from datetime import datetime, timezone
     import firebase_admin
     from firebase_admin import credentials, firestore
 
@@ -89,13 +97,49 @@ def _upload_to_firestore(unified_path: Path, service_account: Path | None) -> No
     db = firestore.client()
     lines = [l for l in unified_path.read_text().splitlines() if l.strip()]
     samples = [json.loads(l) for l in lines]
-    print(f"\nUploading {len(samples)} samples to Firestore...")
+    run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    print(f"\nUploading {len(samples)} samples to Firestore (run={run_id})...")
+
+    # Fetch existing IDs to avoid overwriting frozen docs
+    existing_ids = {ref.id for ref in db.collection("samples").list_documents()}
+    new_samples = [s for s in samples if s["id"] not in existing_ids]
+    skipped = len(samples) - len(new_samples)
+    print(f"  {len(new_samples)} new, {skipped} already exist (skipped).")
 
     BATCH_SIZE = 500
-    full_entries, summary_entries = [], []
+
+    def commit_batches(entries, label):
+        if not entries:
+            print(f"  {label}: nothing to write")
+            return
+        total = 0
+        for i in range(0, len(entries), BATCH_SIZE):
+            batch = db.batch()
+            for ref, data in entries[i:i + BATCH_SIZE]:
+                batch.set(ref, data)
+            batch.commit()
+            total += len(entries[i:i + BATCH_SIZE])
+            print(f"  {label}: {total}/{len(entries)} committed")
+
+    # Only write new full docs
+    commit_batches(
+        [(db.collection("samples").document(s["id"]), s) for s in new_samples],
+        "samples",
+    )
+
+    # Replace sample_summaries entirely so stale entries from old runs don't linger
+    old_summary_refs = list(db.collection("sample_summaries").list_documents())
+    if old_summary_refs:
+        for i in range(0, len(old_summary_refs), BATCH_SIZE):
+            batch = db.batch()
+            for ref in old_summary_refs[i:i + BATCH_SIZE]:
+                batch.delete(ref)
+            batch.commit()
+        print(f"  Deleted {len(old_summary_refs)} old summary docs.")
+
+    summary_entries = []
     for idx, sample in enumerate(samples):
-        first_mod = sample.get("modifications", [{}])[0] if sample.get("modifications") else {}
-        full_entries.append((db.collection("samples").document(sample["id"]), sample))
+        first_mod = (sample.get("modifications") or [{}])[0]
         summary_entries.append((db.collection("sample_summaries").document(sample["id"]), {
             "id": sample["id"],
             "sample_id": sample.get("sample_id", ""),
@@ -106,21 +150,21 @@ def _upload_to_firestore(unified_path: Path, service_account: Path | None) -> No
             "mod_type": first_mod.get("mod_type"),
             "ambiguity": first_mod.get("ambiguity"),
             "order": idx,
+            "run_id": run_id,
         }))
-
-    def commit_batches(entries, label):
-        total = 0
-        for i in range(0, len(entries), BATCH_SIZE):
-            batch = db.batch()
-            for ref, data in entries[i:i + BATCH_SIZE]:
-                batch.set(ref, data)
-            batch.commit()
-            total += len(entries[i:i + BATCH_SIZE])
-            print(f"  {label}: {total}/{len(entries)} committed")
-
-    commit_batches(full_entries, "samples")
     commit_batches(summary_entries, "sample_summaries")
-    print("  Upload complete.")
+
+    # Record run metadata
+    db.collection("runs").document(run_id).set({
+        "run_id": run_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "input_file": str(unified_path),
+        "total_samples": len(samples),
+        "new_samples": len(new_samples),
+        "skipped_samples": skipped,
+    })
+    print(f"  Recorded run metadata → runs/{run_id}")
+    print(f"  Upload complete. {len(new_samples)} new, {skipped} frozen (skipped).")
 
 
 def run(args: argparse.Namespace) -> Path:
@@ -156,7 +200,9 @@ def run(args: argparse.Namespace) -> Path:
 
     # ── Phase 2: derive graph + bind → unified ───────────────────────────────
     print("\n" + "=" * 60 + "\nPHASE 2: DERIVE GRAPH + BIND → UNIFIED\n" + "=" * 60)
-    bind_spec.run(_common(args, input=mods_path, output=unified_path))
+    # run_tag versions the sample id ({template}__{run_tag}) so each run uploads as new,
+    # re-annotatable samples (the Firestore upload freezes existing ids).
+    bind_spec.run(_common(args, input=mods_path, output=unified_path, run_tag=td.name))
 
     print("\n--- Phase 2 validation ---")
     _validate_unified(unified_path)
@@ -165,7 +211,7 @@ def run(args: argparse.Namespace) -> Path:
     print(f"Artifacts: {infused_path.name}, {spec_path.name}, {mods_path.name}, {unified_path.name}")
 
     if args.upload:
-        _upload_to_firestore(unified_path, args.service_account)
+        _upload_to_firestore(unified_path, args.service_account, getattr(args, "run_id", None))
 
     return unified_path
 
@@ -193,6 +239,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Upload unified output to Firestore (samples + sample_summaries) after pipeline completes")
     p.add_argument("--service-account", type=Path, default=None,
                    help="Path to Firebase service account JSON (default: uses GOOGLE_APPLICATION_CREDENTIALS or ADC)")
+    p.add_argument("--run-id", dest="run_id", default=None,
+                   help="Run identifier for this upload (default: UTC timestamp)")
     return p
 
 

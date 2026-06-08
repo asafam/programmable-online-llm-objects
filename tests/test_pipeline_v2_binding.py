@@ -119,3 +119,12 @@ def test_every_event_is_timed_and_triggers_spread():
     assert all(e.when for e in s.events), "every event must carry a non-empty when"
     trig = [e for e in s.events if e.id.startswith("S0")]   # S001.. trigger steps
     assert len({e.when for e in trig}) == len(trig), "trigger steps must have distinct times"
+
+
+def test_run_tag_versions_sample_id():
+    """run_tag makes the sample id unique per run, keeping sample_id for grouping."""
+    s = B.assemble_sample(_spec(), _graph(), run_tag="20260608_state_timed")
+    assert s.id == "rr__20260608_state_timed"
+    assert s.sample_id == "rr"
+    # default (no run_tag) keeps the plain id
+    assert B.assemble_sample(_spec(), _graph()).id == "rr"

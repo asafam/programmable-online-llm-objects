@@ -179,9 +179,12 @@ def _ensure_timed(events: list) -> list:
     return events
 
 
-def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict | None = None) -> Sample:
+def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict | None = None,
+                    run_tag: str | None = None) -> Sample:
     """Pure binding + assembly: bind recipients/targets and build the unified Sample.
-    Raises ValueError if a recipient/target cannot be resolved to an object_id."""
+    Raises ValueError if a recipient/target cannot be resolved to an object_id.
+    run_tag (optional) makes the sample `id` unique per run (`{template}__{run_tag}`) while
+    `sample_id` stays the template id for grouping — needed for the freeze-on-write upload."""
     for obj in graph.objects:
         obj.object_id = slugify(obj.object_id)
         for p in obj.peers:
@@ -235,7 +238,8 @@ def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict
             raise ValueError(f"{spec.id}: modification {m.id} target '{m.target}' ∉ objects")
 
     return Sample(
-        id=spec.id, sample_id=spec.id, name=spec.name, domain=spec.domain,
+        id=f"{spec.id}__{run_tag}" if run_tag else spec.id, sample_id=spec.id,
+        name=spec.name, domain=spec.domain,
         source_type=spec.source_type, link=spec.link,
         template=list(spec.template),          # raw base steps
         objects=graph.objects, steps=list(spec.grounded_steps),  # grounded steps (incl. constraint)
@@ -254,7 +258,8 @@ def _template_from_spec(spec: WorkflowSpec) -> dict:
             "raw_steps": list(spec.template), "template": list(spec.template)}
 
 
-def bind_one(llm, spec: WorkflowSpec, objects_cfg: dict, bind_mods_tmpl: str | None = None) -> Sample | None:
+def bind_one(llm, spec: WorkflowSpec, objects_cfg: dict, bind_mods_tmpl: str | None = None,
+             run_tag: str | None = None) -> Sample | None:
     """Full Phase-2 binding for one spec (derive graph → assemble → mock tools → expects)."""
     # The invariant is now merged into spec.grounded_steps (as a state-constraint step) by
     # the ground stage, so _grounded_from_spec carries it to identify_objects → custodian.
@@ -267,7 +272,7 @@ def bind_one(llm, spec: WorkflowSpec, objects_cfg: dict, bind_mods_tmpl: str | N
     mapping = None
     if spec.modifications and len(_business_objects(graph)) != 1 and bind_mods_tmpl:
         mapping = llm_bind_mod_targets(llm, graph, spec.modifications, bind_mods_tmpl)
-    sample = assemble_sample(spec, graph, mod_mapping=mapping)
+    sample = assemble_sample(spec, graph, mod_mapping=mapping, run_tag=run_tag)
     # Reuse the bound Workflow shape only as the carrier _add_mock_tools expects.
     # Feed the GROUNDED base-event texts (which now name the concrete cast — reps, SKUs)
     # to mock-data generation so the read-service roster contains exactly those entities.
@@ -303,9 +308,10 @@ def run(args: argparse.Namespace) -> Path:
         specs = specs[: args.limit]
     print(f"Loaded {len(specs)} specs from {args.input}")
 
+    # Resume keys by sample_id (the template id), since `id` may be versioned (id__run_tag).
     completed, file_mode = setup_output(
         args.output, args.force,
-        lambda: load_completed_keys(args.output, lambda d: d.get("id")),
+        lambda: load_completed_keys(args.output, lambda d: d.get("sample_id") or d.get("id")),
     )
     pending = [s for s in specs if s.id not in completed]
     if not pending:
@@ -328,7 +334,8 @@ def run(args: argparse.Namespace) -> Path:
     with open(args.output, file_mode) as f:
         with tqdm(total=len(pending), desc="Binding") as pbar:
             with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = {executor.submit(bind_one, llm, s, objects_cfg, bind_mods_tmpl): s for s in pending}
+                run_tag = getattr(args, "run_tag", None)
+                futures = {executor.submit(bind_one, llm, s, objects_cfg, bind_mods_tmpl, run_tag): s for s in pending}
                 for future in as_completed(futures):
                     s = futures[future]
                     try:
@@ -357,6 +364,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", "-o", type=Path, default=None, help="Output workflows-mods.jsonl")
     parser.add_argument("--id", dest="ids", metavar="ID", action="append", default=None)
     parser.add_argument("--workers", "-w", type=int, default=1)
+    parser.add_argument("--run-tag", dest="run_tag", default=None,
+                        help="Version tag: sample id becomes {template}__{run_tag} (sample_id stays the template id)")
     add_common_args(parser)
     return parser
 
