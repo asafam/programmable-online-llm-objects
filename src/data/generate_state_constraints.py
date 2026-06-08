@@ -54,6 +54,34 @@ from src.data.utils import (
 
 _PROMPT = Path("config/prompts/data-gen/generate_state_constraints.yaml")
 
+# Shared deterministic scenario-coherence terms (used by the infuse validator here AND by
+# pipeline_v2's pre-upload check) — keep them in one place so they can't drift.
+_BLOCK_TERMS = (
+    "not approved", "no new reorder", "no reorder", "not sent", "not assigned", "blocked",
+    "is held", "held unassigned", "suppress", "denied", "remains pending", "escalat",
+    "not completed", "is not approved", "no approval",
+)
+_RESET_TERMS = (
+    "new day", "resets", "reset", "no longer", "more than 7", "more than seven", "next day",
+    "8 day", "eight day", "aged out", "outside the window", "per-day count", "window no longer",
+)
+
+
+def coherence_issues(expect_texts: list[str], constraint_type: str) -> list[str]:
+    """A state scenario is valid only if its base expects actually exercise the invariant:
+    at least one BLOCKS the gated action, and (for counter/rate_limit) one shows the period
+    RESET. Returns a list of issue strings; empty means coherent."""
+    texts = [t.lower() for t in expect_texts if t]
+    if not texts:
+        return []
+    issues = []
+    if not any(any(b in x for b in _BLOCK_TERMS) for x in texts):
+        issues.append("no base event blocks/holds/suppresses the gated action (invariant never exercised)")
+    if constraint_type in ("counter", "rate_limit"):
+        if not any(any(rt in x for rt in _RESET_TERMS) for x in texts):
+            issues.append(f"{constraint_type}: no reset/window-expiry event (same key, later period, allowed)")
+    return issues
+
 # Retained for the pipeline opt-in flag's choices; the type is now CLASSIFIED by
 # the LLM from the custodian's invariant, not script-assigned.
 CONSTRAINT_TYPES = ["cap", "counter", "rate_limit"]
@@ -87,10 +115,14 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     gen = generate_with_retries(
         llm=llm, prompt=prompt, response_model=GeneratedStateConstraint,
         item_id=template["id"],
-        # Require the threshold-crossing sequence AND a concurrent pair (>=2 events sharing
-        # a concurrent_group) — the mandatory simultaneous-arrival case.
+        # Require: base events + threshold, a concurrent pair (>=2 sharing a concurrent_group),
+        # AND scenario coherence — at least one BLOCKED action, plus a RESET event for
+        # counter/rate_limit. Retries until the LLM actually exercises the invariant + reset.
         validator=lambda r: bool(r.base_events) and bool(r.threshold)
-        and sum(1 for e in r.base_events if e.concurrent_group) >= 2,
+        and sum(1 for e in r.base_events if e.concurrent_group) >= 2
+        and not coherence_issues(
+            [f"{e.expect.action} {e.expect.reason or ''}" for e in r.base_events if e.expect],
+            getattr(r.constraint_type, "value", r.constraint_type)),
     )
     if gen is None:
         return spec, False
