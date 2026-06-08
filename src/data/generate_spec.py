@@ -90,12 +90,22 @@ def _ground_base_events(llm, grounded: GroundedTemplate, base_events: list, prom
         llm=llm, prompt=prompt, response_model=SpecBaseEventsList,
         item_id="ground-base-events", validator=lambda r: len(r.base_events) == len(base_events),
     )
-    if not res:
+    if not res or len(res.base_events) != len(base_events):
         return base_events
     out = []
-    for ge in res.base_events:
-        d = ge.model_dump(); d["role"] = "base"
-        out.append(SpecEventWithExpect(**d))
+    for i, ge in enumerate(res.base_events):
+        # Grounding only substitutes entity NAMES in the text. Keep its grounded `input`
+        # and `expect`, but RESTORE all structural fields from the original (by position):
+        # LLMs unreliably preserve id/when/concurrent_group/triggered_by/depends_on (they
+        # were dropping the concurrent pair here).
+        orig = base_events[i]
+        ge.id = orig.id
+        ge.role = "base"
+        ge.when = orig.when
+        ge.concurrent_group = orig.concurrent_group
+        ge.triggered_by = orig.triggered_by
+        ge.depends_on = list(orig.depends_on)
+        out.append(ge)
     return out
 
 
