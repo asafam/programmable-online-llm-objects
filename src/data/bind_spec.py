@@ -216,7 +216,8 @@ def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict
     return Sample(
         id=spec.id, sample_id=spec.id, name=spec.name, domain=spec.domain,
         source_type=spec.source_type, link=spec.link,
-        objects=graph.objects, steps=list(spec.grounded_steps),
+        template=list(spec.template),          # raw base steps
+        objects=graph.objects, steps=list(spec.grounded_steps),  # grounded steps (incl. constraint)
         modifications=modifications, events=events,
         state_constraint=spec.state_constraint,
     )

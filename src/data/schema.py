@@ -357,9 +357,10 @@ class Sample(BaseModel):
     domain: str
     source_type: str
     link: str = ""
+    template: list[str] = Field(default_factory=list)  # raw/abstract base steps (the original template)
     objects: list[ObjectDef] = Field(default_factory=list)
     llm_classes: list[LLMClassDef] = Field(default_factory=list, description="llm-class templates available for spawning during evaluation")
-    steps: list[str] = Field(default_factory=list)  # grounded workflow step descriptions (all N steps)
+    steps: list[str] = Field(default_factory=list)  # grounded workflow steps (incl. the state-constraint step)
     modifications: list[Modification]
     events: list[Event]
     tools: list[MockToolDef] = Field(
