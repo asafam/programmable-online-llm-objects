@@ -69,7 +69,12 @@ def _process_spec(llm, spec: WorkflowSpec, prompt_tmpl: str, args) -> tuple[Work
     from src.data.schema import WorkflowSpecScenarios
     res = generate_with_retries(
         llm=llm, prompt=prompt, response_model=WorkflowSpecScenarios,
-        item_id=f"{spec.id}-mods", validator=lambda r: bool(r.scenarios),
+        item_id=f"{spec.id}-mods",
+        # Require a real, non-empty modification set (and at least one event to exercise it)
+        # — an empty modifications list previously slipped through and produced no mod.
+        validator=lambda r: bool(r.scenarios)
+        and len(r.scenarios[0].modifications) >= n
+        and bool(r.scenarios[0].events),
     )
     if not res:
         return spec, False

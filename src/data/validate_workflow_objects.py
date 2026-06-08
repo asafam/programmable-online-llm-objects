@@ -126,20 +126,20 @@ _INVARIANT_SIGNALS = (
     "daily cap", "daily limit", "quota", "reset at", "within any",
     "shared pool", "leads per", "reorders for",
 )
-# Role markers used only as a fallback for legacy objects generated before the
-# explicit `is_custodian` flag existed.
-_CUSTODIAN_MARKERS = (
-    "single writer", "single-writer", "custodian", "sole owner",
-    "owns the", "owner of", "single owner",
-)
+# The MANDATED custodian role prefix (config/prompts/data-gen/identify_objects.yaml):
+# a custodian's `role` MUST begin with "Single-writer owner of ". Used as a precise,
+# deterministic fallback for legacy data that predates the explicit `is_custodian` flag.
+_CUSTODIAN_ROLE_PREFIX = "single-writer owner of "
 
 
 def _is_custodian(obj) -> bool:
-    """Custodian status is an explicit categorical flag on the object. Fall back
-    to role-marker detection only for legacy data that predates the flag."""
+    """Deterministic custodian test. Authoritative signal: the explicit `is_custodian`
+    flag. Fallback for flag-less (legacy) data: the MANDATED role prefix — checked on the
+    `role` ONLY, so it never fires on objects that merely mention a custodian in their
+    behavior (e.g. 'forward to the custodian')."""
     if getattr(obj, "is_custodian", False):
         return True
-    return any(m in f"{obj.role or ''} {obj.behavior or ''}".lower() for m in _CUSTODIAN_MARKERS)
+    return (obj.role or "").strip().lower().startswith(_CUSTODIAN_ROLE_PREFIX)
 
 
 def _custodian_graph_issues(workflow: Workflow) -> list[str]:
@@ -149,7 +149,7 @@ def _custodian_graph_issues(workflow: Workflow) -> list[str]:
     issues: list[str] = []
     steps_text = " ".join(_step_text(st) for st in workflow.steps).lower()
     matched = sorted({s for s in _INVARIANT_SIGNALS if s in steps_text})
-    custodians = [o for o in workflow.objects if _is_custodian(o)]
+    custodians = [o for o in workflow.objects if _is_custodian(o)]  # deterministic (flag or role prefix)
 
     if matched and not custodians:
         issues.append(

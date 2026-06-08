@@ -84,10 +84,13 @@ def test_is_custodian_flag_is_authoritative():
     assert not _is_custodian(_obj("x", role="Approves quotes and notifies Slack."))
 
 
-def test_is_custodian_marker_fallback_for_legacy():
-    # Legacy objects without the flag fall back to role-marker detection.
+def test_is_custodian_legacy_fallback_is_precise():
+    # Flag-less (legacy) data falls back to the MANDATED role prefix only — deterministic.
     assert _is_custodian(_obj("x", role="Single-writer owner of the quota."))
-    assert _is_custodian(_obj("x", role="It owns the shared budget pool."))
+    # A loose mention of ownership is NOT a custodian (no over-firing).
+    assert not _is_custodian(_obj("x", role="It owns the shared budget pool."))
+    # A behavior that merely references a custodian must not trip detection.
+    assert not _is_custodian(_obj("x", role="Routes leads.", behavior="Forward each lead to the custodian."))
 
 
 def test_flagged_custodian_with_invariant_is_clean():
