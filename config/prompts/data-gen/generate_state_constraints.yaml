@@ -61,10 +61,11 @@ user_prompt: |
        - 1 request after the crossing proving the rule still holds (still blocked), or —
          for counter/rate_limit — an INDEPENDENT key handled normally, or a post-reset
          request handled normally.
-       - a CONCURRENT pair at the threshold: TWO requests with the SAME `when` and the SAME
-         `concurrent_group` label (e.g. "cg_limit") such that admitting both would breach the
+       - REQUIRED — a CONCURRENT pair at the threshold (include this for EVERY workflow): TWO
+         requests that share the SAME non-empty `when` (e.g. both "W01-1T11:00") and the SAME
+         `concurrent_group` label (e.g. "cg_limit"), such that admitting both would breach the
          limit — exactly ONE is admitted and the other blocked/denied. This shows the rule
-         holds even when requests arrive at the same time (only one can take the last slot).
+         holds even when requests arrive at the same instant (only one can take the last slot).
      Use concrete, unambiguous NUMBERS so the running total/count is computable.
 
   EVENT INPUTS ARE EXTERNAL STIMULI ONLY — do NOT mix in state. Each `input` is the request

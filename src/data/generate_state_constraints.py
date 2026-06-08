@@ -86,7 +86,11 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     prompt = prompt_template.replace("{WORKFLOW}", format_template(template))
     gen = generate_with_retries(
         llm=llm, prompt=prompt, response_model=GeneratedStateConstraint,
-        item_id=template["id"], validator=lambda r: bool(r.base_events) and bool(r.threshold),
+        item_id=template["id"],
+        # Require the threshold-crossing sequence AND a concurrent pair (>=2 events sharing
+        # a concurrent_group) — the mandatory simultaneous-arrival case.
+        validator=lambda r: bool(r.base_events) and bool(r.threshold)
+        and sum(1 for e in r.base_events if e.concurrent_group) >= 2,
     )
     if gen is None:
         return spec, False

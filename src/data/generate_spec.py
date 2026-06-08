@@ -57,6 +57,22 @@ def _write_steps_spec(llm, grounded: GroundedTemplate, spec_id: str, prompt_cfg:
     )
 
 
+def _normalize_concurrent_whens(events: list) -> list:
+    """Guarantee each concurrent_group shares ONE non-empty `when`, so simultaneous
+    arrivals are unambiguous (LLMs sometimes leave the shared timestamp blank)."""
+    all_whens = [e.when for e in events if getattr(e, "when", None)]
+    fallback = all_whens[-1] if all_whens else "W01-1T12:00"
+    groups: dict[str, list] = {}
+    for e in events:
+        if getattr(e, "concurrent_group", None):
+            groups.setdefault(e.concurrent_group, []).append(e)
+    for grp in groups.values():
+        shared = next((e.when for e in grp if e.when), fallback)
+        for e in grp:
+            e.when = shared
+    return events
+
+
 def _ground_base_events(llm, grounded: GroundedTemplate, base_events: list, prompt_cfg: dict) -> list:
     """Replace placeholder entities in the infused base scenario with one concrete cast,
     preserving the invariant logic. Returns grounded events (falls back to input on failure)."""
@@ -108,7 +124,9 @@ def _process_spec(llm, spec: WorkflowSpec, ground_cfg, steps_cfg, ground_be_cfg)
     if not spec_steps:
         return None
     spec.steps = spec_steps.steps
-    spec.base_events = _ground_base_events(llm, grounded, spec.base_events, ground_be_cfg)
+    spec.base_events = _normalize_concurrent_whens(
+        _ground_base_events(llm, grounded, spec.base_events, ground_be_cfg)
+    )
     return spec
 
 
