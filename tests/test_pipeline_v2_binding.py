@@ -105,3 +105,17 @@ def test_llm_mapping_resolves_multi_business():
 def test_format_graph_for_binding():
     txt = B._format_graph_for_binding(_graph())
     assert "lead-routing" in txt and "behavior:" in txt
+
+
+def test_every_event_is_timed_and_triggers_spread():
+    """Data-timing guarantee: every event has a non-empty `when`; multiple trigger steps
+    are spread (not all at one instant)."""
+    from src.data.schema import SpecStep
+    sp = _spec()
+    sp.steps = [SpecStep(text="trigger A"), SpecStep(text="trigger B"), SpecStep(text="trigger C")]
+    # blank one base event's `when` — must be backfilled
+    sp.base_events[1].when = ""
+    s = B.assemble_sample(sp, _graph())
+    assert all(e.when for e in s.events), "every event must carry a non-empty when"
+    trig = [e for e in s.events if e.id.startswith("S0")]   # S001.. trigger steps
+    assert len({e.when for e in trig}) == len(trig), "trigger steps must have distinct times"

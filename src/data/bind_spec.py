@@ -160,6 +160,25 @@ def _spec_event_to_event(se, recipient: str, *, role_override: str | None = None
     return Event(recipient=recipient, **d)
 
 
+def _step_when(i: int) -> str:
+    """Spread external-trigger steps across the setup week (W00), 10 min apart from 08:00,
+    so multiple triggers don't collide at one instant."""
+    total = 8 * 60 + (i - 1) * 10
+    return f"W00-{total // (24 * 60) + 1}T{(total // 60) % 24:02d}:{total % 60:02d}"
+
+
+def _ensure_timed(events: list) -> list:
+    """Deterministic guarantee that EVERY event carries a non-empty `when`. Empties are
+    backfilled from the previous event (carry-forward); concurrent groups keep their
+    shared timestamp (already normalized upstream)."""
+    last = "W00-1T00:00"
+    for e in events:
+        if not e.when:
+            e.when = last
+        last = e.when
+    return events
+
+
 def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict | None = None) -> Sample:
     """Pure binding + assembly: bind recipients/targets and build the unified Sample.
     Raises ValueError if a recipient/target cannot be resolved to an object_id."""
@@ -176,7 +195,7 @@ def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict
     for i, s in enumerate(spec.steps, 1):
         rcpt = _bind_recipient(s.text, entries)
         events.append(Event(id=f"S{i:03d}", call_type="send", source=s.source,
-                            recipient=rcpt, input=s.text, when="W00-1T00:00",
+                            recipient=rcpt, input=s.text, when=_step_when(i),
                             expect=s.expect, role="base"))
     # state-infused base scenario (SC###) — preserve cumulative expects
     sc_remap = {}
@@ -204,6 +223,8 @@ def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict
             id=m.id, call_type=m.call_type, source=m.source, target=target,
             when=m.when, intent=m.intent, mod_type=m.mod_type, ambiguity=m.ambiguity,
         ))
+
+    _ensure_timed(events)  # every event carries a definite, non-empty timestamp
 
     # Membership validation (relocated entry-point/target check)
     for e in events:
