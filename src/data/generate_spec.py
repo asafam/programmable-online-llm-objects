@@ -90,6 +90,16 @@ def _process_spec(llm, spec: WorkflowSpec, ground_cfg, steps_cfg, ground_be_cfg)
     spec.name = grounded.name
     spec.domain = grounded.domain
     spec.grounded_steps = list(grounded.grounded_steps)
+    # Merge the infused invariant INTO the workflow steps as a first-class state-constraint
+    # step (object-free), so every downstream consumer — graph derivation (→ custodian),
+    # validators, the eval judge — sees it natively. state_constraint stays as structured
+    # metadata. (Replaces the transient append previously done in bind_spec.)
+    if spec.state_constraint:
+        sc = spec.state_constraint
+        spec.grounded_steps.append(
+            f"State constraint — enforce across ALL requests (accumulated state, not a single "
+            f"request): {sc.description} Limit: {sc.threshold}."
+        )
     spec_steps = _write_steps_spec(llm, grounded, spec.id, steps_cfg)
     if not spec_steps:
         return None

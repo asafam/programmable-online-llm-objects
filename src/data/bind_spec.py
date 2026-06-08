@@ -234,18 +234,9 @@ def _template_from_spec(spec: WorkflowSpec) -> dict:
 
 def bind_one(llm, spec: WorkflowSpec, objects_cfg: dict, bind_mods_tmpl: str | None = None) -> Sample | None:
     """Full Phase-2 binding for one spec (derive graph → assemble → mock tools → expects)."""
+    # The invariant is now merged into spec.grounded_steps (as a state-constraint step) by
+    # the ground stage, so _grounded_from_spec carries it to identify_objects → custodian.
     grounded = _grounded_from_spec(spec)
-    # Surface the infused invariant to graph derivation, so identify_objects creates a
-    # single-writer Custodian to own it. The invariant lives in state_constraint (not in
-    # the grounded steps), so without this the graph never "sees" it.
-    if spec.state_constraint:
-        sc = spec.state_constraint
-        grounded.grounded_steps = list(grounded.grounded_steps) + [
-            f"Enforce this CROSS-REQUEST INVARIANT across all requests (accumulated state, "
-            f"not a single request): {sc.description} (limit: {sc.threshold}). The system must "
-            f"maintain the running total/count and block, hold, or escalate any request that "
-            f"would violate it."
-        ]
     template = _template_from_spec(spec)
     graph = _identify_objects(llm, grounded, template, objects_cfg)
     if not graph:
