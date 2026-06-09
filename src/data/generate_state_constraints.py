@@ -35,6 +35,7 @@ from tqdm import tqdm
 load_dotenv()
 
 from src.data.schema import (
+    GeneratedScenarioSpec,
     GeneratedStateConstraint,
     SpecEventWithExpect,
     StateConstraint,
@@ -253,46 +254,106 @@ def _seed_spec(template: dict) -> WorkflowSpec:
     )
 
 
+def _seed_approvers(seed_str: str):
+    import json as _json
+    try:
+        ap = _json.loads(seed_str).get("approvers")
+    except Exception:
+        return None
+    if isinstance(ap, list):
+        return [a if isinstance(a, str) else a.get("name") for a in ap if a]
+    return None
+
+
+def _first_key(seed_str: str):
+    import json as _json
+    try:
+        d = _json.loads(seed_str)
+    except Exception:
+        return None
+    skus = (d.get("catalog") or {}).get("skus") if isinstance(d.get("catalog"), dict) else d.get("skus")
+    if isinstance(skus, list) and skus:
+        f = skus[0]
+        return f.get("sku") if isinstance(f, dict) else f
+    return None
+
+
+def _build_scenario(gen: GeneratedScenarioSpec) -> list:
+    """CODE builds the request sequence + derives expects from the LLM's seed + phrasing —
+    the LLM never touches the arithmetic. Routes to the family builder by constraint_type."""
+    from src.data.scenario_builder import (
+        build_cap_scenario, build_counter_scenario, build_rate_limit_scenario,
+    )
+    ct = getattr(gen.constraint_type, "value", gen.constraint_type)
+    tmpl = {p.role: p.template for p in gen.phrasings}
+    decos = gen.decorations or []
+
+    def fill(t, **vals):
+        s = t or ""
+        for k, v in vals.items():
+            s = s.replace("{" + k + "}", str(v))
+        return _re.sub(r"\{[A-Z_]+\}", "", s).strip()  # drop any leftover placeholder
+
+    def deco_for(idstr):
+        if not decos:
+            return ""
+        m = _re.search(r"\d+", idstr or "")
+        return decos[(int(m.group()) if m else 0) % len(decos)]
+
+    if ct == "counter":
+        req = tmpl.get("request") or tmpl.get("submit") or "A new lead {ID} arrives {DECO}."
+        phrase = lambda lid, d: fill(req, ID=lid, DECO=(d if isinstance(d, str) else deco_for(lid)))
+        return build_counter_scenario(gen.seed, gen.threshold, phrase, decos or [""])
+    if ct == "rate_limit":
+        req = tmpl.get("request") or "A request {ID} arrives for {KEY} {DECO}."
+        key = gen.key or _first_key(gen.seed) or "SKU-1"
+        phrase = lambda rid, blk, k: fill(req, ID=rid, KEY=k, DECO=deco_for(rid))
+        return build_rate_limit_scenario(gen.seed, gen.threshold, key, phrase)
+    if ct == "cap":
+        sub = tmpl.get("submit") or "Quote {ID} is submitted requesting a ${AMOUNT} discount {DECO}."
+        app = tmpl.get("approve") or "{APPROVER} approves {ID}."
+        approvers = _seed_approvers(gen.seed) or ["the approver"]
+        submit_phrase = lambda qid, amt: fill(sub, ID=qid, AMOUNT=f"{amt:,}", DECO=deco_for(qid))
+        approve_phrase = lambda qid, ap: fill(app, ID=qid, APPROVER=ap)
+        return build_cap_scenario(gen.seed, gen.threshold, submit_phrase, approve_phrase, approvers)
+    return []
+
+
 def _process_template(llm, template: dict, prompt_template: str) -> tuple[WorkflowSpec, bool]:
-    """INFUSE FIRST (before grounding): read the RAW template to learn the invariant and
-    author the abstract base scenario. Entities are PLACEHOLDERS (grounded later, together
-    with the steps, so the entity set is concretized once); only the numbers/logic are
-    concrete here. Returns (spec, ok). Always returns a spec skeleton; ok=False when no
-    cross-request invariant exists (spec carries no base events)."""
+    """INFUSE (before grounding): the LLM supplies ONLY realism — the invariant type/threshold,
+    the structured seed, phrasing templates, and a decoration pool. CODE then builds the request
+    sequence and derives every expect by simulation (scenario_builder), so the base scenario is
+    logically correct BY CONSTRUCTION. Returns (spec, ok)."""
     spec = _seed_spec(template)
     prompt = prompt_template.replace("{WORKFLOW}", format_template(template))
     gen = generate_with_retries(
-        llm=llm, prompt=prompt, response_model=GeneratedStateConstraint,
+        llm=llm, prompt=prompt, response_model=GeneratedScenarioSpec,
         item_id=template["id"],
-        # Require: base events + threshold, a concurrent pair (>=2 sharing a concurrent_group),
-        # AND scenario coherence — at least one BLOCKED action, plus a RESET event for
-        # counter/rate_limit. Retries until the LLM actually exercises the invariant + reset.
-        validator=lambda r: bool(r.base_events) and bool(r.threshold)
-        and _valid_seed(r.seed)
-        and sum(1 for e in r.base_events if e.concurrent_group) >= 2
-        and not coherence_issues(
-            [f"{e.expect.action} {e.expect.reason or ''}" for e in r.base_events if e.expect],
-            getattr(r.constraint_type, "value", r.constraint_type))
-        and not concurrent_pair_issues(
-            [{"input": e.input, "when": e.when or "",
-              "action": e.expect.action if e.expect else "",
-              "reason": (e.expect.reason if e.expect else "") or "",
-              "concurrent_group": e.concurrent_group} for e in r.base_events],
-            r.threshold or ""),
+        # The LLM only needs to give a valid type/threshold, a JSON seed, and phrasing.
+        validator=lambda r: bool(r.threshold) and _valid_seed(r.seed) and bool(r.phrasings),
     )
     if gen is None:
         return spec, False
 
-    base_events: list[SpecEventWithExpect] = []
-    for ge in gen.base_events:
-        d = ge.model_dump()
-        d["role"] = "base"
-        base_events.append(SpecEventWithExpect(**d))
-    spec.base_events = base_events
     spec.seed = gen.seed
     spec.state_constraint = StateConstraint(
         type=gen.constraint_type, threshold=gen.threshold, description=gen.description,
     )
+    base_events = _build_scenario(gen)
+    if not base_events:
+        return spec, False
+    spec.base_events = base_events
+
+    # Sanity net: the code-built scenario should pass the coherence + pair checks by construction.
+    texts = [f"{e.expect.action} {e.expect.reason or ''}" for e in base_events if e.expect]
+    ct = getattr(gen.constraint_type, "value", gen.constraint_type)
+    evd = [{"input": e.input, "when": e.when or "",
+            "action": e.expect.action if e.expect else "",
+            "reason": (e.expect.reason if e.expect else "") or "",
+            "concurrent_group": e.concurrent_group} for e in base_events]
+    issues = coherence_issues(texts, ct) + concurrent_pair_issues(evd, gen.threshold or "")
+    if issues:
+        tqdm.write(f"  [builder] {template['id']}: built scenario flagged: {issues}", file=sys.stderr)
     return spec, True
 
 

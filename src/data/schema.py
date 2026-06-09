@@ -155,6 +155,27 @@ class GeneratedStateConstraint(BaseModel):
     base_events: list["SpecEventWithExpect"]  # object-free; recipient bound in Phase 2
 
 
+class RolePhrasing(BaseModel):
+    """How one kind of request READS (NL template with {ID}/{AMOUNT}/{KEY}/{APPROVER}/{DECO}
+    placeholders that code fills). role ∈ {request, submit, approve}."""
+    role: str
+    template: str
+
+
+class GeneratedScenarioSpec(BaseModel):
+    """LLM output for the CODE-GENERATED scenario flow: the model supplies ONLY realism (the
+    structured seed + phrasing templates + a decoration pool). Code builds the request sequence
+    (counts, timestamps, the concurrent pair at the last slot, the reset) and derives every
+    expect by simulation — so the scenario is logically correct by construction."""
+    constraint_type: StateConstraintType
+    threshold: str
+    description: str
+    seed: str = ""                  # structured JSON reference state (roster/catalog/approvers)
+    phrasings: list[RolePhrasing] = Field(default_factory=list)
+    decorations: list[str] = Field(default_factory=list)  # realistic NL fragments for {DECO}
+    key: str = ""                   # rate_limit: the specific key (SKU) to exercise, from the seed
+
+
 class StateProbeScenario(BaseModel):
     """LLM output for a state-probe test case generation (legacy single-call)."""
     state_events: list[GeneratedEventWithExpect]  # N state-mutating events (expect filled by LLM)

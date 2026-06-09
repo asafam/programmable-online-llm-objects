@@ -103,12 +103,15 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
         d = _abs_day(e.when)
         in_window = sum(1 for ad in accepted_days if d - ad < D)
         if in_window < N:
+            aged = any(d - ad >= D for ad in accepted_days)
             accepted_days.append(d)
+            reset_note = (f" More than {D} days have passed since the earlier reorders, which have aged "
+                          f"out of the rolling {D}-day window, so the limit no longer applies." if aged else "")
             e.expect = EventExpect(
                 action=f"{_ev_ref(e)} for {key} is at/below its reorder level and a reorder request "
                        f"IS sent to the supplier.",
                 reason=f"only {in_window} reorder(s) for {key} in the last {D} days (< {N}), so the "
-                       f"reorder is allowed.")
+                       f"reorder is allowed.{reset_note}")
         else:
             e.expect = EventExpect(
                 action=f"NO new reorder is sent for {_ev_ref(e)} ({key}); only the routine inventory "

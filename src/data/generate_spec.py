@@ -91,6 +91,12 @@ def _ground_base_events(llm, grounded: GroundedTemplate, base_events: list, seed
     keeps the seed roster/catalog consistent with the events. Falls back to ungrounded on failure."""
     if not base_events and not seed:
         return base_events, seed
+    # Code-built scenarios already use CONCRETE entities (from the seed) — no placeholders to map,
+    # so grounding is a no-op. Only the legacy placeholder flow needs the LLM mapping pass.
+    blob = " ".join(f"{e.input} {e.expect.action if e.expect else ''} "
+                    f"{e.expect.reason if e.expect and e.expect.reason else ''}" for e in base_events) + " " + (seed or "")
+    if not _PLACEHOLDER_RE.search(blob):
+        return base_events, seed
     grounded_steps = "\n".join(f"- {s}" for s in grounded.grounded_steps)
     be_text = "\n".join(
         f"{e.id} | input: {e.input}\n   expect: {(e.expect.action if e.expect else '')}"
