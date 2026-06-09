@@ -148,48 +148,52 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
 
 
 def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
-                       approvers: list, base_day: str = "W01-1", starting_total: int = 0, id_offset: int = 0,
+                       submitters: list, base_day: str = "W01-1", starting_total: int = 0, id_offset: int = 0,
                        outcomes: dict | None = None, unit: str = "approval",
                        flip_old_limit: int | None = None) -> list:
-    """Cumulative cap with an APPROVER (submit + approve per quote). Builds amounts BY
-    CONSTRUCTION so the running approved total approaches the cap from `starting_total`, a
-    concurrent pair of approvals sits at the boundary (one fits the remaining budget, one
-    doesn't), and a clear over-cap one is blocked. `starting_total` carries a prior cumulative
-    (the modification scenario continues the base's running total). Each quote = a HubSpot
-    submission (always handled) + the approver's Slack decision (gated)."""
+    """Cumulative cap with an approver chain. `submitters` is [(rep, manager)]. Each quote: the
+    REP submits (the event is just the stimulus — it does NOT choose the approver); the submission
+    EXPECT verifies the SYSTEM (quote-approval-policy) routed the request to the rep's MANAGER via
+    email; then that manager's decision is the gated action (cap). Amounts are built so the running
+    total approaches the cap from `starting_total` with a boundary pair, and an over-cap one held."""
     cap = _parse_limit(threshold)
-    apr = approvers or ["the approver"]
-    budget = max(4, cap - starting_total)  # headroom remaining under the cap
-    # amounts: two well under, then a boundary pair, then an over-cap one
+    subm = submitters or [("an account executive", "the approver")]
+    budget = max(4, cap - starting_total)
     a = max(1, budget // 4)
     amounts = [a, a]
     remaining = budget - sum(amounts)
-    pair_amt = max(1, remaining - max(1, budget // 10))  # fits once, not twice
-    amounts += [pair_amt, pair_amt]        # boundary pair
+    pair_amt = max(1, remaining - max(1, budget // 10))
+    amounts += [pair_amt, pair_amt]
     week, day = int(base_day[1:3]), int(base_day[4:])
 
     events: list[SpecEventWithExpect] = []
-    quotes = []                            # (qid, amount, is_pair)
-    t = 0
+    quotes = []                            # (qid, amount, is_pair, rep, manager)
     for i, amt in enumerate(amounts):
         qid = f"Q-{1001 + id_offset + i}"
-        quotes.append((qid, amt, i >= 2))  # last two are the pair
-        events.append(_ev(len(events) + 1, submit_phrase(qid, amt), f"W{week:02d}-{day}T{9 + t:02d}:00"))
-        t += 1
+        rep, mgr = subm[i % len(subm)]
+        quotes.append((qid, amt, i >= 2, rep, mgr))
+        e = _ev(len(events) + 1, submit_phrase(qid, amt, rep), f"W{week:02d}-{day}T{9 + i:02d}:00")
+        # The submission expect VERIFIES the system routed the approval to the rep's MANAGER.
+        e.expect = EventExpect(
+            action=_fill_outcome(outcomes, "submitted",
+                f"Quote {qid} is recorded in HubSpot and the system routes the approval request to "
+                f"{rep}'s manager, {mgr}, who receives the confirmation request by email.",
+                ID=qid, SUBMITTER=rep, MANAGER=mgr),
+            reason=f"the quote-approval-policy routes each request to the submitter's manager ({mgr} "
+                   f"for {rep}); the submission itself is always recorded and is not the gated action.")
+        events.append(e)
 
-    # approvals: non-pair approved in order; the two pair approvals share one `when` (the race)
-    total = starting_total                 # continue a prior cumulative (mod scenario carries the base total)
+    # approvals: the routed MANAGER decides; cap-gated. pair share one `when` (the race).
+    total = starting_total
     approve_events = []
-    for j, (qid, amt, is_pair) in enumerate(quotes):
-        apr_name = apr[j % len(apr)]
+    for j, (qid, amt, is_pair, rep, mgr) in enumerate(quotes):
         when = f"W{week:02d}-{day}T13:00" if is_pair else f"W{week:02d}-{day}T{10 + j:02d}:30"
         cg = "cg_limit" if is_pair else None
-        e = _ev(len(events) + len(approve_events) + 1, approve_phrase(qid, apr_name), when, cg)
-        approve_events.append((e, qid, amt, apr_name))
+        e = _ev(len(events) + len(approve_events) + 1, approve_phrase(qid, mgr), when, cg)
+        approve_events.append((e, qid, amt, mgr))
 
-    # simulate the cap over approvals in (when, id) order
     ordered = sorted(approve_events, key=lambda x: (x[0].when, x[0].id))
-    for e, qid, amt, apr_name in ordered:
+    for e, qid, amt, mgr in ordered:
         if total + amt <= cap:
             total += amt
             flip = (f" THIS IS THE FLIP: this approval brings the running total to ${total:,}, above the "
@@ -197,24 +201,17 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
                     f"(${cap:,}) ALLOWS it." if flip_old_limit and total > flip_old_limit else "")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "approved",
-                    f"{apr_name} approves {qid} (${amt:,}); it is approved in HubSpot and the approval is posted in Slack.",
-                    ID=qid, ENTITY=apr_name, AMOUNT=f"{amt:,}"),
+                    f"{mgr} approves {qid} (${amt:,}); it is approved in HubSpot and the approval is posted in Slack.",
+                    ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}"),
                 reason=f"the {unit} of ${amt:,} keeps the running approved total at ${total:,}, within the ${cap:,} cap.{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "held",
-                    f"{apr_name} approves {qid}, BUT the system holds it for exception handling and no "
-                    f"approval is recorded — the approver acts, but it cannot take effect because it would breach the cap.",
-                    ID=qid, ENTITY=apr_name, AMOUNT=f"{amt:,}"),
+                    f"{mgr} approves {qid}, BUT the system holds it for exception handling and no approval "
+                    f"is recorded — the approver acts, but it cannot take effect because it would breach the cap.",
+                    ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}"),
                 reason=f"the {unit} of ${amt:,} would push the running total from ${total:,} to ${total + amt:,}, "
                        f"over the ${cap:,} cap, so the system intercepts it and routes it to exception handling.")
-    # submissions are always handled
-    for e in events:
-        qid = re.search(r"Q-\d+", e.input)
-        e.expect = EventExpect(action=_fill_outcome(outcomes, "submitted",
-                    f"The quote {qid.group() if qid else ''} is recorded in HubSpot and an approval request is sent.",
-                    ID=qid.group() if qid else ""),
-                               reason="a submission is always accepted; it does not perform the gated action.")
     return events + [e for e, *_ in approve_events]
 
 

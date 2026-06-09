@@ -61,12 +61,17 @@ user_prompt: |
        - rate_limit → role="request":  "An inventory request {ID} for SKU {KEY} arrives by email {DECO}."
                       role="allowed":  "{KEY} is at/below its reorder level, so a supplier reorder IS sent ({ID})."
                       role="blocked":  "NO new reorder is sent for {KEY} ({ID}); only the routine reply goes out."
-       - cap        → role="submit":   "Sales rep {DECO} submits quote {ID} in HubSpot requesting a ${AMOUNT} discount."
+       - cap        → role="submit":   "Sales rep {SUBMITTER} submits quote {ID} in HubSpot requesting a ${AMOUNT} discount {DECO}."
                       role="approve":  "{APPROVER} reviews quote {ID} in Slack."
-                      role="submitted":"Quote {ID} is recorded in HubSpot and an approval request is sent."
+                      role="submitted":"Quote {ID} is recorded in HubSpot; the system routes the approval request to
+                                        {SUBMITTER}'s manager, {MANAGER}, who receives the confirmation request by email."
                       role="approved": "{ENTITY} approves {ID} (${AMOUNT}); it is approved in HubSpot and posted in Slack."
                       role="held":     "{ENTITY} approves {ID} (${AMOUNT}), BUT the system holds it for exception
                                         handling — the approval cannot take effect because it would breach the cap."
+       (The submit EVENT is only the stimulus — the rep submitting. It MUST NOT name the approver:
+        choosing the manager is the quote-approval-policy object's job. The "submitted" EXPECT is
+        what VERIFIES the system routed to the correct manager. {SUBMITTER}=rep, {MANAGER}=that rep's
+        manager, {ENTITY}=the manager who decides — all filled by code from the seed's sales_reps.)
      ALL families ALSO provide role="irrelevant": ONE request CLEARLY OUTSIDE this invariant, handled
      normally (it proves the modification is SCOPED). e.g.
            counter:    "A CRM status webhook {ID} (no lead attached) is received."
@@ -80,8 +85,9 @@ user_prompt: |
      (used in the computed reasons).
 
   7. `decorations` — 8–12 short realistic NL fragments (filled into {DECO}). counter/rate_limit:
-     customer/company flavor ("from Northwind Logistics requesting a demo"). cap: the SUBMITTING
-     SALES REP — a rep name + account, e.g. "James Brown (for Acme Corp)", "Laura Chen (for Globex)".
+     customer/company flavor ("from Northwind Logistics requesting a demo"). cap: the customer/account
+     the quote is for, e.g. "for Acme Corp's annual renewal", "for the Globex expansion deal" (the
+     submitting rep + manager come from the seed, NOT decorations).
 
   8. `key` — rate_limit ONLY: the exact SKU code (from the seed catalog) the scenario exercises.
      Leave empty for cap/counter.

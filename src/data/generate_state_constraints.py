@@ -306,6 +306,21 @@ def _seed_approvers(seed_str: str):
     return None
 
 
+def _seed_sales_reps(seed_str: str):
+    """Parse [(rep_name, manager_name)] from the cap seed — used so the system's routing of each
+    quote to the submitter's MANAGER can be VERIFIED in the submission expect."""
+    import json as _json
+    try:
+        reps = _json.loads(seed_str).get("sales_reps")
+    except Exception:
+        return None
+    out = []
+    for r in reps or []:
+        if isinstance(r, dict) and r.get("name"):
+            out.append((r["name"], r.get("manager") or "their manager"))
+    return out or None
+
+
 def _first_key(seed_str: str):
     import json as _json
     try:
@@ -354,12 +369,14 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="", *
         return build_rate_limit_scenario(seed, threshold, k, phrase,
                                          outcomes=tmpl, unit=unit or "reorder", **kw)
     if ct == "cap":
-        sub = tmpl.get("submit") or "Quote {ID} is submitted requesting a ${AMOUNT} discount {DECO}."
-        app = tmpl.get("approve") or "{APPROVER} approves {ID}."
-        approvers = _seed_approvers(seed) or ["the approver"]
-        submit_phrase = lambda qid, amt: fill(sub, ID=qid, AMOUNT=f"{amt:,}", DECO=deco_for(qid))
-        approve_phrase = lambda qid, ap: fill(app, ID=qid, APPROVER=ap)
-        return build_cap_scenario(seed, threshold, submit_phrase, approve_phrase, approvers,
+        sub = tmpl.get("submit") or "Sales rep {SUBMITTER} submits quote {ID} requesting a ${AMOUNT} discount {DECO}."
+        app = tmpl.get("approve") or "{APPROVER} reviews quote {ID} in Slack."
+        reps = _seed_sales_reps(seed)
+        if not reps:                              # no chain in the seed → fall back to bare approvers
+            reps = [("an account executive", a) for a in (_seed_approvers(seed) or ["the approver"])]
+        submit_phrase = lambda qid, amt, rep: fill(sub, ID=qid, AMOUNT=f"{amt:,}", SUBMITTER=rep, DECO=deco_for(qid))
+        approve_phrase = lambda qid, mgr: fill(app, ID=qid, APPROVER=mgr)
+        return build_cap_scenario(seed, threshold, submit_phrase, approve_phrase, reps,
                                   outcomes=tmpl, unit=unit or "approval", **kw)
     return []
 

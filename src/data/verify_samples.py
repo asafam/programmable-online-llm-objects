@@ -113,8 +113,10 @@ def _summary(s: Sample) -> str:
         x = f"  [{e.id}] when={e.when} cg={e.concurrent_group} input: {e.input}"
         if e.expect:
             x += f"\n        expect: {e.expect.action}"
+            if e.expect.reason:   # include reason so the FLIP marker is visible to the judge
+                x += f"\n        reason: {e.expect.reason}"
         return x
-    parts = [f"Name: {s.name}", f"State constraint: {s.state_constraint.description if s.state_constraint else '-'}",
+    parts = [f"Name: {s.name}", f"Invariant under test: {s.state_constraint.description if s.state_constraint else '-'}",
              f"Threshold: {s.state_constraint.threshold if s.state_constraint else '-'}",
              "Steps:\n" + "\n".join(f"  - {st}" for st in s.steps),
              "Objects: " + ", ".join(f"{o.object_id}" for o in s.objects),
