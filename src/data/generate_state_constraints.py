@@ -60,7 +60,8 @@ _PROMPT = Path("config/prompts/data-gen/generate_state_constraints.yaml")
 _BLOCK_TERMS = (
     "not approved", "no new reorder", "no reorder", "not sent", "not assigned", "blocked",
     "is held", "held unassigned", "suppress", "denied", "remains pending", "escalat",
-    "not completed", "is not approved", "no approval",
+    "not completed", "is not approved", "no approval", "reject", "declin", "refus", "withheld",
+    "not allowed", "over the limit", "rate-limit", "held for", "cannot take effect", "is not made",
 )
 _RESET_TERMS = (
     "new day", "resets", "reset", "no longer", "more than 7", "more than seven", "next day",
@@ -96,7 +97,7 @@ def _trim_seed(seed_str: str, mx: int = 3) -> str:
         return seed_str
     cat = d.get("catalog") if isinstance(d.get("catalog"), dict) else d
     changed = False
-    for container, lk in [(d, "reps"), (d, "approvers"), (cat, "skus")]:
+    for container, lk in [(d, "reps"), (d, "sales_reps"), (d, "approvers"), (cat, "skus")]:
         if isinstance(container, dict) and isinstance(container.get(lk), list) and len(container[lk]) > mx:
             container[lk] = container[lk][:mx]
             changed = True
@@ -171,11 +172,24 @@ def _lead_ref(text: str) -> str:
     return m.group(1) if m else "the lead"
 
 
-def simulate_rotation(seed_str: str, events: list[dict], threshold: str) -> list[dict]:
+def _fill_outcome(outcomes, role, fallback, **vals):
+    """Fill the LLM-provided OUTCOME template for `role` (so the action wording is domain-correct
+    for ANY workflow); fall back to the built-in text when the LLM didn't provide one."""
+    t = (outcomes or {}).get(role)
+    if not t:
+        return fallback
+    for k, v in vals.items():
+        t = t.replace("{" + k + "}", str(v))
+    return _re.sub(r"\{[A-Z_]+\}", "", t).strip()
+
+
+def simulate_rotation(seed_str: str, events: list[dict], threshold: str,
+                      outcomes: dict | None = None, unit: str = "assignment") -> list[dict]:
     """DETERMINISTIC round-robin/counter simulation. events: dicts {id, input, when,
     concurrent_group}. Processes in (when, id) order, assigns each lead to the next eligible rep
-    in rotation order (under the per-day cap, daily reset), holds when all are capped. Returns a
-    list of {action, reason} aligned to `events` (original order). Empty list if no parseable roster."""
+    in rotation order (under the per-day cap, daily reset), holds when all are capped. The action
+    wording comes from the LLM `outcomes` templates (domain-generic) with a built-in fallback.
+    Returns a list of {action, reason} aligned to `events`. Empty list if no parseable roster."""
     reps = _seed_reps(seed_str)
     if not reps:
         return []
@@ -206,15 +220,15 @@ def simulate_rotation(seed_str: str, events: list[dict], threshold: str) -> list
                 break
         ref = _lead_ref(e.get("input", ""))
         if assigned:
-            res[i] = {"action": f"{ref} IS assigned to {assigned} and the assignment is posted.",
-                      "reason": f"{assigned} is the next eligible rep in the round-robin order and is "
-                                f"under the daily cap of {caps[assigned]} (now {counts[assigned]} of "
-                                f"{caps[assigned]} today)."}
+            res[i] = {"action": _fill_outcome(outcomes, "allowed",
+                        f"{ref} IS assigned to {assigned} and the {unit} is posted.", ID=ref, ENTITY=assigned),
+                      "reason": f"{assigned} is the next eligible in rotation and is under the per-period "
+                                f"cap of {caps[assigned]} (now {counts[assigned]} of {caps[assigned]})."}
         else:
-            res[i] = {"action": f"{ref} is NOT assigned to any rep and is held unassigned; no "
-                                f"assignment is posted.",
-                      "reason": f"every rep has reached the daily cap of {dcap}, so the lead is held "
-                                f"until the cap resets the next day."}
+            res[i] = {"action": _fill_outcome(outcomes, "blocked",
+                        f"{ref} is NOT assigned to any rep and is held; no {unit} is posted.", ID=ref),
+                      "reason": f"every entity has reached the per-period cap of {dcap}, so it is held "
+                                f"until the cap resets."}
     return [res[i] for i in range(len(events))]
 
 
@@ -298,7 +312,7 @@ def _first_key(seed_str: str):
     return None
 
 
-def _run_builder(ct, seed, threshold, phrasings, decorations, key="", **kw) -> list:
+def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="", **kw) -> list:
     """Construct the phrase closures from the LLM's phrasing templates + decorations, then call
     the family builder. Shared by the base scenario AND the modification scenario."""
     from src.data.scenario_builder import (
@@ -319,29 +333,34 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", **kw) -> l
         m = _re.search(r"\d+", idstr or "")
         return decos[(int(m.group()) if m else 0) % len(decos)]
 
+    # outcome wording: pass the full template map (the builders look up allowed/blocked/approved/
+    # held/submitted) so the action text is domain-correct for any workflow; fallback inside builder.
     if ct == "counter":
         req = tmpl.get("request") or tmpl.get("submit") or "A new lead {ID} arrives {DECO}."
         phrase = lambda lid, d: fill(req, ID=lid, DECO=(d if isinstance(d, str) else deco_for(lid)))
-        return build_counter_scenario(seed, threshold, phrase, decos or [""], **kw)
+        return build_counter_scenario(seed, threshold, phrase, decos or [""],
+                                      outcomes=tmpl, unit=unit or "lead assignment", **kw)
     if ct == "rate_limit":
         req = tmpl.get("request") or "A request {ID} arrives for {KEY} {DECO}."
         k = key or _first_key(seed) or "SKU-1"
         phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=kk, DECO=deco_for(rid))
-        return build_rate_limit_scenario(seed, threshold, k, phrase, **kw)
+        return build_rate_limit_scenario(seed, threshold, k, phrase,
+                                         outcomes=tmpl, unit=unit or "reorder", **kw)
     if ct == "cap":
         sub = tmpl.get("submit") or "Quote {ID} is submitted requesting a ${AMOUNT} discount {DECO}."
         app = tmpl.get("approve") or "{APPROVER} approves {ID}."
         approvers = _seed_approvers(seed) or ["the approver"]
         submit_phrase = lambda qid, amt: fill(sub, ID=qid, AMOUNT=f"{amt:,}", DECO=deco_for(qid))
         approve_phrase = lambda qid, ap: fill(app, ID=qid, APPROVER=ap)
-        return build_cap_scenario(seed, threshold, submit_phrase, approve_phrase, approvers, **kw)
+        return build_cap_scenario(seed, threshold, submit_phrase, approve_phrase, approvers,
+                                  outcomes=tmpl, unit=unit or "approval", **kw)
     return []
 
 
 def _build_scenario(gen: GeneratedScenarioSpec) -> list:
     """CODE builds the base request sequence + derives expects from the LLM's seed + phrasing."""
     return _run_builder(getattr(gen.constraint_type, "value", gen.constraint_type),
-                        gen.seed, gen.threshold, gen.phrasings, gen.decorations, gen.key)
+                        gen.seed, gen.threshold, gen.phrasings, gen.decorations, gen.key, gen.unit)
 
 
 def _base_cap_total(base_events) -> int:
@@ -424,7 +443,7 @@ def build_mod_scenario(spec, mod_type: str):
 
     new_thr = _re.sub(r"\d[\d,]*", str(new_limit), old_thr, count=1)
     kw["id_offset"] = 100   # post-mod request ids start at 100+ so they never reuse a base id
-    events = _run_builder(ct, spec.seed, new_thr, spec.phrasings, spec.decorations, key, **kw)
+    events = _run_builder(ct, spec.seed, new_thr, spec.phrasings, spec.decorations, key, spec.unit, **kw)
     for i, e in enumerate(events, 1):
         e.id = f"PM{i:03d}"
         e.role = "post_mod"
@@ -453,6 +472,7 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     spec.phrasings = gen.phrasings
     spec.decorations = gen.decorations
     spec.key = gen.key
+    spec.unit = gen.unit
     spec.state_constraint = StateConstraint(
         type=gen.constraint_type, threshold=gen.threshold, description=gen.description,
     )

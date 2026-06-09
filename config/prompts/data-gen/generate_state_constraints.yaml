@@ -39,29 +39,43 @@ user_prompt: |
        - rate_limit→ {"catalog":{"skus":[{"sku":"A100-XL","reorder_level":10,"on_hand":6,"reorders_last_7d":0},
                       {"sku":"B205-M","reorder_level":8,"on_hand":25,"reorders_last_7d":0}]}}   (2-3 SKUs — the
                       limit is PER SKU, so a second SKU is REQUIRED to show it generalizes)
-       - cap       → {"approvers":["Daniel Kim","Olivia Chen"],
+       - cap       → {"sales_reps":[{"name":"James Brown","manager":"Daniel Kim"},
+                      {"name":"Laura Chen","manager":"Olivia Chen"}],
+                      "approvers":[{"name":"Daniel Kim","title":"Regional Sales Director"},
+                      {"name":"Olivia Chen","title":"Revenue Ops Manager"}],
                       "quarter_to_date_approved_discount":0,"discount_cap":50000}
+                      (cap MUST show the sales reps AND their managers/approvers — the approval chain.)
      Include every entity the scenario reads. NO outcomes, NO assignments, NO post-event counts.
 
-  5. `phrasings` — how each kind of request READS, as templates with placeholders CODE fills: {ID}
-     (lead/quote/request id), {AMOUNT} (cap only), {KEY} (rate_limit SKU), {APPROVER} (cap approval),
-     {DECO} (a realism fragment from `decorations`). Provide exactly:
-       - counter    → ONE, role="request":  "A new lead {ID} {DECO} is submitted via the web form."
-       - rate_limit → ONE, role="request":  "An inventory request {ID} for SKU {KEY} arrives by email {DECO}."
-       - cap        → TWO (the action is taken by a DISTINCT APPROVER the steps name — there is no
-                      auto-approval). The submission MUST name the submitting SALES REP (via {DECO})
-                      so the rep→approver chain is clear:
-           role="submit":  "Sales rep {DECO} submits quote {ID} in HubSpot requesting a ${AMOUNT} discount."
-           role="approve": "{APPROVER} approves quote {ID} in Slack."
-     Put NO number, count, date, status, or outcome in a phrasing — only the placeholders + flavor.
+  5. `phrasings` — templates with placeholders CODE fills: {ID} (lead/quote/request id), {AMOUNT}
+     (cap), {KEY} (rate_limit SKU), {ENTITY} (the rep assigned / the approver), {DECO} (a fragment
+     from `decorations`). Provide the REQUEST phrasing AND the OUTCOME phrasings (so the action
+     wording is correct for THIS workflow — code only computes which outcome, you give the words):
+       - counter    → role="request":  "A new lead {ID} {DECO} is submitted via the web form."
+                      role="allowed":  "{ID} IS assigned to {ENTITY}, and the assignment is posted."
+                      role="blocked":  "{ID} is NOT assigned (every rep is at the daily cap) and is held unassigned."
+       - rate_limit → role="request":  "An inventory request {ID} for SKU {KEY} arrives by email {DECO}."
+                      role="allowed":  "{KEY} is at/below its reorder level, so a supplier reorder IS sent ({ID})."
+                      role="blocked":  "NO new reorder is sent for {KEY} ({ID}); only the routine reply goes out."
+       - cap        → role="submit":   "Sales rep {DECO} submits quote {ID} in HubSpot requesting a ${AMOUNT} discount."
+                      role="approve":  "{APPROVER} reviews quote {ID} in Slack."
+                      role="submitted":"Quote {ID} is recorded in HubSpot and an approval request is sent."
+                      role="approved": "{ENTITY} approves {ID} (${AMOUNT}); it is approved in HubSpot and posted in Slack."
+                      role="held":     "{ENTITY} approves {ID} (${AMOUNT}), BUT the system holds it for exception
+                                        handling — the approval cannot take effect because it would breach the cap."
+     The OUTCOME phrasings MUST describe the workflow's REAL gated action (a reorder, an assignment,
+     an approval) — make "blocked"/"held" clearly state the action did NOT happen. Put NO number,
+     count, or date in any phrasing — only placeholders + flavor.
 
-  6. `decorations` — 8–12 short realistic NL fragments to vary requests (filled into {DECO}). For
-     counter/rate_limit these are customer/company flavor ("from Northwind Logistics requesting a demo").
-     For cap, {DECO} is the SUBMITTING SALES REP — make each a rep name + account, e.g.
-     "James Brown (for Acme Corp)", "Laura Chen (for Globex)".
+  6. `unit` — the gated action's noun for THIS workflow: "reorder", "lead assignment", "approval"
+     (used in the computed reasons).
 
-  7. `key` — rate_limit ONLY: the exact SKU code (from the seed catalog) the scenario exercises.
+  7. `decorations` — 8–12 short realistic NL fragments (filled into {DECO}). counter/rate_limit:
+     customer/company flavor ("from Northwind Logistics requesting a demo"). cap: the SUBMITTING
+     SALES REP — a rep name + account, e.g. "James Brown (for Acme Corp)", "Laura Chen (for Globex)".
+
+  8. `key` — rate_limit ONLY: the exact SKU code (from the seed catalog) the scenario exercises.
      Leave empty for cap/counter.
 
-  Return only the JSON object (constraint_type, threshold, description, seed, phrasings, decorations,
-  key). Do NOT write events, timestamps, or expectations — code builds those.
+  Return only the JSON object (constraint_type, threshold, description, seed, phrasings, unit,
+  decorations, key). Do NOT write events, timestamps, or expectations — code builds those.

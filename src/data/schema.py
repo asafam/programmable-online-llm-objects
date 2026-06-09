@@ -171,9 +171,10 @@ class GeneratedScenarioSpec(BaseModel):
     threshold: str
     description: str
     seed: str = ""                  # structured JSON reference state (roster/catalog/approvers)
-    phrasings: list[RolePhrasing] = Field(default_factory=list)
+    phrasings: list[RolePhrasing] = Field(default_factory=list)  # request + OUTCOME phrasings (roles below)
     decorations: list[str] = Field(default_factory=list)  # realistic NL fragments for {DECO}
     key: str = ""                   # rate_limit: the specific key (SKU) to exercise, from the seed
+    unit: str = ""                  # the gated action's noun ("reorder", "lead assignment", "approval")
 
 
 class StateProbeScenario(BaseModel):
@@ -765,6 +766,7 @@ class WorkflowSpec(BaseModel):
     phrasings: list["RolePhrasing"] = Field(default_factory=list)  # carried from infuse for the mod builder
     decorations: list[str] = Field(default_factory=list)
     key: str = ""                                            # rate_limit: the key the base scenario exercised
+    unit: str = ""                                           # the gated action's noun (carried for the mod)
     steps: list[SpecStep] = Field(default_factory=list)      # external-stimulus steps with observable expects
     base_events: list[SpecEventWithExpect] = Field(default_factory=list)  # state-infused base scenario
     modifications: list[SpecModification] = Field(default_factory=list)

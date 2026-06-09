@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 
 from src.data.schema import EventExpect, SpecEventWithExpect
-from src.data.generate_state_constraints import _parse_limit, _seed_reps, simulate_rotation
+from src.data.generate_state_constraints import _fill_outcome, _parse_limit, _seed_reps, simulate_rotation
 
 
 def _abs_day(when: str) -> int:
@@ -36,7 +36,8 @@ def _ev(n: int, text: str, when: str, cg: str | None = None) -> SpecEventWithExp
 
 
 def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
-                           base_day: str = "W01-1", reset_day: str = "W01-2", id_offset: int = 0) -> list:
+                           base_day: str = "W01-1", reset_day: str = "W01-2", id_offset: int = 0,
+                           outcomes: dict | None = None, unit: str = "assignment") -> list:
     """Round-robin / per-key daily counter. Builds, BY CONSTRUCTION:
       - (cap*R - 1) leads in round-robin order (all assigned) → leaves exactly ONE slot open,
       - a concurrent pair at that last slot (same `when`) → one assigned, one held (the race),
@@ -63,7 +64,8 @@ def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
 
     # Derive every expect deterministically by simulating the rotation over the built sequence.
     sim = simulate_rotation(seed, [{"id": e.id, "input": e.input, "when": e.when,
-                                    "concurrent_group": e.concurrent_group} for e in events], threshold)
+                                    "concurrent_group": e.concurrent_group} for e in events], threshold,
+                            outcomes=outcomes, unit=unit)
     for e, s in zip(events, sim):
         e.expect = EventExpect(action=s["action"], reason=s["reason"])
     return events
@@ -84,7 +86,8 @@ def _second_sku(seed: str, exclude: str):
 
 
 def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
-                              base_day: str = "W01-1", id_offset: int = 0) -> list:
+                              base_day: str = "W01-1", id_offset: int = 0,
+                              outcomes: dict | None = None, unit: str = "reorder") -> list:
     """Per-key rolling-window rate limit (N per key per D days). Builds BY CONSTRUCTION for the
     main key: (N-1) accepted inside the window, a concurrent pair at the last slot (one accepted,
     one blocked), a post-window reset. It ALSO fires one request for a SECOND key while the main
@@ -123,20 +126,25 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
             note = (f" More than {D} days have passed since the earlier reorders for {k}, which have "
                     f"aged out of the rolling {D}-day window." if aged else "")
             e.expect = EventExpect(
-                action=f"{_ev_ref(e)} for {k} is at/below its reorder level and a reorder request IS sent to the supplier.",
-                reason=f"only {in_window} reorder(s) for {k} in the last {D} days (< {N}); the limit is "
-                       f"PER SKU, so {k} is unaffected by other SKUs.{note}")
+                action=_fill_outcome(outcomes, "allowed",
+                    f"{_ev_ref(e)} for {k} is at/below its reorder level and a reorder request IS sent to the supplier.",
+                    ID=_ev_ref(e), KEY=k),
+                reason=f"only {in_window} {unit}(s) for {k} in the last {D} days (< {N}); the limit is "
+                       f"PER key, so {k} is unaffected by other keys.{note}")
         else:
             e.expect = EventExpect(
-                action=f"NO new reorder is sent for {_ev_ref(e)} ({k}); only the routine inventory reply goes out.",
-                reason=f"{in_window} reorders were already sent for {k} within the last {D} days (the "
-                       f"limit of {N}), so a new reorder is blocked until that SKU's window clears.")
+                action=_fill_outcome(outcomes, "blocked",
+                    f"NO new reorder is sent for {_ev_ref(e)} ({k}); only the routine inventory reply goes out.",
+                    ID=_ev_ref(e), KEY=k),
+                reason=f"{in_window} {unit}(s) were already done for {k} within the last {D} days (the "
+                       f"limit of {N}), so a new one is blocked until that key's window clears.")
         out.append(e)
     return out
 
 
 def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
-                       approvers: list, base_day: str = "W01-1", starting_total: int = 0, id_offset: int = 0) -> list:
+                       approvers: list, base_day: str = "W01-1", starting_total: int = 0, id_offset: int = 0,
+                       outcomes: dict | None = None, unit: str = "approval") -> list:
     """Cumulative cap with an APPROVER (submit + approve per quote). Builds amounts BY
     CONSTRUCTION so the running approved total approaches the cap from `starting_total`, a
     concurrent pair of approvals sits at the boundary (one fits the remaining budget, one
@@ -179,24 +187,25 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
         if total + amt <= cap:
             total += amt
             e.expect = EventExpect(
-                action=f"{apr_name} approves {qid} (${amt:,}); it is approved in HubSpot and the "
-                       f"approval is posted in Slack.",
-                reason=f"approving ${amt:,} keeps the quarter's approved discount at ${total:,}, "
-                       f"within the ${cap:,} cap.")
+                action=_fill_outcome(outcomes, "approved",
+                    f"{apr_name} approves {qid} (${amt:,}); it is approved in HubSpot and the approval is posted in Slack.",
+                    ID=qid, ENTITY=apr_name, AMOUNT=f"{amt:,}"),
+                reason=f"the {unit} of ${amt:,} keeps the running approved total at ${total:,}, within the ${cap:,} cap.")
         else:
             e.expect = EventExpect(
-                action=f"{apr_name} approves {qid}, BUT the system holds it for exception handling and "
-                       f"no approval is recorded — the approver acts, but the approval cannot take effect "
-                       f"because it would breach the cap.",
-                reason=f"approving ${amt:,} would push the quarter's approved discount from "
-                       f"${total:,} to ${total + amt:,}, over the ${cap:,} cap, so the system intercepts "
-                       f"the approval and routes it to exception handling.")
+                action=_fill_outcome(outcomes, "held",
+                    f"{apr_name} approves {qid}, BUT the system holds it for exception handling and no "
+                    f"approval is recorded — the approver acts, but it cannot take effect because it would breach the cap.",
+                    ID=qid, ENTITY=apr_name, AMOUNT=f"{amt:,}"),
+                reason=f"the {unit} of ${amt:,} would push the running total from ${total:,} to ${total + amt:,}, "
+                       f"over the ${cap:,} cap, so the system intercepts it and routes it to exception handling.")
     # submissions are always handled
     for e in events:
         qid = re.search(r"Q-\d+", e.input)
-        e.expect = EventExpect(action=f"The quote {qid.group() if qid else ''} is recorded in HubSpot "
-                                      f"and an approval request is sent to the approvers.",
-                               reason="a submission is always accepted; it does not approve anything.")
+        e.expect = EventExpect(action=_fill_outcome(outcomes, "submitted",
+                    f"The quote {qid.group() if qid else ''} is recorded in HubSpot and an approval request is sent.",
+                    ID=qid.group() if qid else ""),
+                               reason="a submission is always accepted; it does not perform the gated action.")
     return events + [e for e, *_ in approve_events]
 
 
