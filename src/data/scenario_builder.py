@@ -69,56 +69,70 @@ def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
     return events
 
 
+def _second_sku(seed: str, exclude: str):
+    import json
+    try:
+        d = json.loads(seed)
+    except Exception:
+        return None
+    skus = (d.get("catalog") or {}).get("skus") if isinstance(d.get("catalog"), dict) else d.get("skus")
+    for s in (skus or []):
+        c = s.get("sku") if isinstance(s, dict) else s
+        if c and c != exclude:
+            return c
+    return None
+
+
 def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                               base_day: str = "W01-1", id_offset: int = 0) -> list:
-    """Per-key rolling-window rate limit (N per key per D days). Builds BY CONSTRUCTION for one
-    key: (N-1) accepted requests inside the window, a concurrent pair at the last slot (one
-    accepted, one blocked), and a post-window request (>D days later) that is allowed again.
-    `phrase(req_id, is_blocked, key)` returns the input text (the input never states the outcome)."""
+    """Per-key rolling-window rate limit (N per key per D days). Builds BY CONSTRUCTION for the
+    main key: (N-1) accepted inside the window, a concurrent pair at the last slot (one accepted,
+    one blocked), a post-window reset. It ALSO fires one request for a SECOND key while the main
+    key is at its limit — allowed, proving the limit is PER-KEY, not global. Simulated per-key.
+    `phrase(req_id, is_blocked, key)` returns the input text (never states the outcome)."""
     N = _parse_limit(threshold)
     D = _parse_window_days(threshold)
     week, day = int(base_day[1:3]), int(base_day[4:])
-    events, descr = [], []  # descr: parallel {when, concurrent_group} with derived outcome
+    key2 = _second_sku(seed, key)
+    events: list = []   # list of (event, key)
 
-    def add(text, when, cg=None):
-        events.append(_ev(len(events) + 1, text, when, cg))
+    def add(text, when, k, cg=None):
+        events.append((_ev(len(events) + 1, text, when, cg), k))
 
-    rid = lambda k: f"REQ-{k + id_offset:04d}"
+    rid = lambda i: f"REQ-{i + id_offset:04d}"
     n = 0
-    # (N-1) accepted, spaced 2 days apart, all inside the window
-    for i in range(N - 1):
-        n += 1
-        add(phrase(rid(n), False, key), f"W{week:02d}-{day + i * 2}T09:00")
-    # concurrent pair at the last in-window slot
-    pair_day = day + (N - 1) * 2
-    n += 1; add(phrase(rid(n), False, key), f"W{week:02d}-{pair_day}T11:00", "cg_limit")
-    n += 1; add(phrase(rid(n), True, key), f"W{week:02d}-{pair_day}T11:00", "cg_limit")
-    # post-window reset: > D days after the LAST in-window request (the pair), so all aged out
-    reset_abs = (week - 1) * 7 + pair_day + D + 1
-    n += 1; add(phrase(rid(n), False, key), f"W{(reset_abs - 1) // 7 + 1:02d}-{(reset_abs - 1) % 7 + 1}T09:00")
+    for i in range(N - 1):                          # (N-1) accepted for the main key, in-window
+        n += 1; add(phrase(rid(n), False, key), f"W{week:02d}-{day + i * 2}T09:00", key)
+    pair_day = day + (N - 1) * 2                     # concurrent pair at the last in-window slot
+    n += 1; add(phrase(rid(n), False, key), f"W{week:02d}-{pair_day}T11:00", key, "cg_limit")
+    n += 1; add(phrase(rid(n), True, key), f"W{week:02d}-{pair_day}T11:00", key, "cg_limit")
+    if key2:                                         # a SECOND key, same window → ALLOWED (per-key)
+        n += 1; add(phrase(rid(n), False, key2), f"W{week:02d}-{pair_day}T13:00", key2)
+    reset_abs = (week - 1) * 7 + pair_day + D + 1    # main-key post-window reset
+    n += 1; add(phrase(rid(n), False, key), f"W{(reset_abs - 1) // 7 + 1:02d}-{(reset_abs - 1) % 7 + 1}T09:00", key)
 
-    # simulate the sliding window (single key) to derive every expect
-    accepted_days: list[int] = []
-    for e in events:
+    # simulate the sliding window PER KEY
+    accepted: dict[str, list[int]] = {}
+    out = []
+    for e, k in events:
         d = _abs_day(e.when)
-        in_window = sum(1 for ad in accepted_days if d - ad < D)
+        in_window = sum(1 for ad in accepted.get(k, []) if d - ad < D)
         if in_window < N:
-            aged = any(d - ad >= D for ad in accepted_days)
-            accepted_days.append(d)
-            reset_note = (f" More than {D} days have passed since the earlier reorders, which have aged "
-                          f"out of the rolling {D}-day window, so the limit no longer applies." if aged else "")
+            aged = any(d - ad >= D for ad in accepted.get(k, []))
+            accepted.setdefault(k, []).append(d)
+            note = (f" More than {D} days have passed since the earlier reorders for {k}, which have "
+                    f"aged out of the rolling {D}-day window." if aged else "")
             e.expect = EventExpect(
-                action=f"{_ev_ref(e)} for {key} is at/below its reorder level and a reorder request "
-                       f"IS sent to the supplier.",
-                reason=f"only {in_window} reorder(s) for {key} in the last {D} days (< {N}), so the "
-                       f"reorder is allowed.{reset_note}")
+                action=f"{_ev_ref(e)} for {k} is at/below its reorder level and a reorder request IS sent to the supplier.",
+                reason=f"only {in_window} reorder(s) for {k} in the last {D} days (< {N}); the limit is "
+                       f"PER SKU, so {k} is unaffected by other SKUs.{note}")
         else:
             e.expect = EventExpect(
-                action=f"NO new reorder is sent for {_ev_ref(e)} ({key}); only the routine inventory "
-                       f"reply goes out.",
-                reason=f"{in_window} reorders were already sent for {key} within the last {D} days "
-                       f"(the limit of {N}), so a new reorder is blocked until the window clears.")
-    return events
+                action=f"NO new reorder is sent for {_ev_ref(e)} ({k}); only the routine inventory reply goes out.",
+                reason=f"{in_window} reorders were already sent for {k} within the last {D} days (the "
+                       f"limit of {N}), so a new reorder is blocked until that SKU's window clears.")
+        out.append(e)
+    return out
 
 
 def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,

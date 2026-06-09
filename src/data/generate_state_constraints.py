@@ -85,6 +85,24 @@ def _valid_seed(s: str) -> bool:
         return False
 
 
+def _trim_seed(seed_str: str, mx: int = 3) -> str:
+    """Keep scenarios SMALL (less agent traffic): cap each entity list (reps / approvers / SKUs)
+    to `mx` — the minimum needed to demonstrate the invariant. SKUs stay >=2 so the per-SKU
+    generalization still shows."""
+    import json as _json
+    try:
+        d = _json.loads(seed_str)
+    except Exception:
+        return seed_str
+    cat = d.get("catalog") if isinstance(d.get("catalog"), dict) else d
+    changed = False
+    for container, lk in [(d, "reps"), (d, "approvers"), (cat, "skus")]:
+        if isinstance(container, dict) and isinstance(container.get(lk), list) and len(container[lk]) > mx:
+            container[lk] = container[lk][:mx]
+            changed = True
+    return _json.dumps(d) if changed else seed_str
+
+
 def concurrent_pair_issues(events: list[dict], threshold: str) -> list[str]:
     """The simultaneous pair only RACES if its key already has exactly (limit-1) accepted
     same-key requests in-window — then the two arrivals compete for the last slot (one
@@ -430,6 +448,7 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     if gen is None:
         return spec, False
 
+    gen.seed = _trim_seed(gen.seed)            # cap entities (reps/approvers/skus) → small scenarios
     spec.seed = gen.seed
     spec.phrasings = gen.phrasings
     spec.decorations = gen.decorations

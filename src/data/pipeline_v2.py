@@ -245,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mod-type", type=str, choices=list(MODIFICATION_TYPES.keys()) + ["mixed"], default=None)
     p.add_argument("--mods-per-scenario", type=int, default=1)
     p.add_argument("--ambiguity", type=str, choices=list(AMBIGUITY_DESCRIPTIONS.keys()) + ["random"], default="random")
-    p.add_argument("--events-before", type=int, default=1)
+    p.add_argument("--events-before", type=int, default=0)
     p.add_argument("--events-after", type=int, default=2)
     p.add_argument("--events-unrelated", type=int, default=None)
     p.add_argument("--id", dest="ids", metavar="ID", action="append", default=None)

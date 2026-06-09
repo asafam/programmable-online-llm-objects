@@ -31,12 +31,14 @@ user_prompt: |
 
   4. `seed` — the INITIAL REFERENCE STATE the system reads, as a single JSON OBJECT serialized to a
      string (it becomes the read-service mock data verbatim). Standing facts only, CONCRETE realistic
-     names/values (NO placeholders, NO "#1"). Shape it to the type:
+     names/values (NO placeholders, NO "#1"). Keep it MINIMAL — the FEWEST entities that demonstrate
+     the invariant (2-3 reps, 2-3 SKUs, exactly 2 approvers) — a large roster floods the system with
+     traffic. Shape it to the type:
        - counter   → {"reps":[{"name":"Maya Patel","position":1,"daily_lead_cap":2},
-                      {"name":"Jordan Lee","position":2,"daily_lead_cap":2},
-                      {"name":"Carlos Ramirez","position":3,"daily_lead_cap":2}]}
+                      {"name":"Jordan Lee","position":2,"daily_lead_cap":2}]}   (2-3 reps, NOT more)
        - rate_limit→ {"catalog":{"skus":[{"sku":"A100-XL","reorder_level":10,"on_hand":6,"reorders_last_7d":0},
-                      {"sku":"B205-M","reorder_level":8,"on_hand":25,"reorders_last_7d":0}]}}
+                      {"sku":"B205-M","reorder_level":8,"on_hand":25,"reorders_last_7d":0}]}}   (2-3 SKUs — the
+                      limit is PER SKU, so a second SKU is REQUIRED to show it generalizes)
        - cap       → {"approvers":["Daniel Kim","Olivia Chen"],
                       "quarter_to_date_approved_discount":0,"discount_cap":50000}
      Include every entity the scenario reads. NO outcomes, NO assignments, NO post-event counts.
@@ -47,13 +49,16 @@ user_prompt: |
        - counter    → ONE, role="request":  "A new lead {ID} {DECO} is submitted via the web form."
        - rate_limit → ONE, role="request":  "An inventory request {ID} for SKU {KEY} arrives by email {DECO}."
        - cap        → TWO (the action is taken by a DISTINCT APPROVER the steps name — there is no
-                      auto-approval):
-           role="submit":  "An account executive submits quote {ID} in HubSpot requesting a ${AMOUNT} discount {DECO}."
+                      auto-approval). The submission MUST name the submitting SALES REP (via {DECO})
+                      so the rep→approver chain is clear:
+           role="submit":  "Sales rep {DECO} submits quote {ID} in HubSpot requesting a ${AMOUNT} discount."
            role="approve": "{APPROVER} approves quote {ID} in Slack."
      Put NO number, count, date, status, or outcome in a phrasing — only the placeholders + flavor.
 
-  6. `decorations` — 8–12 short realistic NL fragments to vary requests (filled into {DECO}), e.g.
-     "from Northwind Logistics requesting a demo", "from BluePeak Retail interested in pricing".
+  6. `decorations` — 8–12 short realistic NL fragments to vary requests (filled into {DECO}). For
+     counter/rate_limit these are customer/company flavor ("from Northwind Logistics requesting a demo").
+     For cap, {DECO} is the SUBMITTING SALES REP — make each a rep name + account, e.g.
+     "James Brown (for Acme Corp)", "Laura Chen (for Globex)".
 
   7. `key` — rate_limit ONLY: the exact SKU code (from the seed catalog) the scenario exercises.
      Leave empty for cap/counter.
