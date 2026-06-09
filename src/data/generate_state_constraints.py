@@ -125,8 +125,8 @@ def concurrent_pair_issues(events: list[dict], threshold: str) -> list[str]:
 
 
 def _parse_limit(threshold: str, default: int = 2) -> int:
-    m = _re.search(r"\d+", threshold or "")
-    return int(m.group()) if m else default
+    m = _re.search(r"\d[\d,]*", threshold or "")   # handle thousands separators ("$50,000" → 50000)
+    return int(m.group().replace(",", "")) if m else default
 
 
 def _seed_reps(seed_str: str):
