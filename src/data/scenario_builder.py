@@ -40,7 +40,8 @@ def _ev(n: int, text: str, when: str, cg: str | None = None) -> SpecEventWithExp
 def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
                            base_day: str = "W01-1", reset_day: str = "W01-2", id_offset: int = 0,
                            outcomes: dict | None = None, unit: str = "assignment",
-                           flip_old_limit: int | None = None, entities: list | None = None) -> list:
+                           flip_old_limit: int | None = None, entities: list | None = None,
+                           exempt: str | None = None) -> list:
     """Round-robin / per-key daily counter — DOMAIN-GENERIC (reps/channels/agents). Builds,
     BY CONSTRUCTION:
       - (cap*R - 1) requests in round-robin order (all assigned) → leaves exactly ONE slot open,
@@ -70,7 +71,8 @@ def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
     # Derive every expect deterministically by simulating the rotation over the built sequence.
     sim = simulate_rotation(seed, [{"id": e.id, "input": e.input, "when": e.when,
                                     "concurrent_group": e.concurrent_group} for e in events], threshold,
-                            outcomes=outcomes, unit=unit, flip_old_limit=flip_old_limit, entities=entities)
+                            outcomes=outcomes, unit=unit, flip_old_limit=flip_old_limit, entities=entities,
+                            exempt=exempt)
     for e, s in zip(events, sim):
         e.expect = EventExpect(action=s["action"], reason=s["reason"])
     return events
@@ -98,13 +100,17 @@ def _second_key(seed: str, exclude: str, keys: list | None = None):
 def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                               base_day: str = "W01-1", id_offset: int = 0,
                               outcomes: dict | None = None, unit: str = "reorder",
-                              flip_old_limit: int | None = None, keys: list | None = None) -> list:
+                              flip_old_limit: int | None = None, keys: list | None = None,
+                              flip_old_window: int | None = None,
+                              exempt_key: str | None = None) -> list:
     """Per-key rolling-window rate limit (N per key per D days) — DOMAIN-GENERIC (SKUs/categories/
     contacts). Builds BY CONSTRUCTION for the main key: (N-1) accepted inside the window, a
     concurrent pair at the last slot (one accepted, one blocked), a post-window reset. It ALSO
     fires one request for a SECOND key while the main key is at its limit — allowed, proving the
     limit is PER-KEY, not global. `keys` (preferred) lists the limit-tracked key values.
-    `phrase(req_id, is_blocked, key)` returns the input text (never states the outcome)."""
+    Mod-dimension flips: `flip_old_window` marks events still in-window under the OLD window length
+    (blocked-then, allowed-now); `exempt_key` ignores the limit for that key (its beyond-limit
+    events are the FLIP). `phrase(req_id, is_blocked, key)` returns the input text."""
     N = _parse_limit(threshold)
     D = _parse_window_days(threshold)
     DAYS = f"{D} day" + ("s" if D != 1 else "")
@@ -137,8 +143,11 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
     out = []
     for e, k in events:
         d = _abs_day(e.when)
+        is_exempt = exempt_key is not None and k == exempt_key
         in_window = sum(1 for ad in accepted.get(k, []) if d - ad < D)
-        if in_window < N:
+        in_old_window = (sum(1 for ad in accepted.get(k, []) if d - ad < flip_old_window)
+                         if flip_old_window else 0)
+        if in_window < N or is_exempt:
             aged = any(d - ad >= D for ad in accepted.get(k, []))
             accepted.setdefault(k, []).append(d)
             note = (f" More than {DAYS} have passed since the earlier {unit}s for {k}, which have "
@@ -146,12 +155,27 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
             flip = (f" THIS IS THE FLIP: the original limit of {flip_old_limit} would have BLOCKED "
                     f"this {unit} (#{in_window + 1} for {k} in the window), but the modification "
                     f"(limit {N}) ALLOWS it." if flip_old_limit and in_window >= flip_old_limit else "")
-            e.expect = EventExpect(
-                action=_fill_outcome(outcomes, "allowed",
-                    f"the {unit} for {k} is within the limit and IS performed ({_ev_ref(e)}).",
-                    ID=_ev_ref(e), KEY=k),
-                reason=f"only {in_window} {unit}(s) for {k} in the last {DAYS} (< {N}); the limit is "
-                       f"PER key, so {k} is unaffected by other keys.{note}{flip}")
+            if flip_old_window and in_old_window >= N:
+                flip = (f" THIS IS THE FLIP: under the original {flip_old_window}-day window, "
+                        f"{in_old_window} earlier {unit}(s) for {k} would still be in-window (>= {N}) "
+                        f"and this would have been BLOCKED; the modification ({D}-day window) lets "
+                        f"them age out and ALLOWS it.")
+            if is_exempt and in_window >= N:
+                e.expect = EventExpect(
+                    action=_fill_outcome(outcomes, "allowed",
+                        f"the {unit} for {k} is within the limit and IS performed ({_ev_ref(e)}).",
+                        ID=_ev_ref(e), KEY=k),
+                    reason=f"{k} is exempt from the rolling-window limit, so the {unit} proceeds "
+                           f"(#{in_window + 1} in the window). THIS IS THE FLIP: without the "
+                           f"exemption, the limit of {N} per {DAYS} would have BLOCKED this {unit}; "
+                           f"the modification exempts {k}, so it is allowed.")
+            else:
+                e.expect = EventExpect(
+                    action=_fill_outcome(outcomes, "allowed",
+                        f"the {unit} for {k} is within the limit and IS performed ({_ev_ref(e)}).",
+                        ID=_ev_ref(e), KEY=k),
+                    reason=f"only {in_window} {unit}(s) for {k} in the last {DAYS} (< {N}); the limit is "
+                           f"PER key, so {k} is unaffected by other keys.{note}{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "blocked",

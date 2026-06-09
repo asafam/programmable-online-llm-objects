@@ -119,6 +119,27 @@ def deterministic_issues(s: Sample) -> list[str]:
             known = seed_skus | set(s.keys)
             if named and known and not (named & known):
                 issues.append(f"irrelevant event names key {sorted(named)} absent from the seed/keys")
+    # the workflow must cover ALL the invariant's entities — steps that name SOME members of the
+    # rotation but not others mean the system was grounded too narrowly (e.g. monitoring one
+    # channel of three). Steps naming NO member (fully generic phrasing) are fine.
+    ents = s.entities or []
+    if len(ents) > 1 and s.steps:
+        steps_text = " ".join(s.steps)
+        mentioned = [x for x in ents if x in steps_text]
+        if mentioned and len(mentioned) < len(ents):
+            issues.append(f"steps specialize to {mentioned} but the invariant covers all of {ents}")
+        # the same narrowing in the object graph: behaviors scoping to a strict subset
+        obj_text = " ".join(f"{o.role or ''} {o.behavior or ''}" for o in s.objects)
+        obj_mentioned = [x for x in ents if x in obj_text]
+        if obj_mentioned and len(obj_mentioned) < len(ents):
+            issues.append(f"object behaviors specialize to {obj_mentioned} but the invariant covers all of {ents}")
+
+    # events are RAW STIMULI — "is detected/captured/processed" is the system's job, not the event's
+    processed = [e.id for e in s.events if e.role in ("base", "post_mod")
+                 and re.search(r"\bis (detected|captured|processed|triaged)\b", e.input, re.I)]
+    if processed:
+        issues.append(f"events phrased as system processing, not raw stimulus: {processed[:4]}")
+
     # cap: the approval request is emailed to the manager — approvers must carry email addresses
     if ct == "cap" and s.seed:
         try:

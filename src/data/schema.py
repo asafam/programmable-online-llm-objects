@@ -396,6 +396,7 @@ class Sample(BaseModel):
     template: list[str] = Field(default_factory=list)  # raw/abstract base steps (the original template)
     seed: str = ""  # initial reference state the system reads (roster/catalog/approvers/starting totals)
     keys: list[str] = Field(default_factory=list)  # rate_limit: limit-tracked key values (for verification)
+    entities: list[str] = Field(default_factory=list)  # counter: rotation members (for verification)
     objects: list[ObjectDef] = Field(default_factory=list)
     llm_classes: list[LLMClassDef] = Field(default_factory=list, description="llm-class templates available for spawning during evaluation")
     steps: list[str] = Field(default_factory=list)  # grounded workflow steps (incl. the state-constraint step)

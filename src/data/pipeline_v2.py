@@ -211,7 +211,8 @@ def run(args: argparse.Namespace) -> Path:
     print("\n" + "=" * 60 + "\nPHASE 1c: MODIFICATIONS\n" + "=" * 60)
     generate_mods.run(_common(
         args, input=spec_path, output=mods_path,
-        mod_type=args.mod_type, mods_per_scenario=args.mods_per_scenario,
+        mod_type=args.mod_type, mod_dim=args.mod_dim,
+        mods_per_scenario=args.mods_per_scenario,
         ambiguity=args.ambiguity, events_before=args.events_before,
         events_after=args.events_after, events_unrelated=args.events_unrelated,
     ))
@@ -253,6 +254,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input", "-i", type=Path, required=True, help="Raw templates YAML")
     p.add_argument("--target-dir", "-t", type=Path, required=True, help="Directory for all artifacts")
     p.add_argument("--mod-type", type=str, choices=list(MODIFICATION_TYPES.keys()) + ["mixed"], default=None)
+    p.add_argument("--mod-dim", type=str, choices=["limit", "window", "exempt", "mixed"], default="mixed",
+                   help="state-scenario modification DIMENSION (mixed = stable per-template pick)")
     p.add_argument("--mods-per-scenario", type=int, default=1)
     p.add_argument("--ambiguity", type=str, choices=list(AMBIGUITY_DESCRIPTIONS.keys()) + ["random"], default="random")
     p.add_argument("--events-before", type=int, default=0)

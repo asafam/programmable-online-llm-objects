@@ -195,13 +195,15 @@ def _fill_outcome(outcomes, role, fallback, **vals):
 
 def simulate_rotation(seed_str: str, events: list[dict], threshold: str,
                       outcomes: dict | None = None, unit: str = "assignment",
-                      flip_old_limit: int | None = None, entities: list | None = None) -> list[dict]:
+                      flip_old_limit: int | None = None, entities: list | None = None,
+                      exempt: str | None = None) -> list[dict]:
     """DETERMINISTIC round-robin/counter simulation. events: dicts {id, input, when,
     concurrent_group}. Processes in (when, id) order, assigns each lead to the next eligible rep
     in rotation order (under the per-day cap, daily reset), holds when all are capped. The action
     wording comes from the LLM `outcomes` templates (domain-generic) with a built-in fallback.
     `flip_old_limit` (mod scenario): when an allowed event exceeds the OLD limit, the reason marks
-    it as the FLIP (would have been blocked before the modification). Empty list if no roster."""
+    it as the FLIP (would have been blocked before the modification). `exempt` (mod scenario):
+    that member ignores the cap — its beyond-cap assignments are the FLIP. Empty if no roster."""
     reps = _seed_reps(seed_str, entities)
     if not reps:
         return []
@@ -210,7 +212,7 @@ def simulate_rotation(seed_str: str, events: list[dict], threshold: str,
     dcap = _parse_limit(threshold)
     # The THRESHOLD is the invariant — use it as the cap (the seed's per-rep cap is just reference
     # data, and for a modification the threshold changes while the seed still shows the old cap).
-    caps = {nm: dcap for nm in names}
+    caps = {nm: (10 ** 9 if nm == exempt else dcap) for nm in names}
     n = len(names)
     order = sorted(range(len(events)), key=lambda i: (events[i].get("when", ""), events[i].get("id", "")))
     res: dict[int, dict] = {}
@@ -236,10 +238,19 @@ def simulate_rotation(seed_str: str, events: list[dict], threshold: str,
                     f"{counts[assigned]}{'th' if 4 <= counts[assigned] % 100 <= 20 else {1:'st',2:'nd',3:'rd'}.get(counts[assigned] % 10, 'th')} "
                     f"same-day {unit} for {assigned}, but the modification (cap {caps[assigned]}) ALLOWS it."
                     if flip_old_limit and counts[assigned] > flip_old_limit else "")
-            res[i] = {"action": _fill_outcome(outcomes, "allowed",
-                        f"{ref} IS assigned to {assigned} and the {unit} is posted.", ID=ref, ENTITY=assigned),
-                      "reason": f"{assigned} is the next eligible in rotation and is under the per-period "
-                                f"cap of {caps[assigned]} (now {counts[assigned]} of {caps[assigned]}).{flip}"}
+            if assigned == exempt and counts[assigned] > dcap:
+                res[i] = {"action": _fill_outcome(outcomes, "allowed",
+                            f"{ref} IS assigned to {assigned} and the {unit} is posted.", ID=ref, ENTITY=assigned),
+                          "reason": f"{assigned} is exempt from the per-period cap, so the {unit} proceeds "
+                                    f"even beyond {dcap} (now {counts[assigned]})."
+                                    f" THIS IS THE FLIP: without the exemption, {assigned} would be at the "
+                                    f"cap of {dcap} and this {unit} would have been HELD; the modification "
+                                    f"exempts {assigned}, so it is allowed."}
+            else:
+                res[i] = {"action": _fill_outcome(outcomes, "allowed",
+                            f"{ref} IS assigned to {assigned} and the {unit} is posted.", ID=ref, ENTITY=assigned),
+                          "reason": f"{assigned} is the next eligible in rotation and is under the per-period "
+                                    f"cap of {dcap} (now {counts[assigned]} of {dcap}).{flip}"}
         else:
             res[i] = {"action": _fill_outcome(outcomes, "blocked",
                         f"{ref} is NOT assigned to any rep and is held; no {unit} is posted.", ID=ref),
@@ -454,18 +465,40 @@ def _other_key(seed_str: str, exclude: str):
     return None
 
 
-def build_mod_scenario(spec, mod_type: str):
+MOD_DIMS = {"counter": ["limit", "exempt"], "rate_limit": ["limit", "window", "exempt"],
+            "cap": ["limit"]}
+
+
+def pick_mod_dim(spec, choice: str = "mixed") -> str:
+    """Which DIMENSION the modification changes — limit count, window length, or a per-entity
+    exemption — so the dataset's mods aren't all the same N→N±1 shape. `mixed` picks a stable
+    per-template dimension (md5, reproducible across runs)."""
+    from src.data.scenario_builder import _parse_window_days
+    ct = spec.state_constraint.type.value
+    dims = list(MOD_DIMS.get(ct, ["limit"]))
+    # shortening a <3-day window has no room to demonstrate the flip
+    if ct == "rate_limit" and _parse_window_days(spec.state_constraint.threshold) < 3:
+        dims = [d for d in dims if d != "window"]
+    if choice != "mixed":
+        return choice if choice in dims else "limit"
+    import hashlib
+    return dims[int(hashlib.md5(spec.id.encode()).hexdigest(), 16) % len(dims)]
+
+
+def build_mod_scenario(spec, mod_type: str, mod_dim: str = "limit"):
     """CODE-generate the modification + post-mod events for a state scenario: derive the MODIFIED
-    threshold and re-run the family builder so the post-mod scenario EXERCISES the new rule (with a
-    flip — allowed-under-new where it was blocked-under-old). Placed AFTER all base events to avoid
-    date conflicts: rate_limit also uses a DIFFERENT key (no rolling-window overlap), counter lands
-    on a fresh day (daily reset), cap continues the base's running total. Returns (intent, mod_when,
-    post_mod_events)."""
+    rule along `mod_dim` (limit count / window length / per-entity exemption) and re-run the family
+    builder so the post-mod scenario EXERCISES the new rule (with a flip — allowed-under-new where
+    it was blocked-under-old). Placed AFTER all base events to avoid date conflicts: rate_limit
+    also uses a DIFFERENT key (no rolling-window overlap), counter lands on a fresh day (daily
+    reset), cap continues the base's running total. Returns (intent, mod_when, post_mod_events)."""
     from src.data.scenario_builder import _parse_window_days
     ct = spec.state_constraint.type.value
     old_thr = spec.state_constraint.threshold
     old_limit = _parse_limit(old_thr)
     expand = mod_type != "restriction"
+    if mod_dim not in MOD_DIMS.get(ct, ["limit"]):
+        mod_dim = "limit"
 
     latest = max((_ev_abs_day(e.when) for e in spec.base_events if e.when), default=7)
     mod_abs = latest + 1                                     # mod fires after the whole base scenario
@@ -476,31 +509,59 @@ def build_mod_scenario(spec, mod_type: str):
     post_day = _abs_to_day(base_abs)
     key = spec.key
 
+    from src.data.scenario_builder import _second_key
+    new_thr = old_thr
     if ct == "cap":
         new_limit = int(round(old_limit * 1.5)) if expand else int(round(old_limit * 0.67))
-        kw = {"base_day": post_day, "starting_total": _base_cap_total(spec.base_events)}
+        kw = {"base_day": post_day, "starting_total": _base_cap_total(spec.base_events),
+              "flip_old_limit": old_limit}
         cap_noun = f"cumulative {spec.unit} cap" if spec.unit else "cumulative cap"
         intent = (f"Starting now, raise the {cap_noun} to ${new_limit:,} (from ${old_limit:,})."
                   if expand else
                   f"Starting now, lower the {cap_noun} to ${new_limit:,} (from ${old_limit:,}).")
-    else:
+        new_thr = _re.sub(r"\d[\d,]*", str(new_limit), old_thr, count=1)
+
+    elif mod_dim == "window":                        # rate_limit: change the WINDOW length, not N
+        old_D = _parse_window_days(old_thr)
+        new_D = max(1, old_D // 2) if expand else old_D * 2   # shorter window = looser
+        m = _re.search(r"(\d+)([-\s]*(?:[a-z]+[-\s]+)?days?\b)", old_thr, _re.I)
+        new_thr = old_thr[:m.start(1)] + str(new_D) + old_thr[m.end(1):] if m else old_thr
+        key = _second_key(spec.seed, spec.key, spec.keys) or spec.key
+        kw = {"base_day": post_day, "flip_old_window": old_D}
+        intent = (f"Starting now, shorten the rolling window: {new_thr} (instead of {old_thr})."
+                  if expand else
+                  f"Starting now, lengthen the rolling window: {new_thr} (instead of {old_thr}).")
+
+    elif mod_dim == "exempt":                        # one REAL seed entity becomes exempt
+        if ct == "rate_limit":
+            ex = _second_key(spec.seed, "", spec.keys) or spec.key
+            key = ex
+            kw = {"base_day": post_day, "exempt_key": ex}
+            noun = "key"
+        else:
+            roster = spec.entities or [r[0] for r in (_seed_reps(spec.seed) or [])]
+            ex = roster[0] if roster else "the first member"
+            kw = {"base_day": post_day, "reset_day": _abs_to_day(base_abs + 1), "exempt": ex}
+            noun = "member"
+        intent = (f"Starting now, {ex} is exempt from the limit ({old_thr}); "
+                  f"every other {noun} remains limited as before.")
+
+    else:                                            # "limit": change the count N
         new_limit = old_limit + 1 if expand else max(1, old_limit - 1)
         if ct == "rate_limit":
             # a DIFFERENT limit-tracked key → no rolling-window overlap with the base
-            from src.data.scenario_builder import _second_key
             key = _second_key(spec.seed, spec.key, spec.keys) or spec.key
             kw = {"base_day": post_day}
         else:
             kw = {"base_day": post_day, "reset_day": _abs_to_day(base_abs + 1)}  # distinct later day
-
-    new_thr = _re.sub(r"\d[\d,]*", str(new_limit), old_thr, count=1)
-    if ct != "cap":
+        new_thr = _re.sub(r"\d[\d,]*", str(new_limit), old_thr, count=1)
         # DOMAIN-GENERIC intent: the threshold text itself carries the workflow's own nouns
         # ("3 reminder emails per contact within 30 days"), so reuse it verbatim.
         intent = (f"Starting now, allow up to {new_thr} (instead of {old_thr})." if expand else
                   f"Starting now, allow only {new_thr} (instead of {old_thr}).")
+        kw["flip_old_limit"] = old_limit   # mark the event allowed-under-new, blocked-under-old
+
     kw["id_offset"] = 100   # post-mod request ids start at 100+ so they never reuse a base id
-    kw["flip_old_limit"] = old_limit   # mark the event allowed-under-new but blocked-under-old (the FLIP)
     events = _run_builder(ct, spec.seed, new_thr, spec.phrasings, spec.decorations, key, spec.unit,
                           entities=spec.entities, keys=spec.keys, **kw)
     for i, e in enumerate(events, 1):

@@ -88,6 +88,13 @@ user_prompt: |
      The OUTCOME phrasings MUST describe the workflow's REAL gated action (a reorder, an assignment,
      an approval) — make "blocked"/"held" clearly state the action did NOT happen. Put NO number,
      count, or date in any phrasing — only placeholders + flavor.
+     REQUEST = RAW STIMULUS: the request template must read exactly as the SOURCE system would emit
+     it (a webhook payload arriving, an emoji reaction being added, an email landing, a form being
+     submitted). NEVER phrase it as the system's own processing — "is detected", "is captured",
+     "is processed", "is triaged" are FORBIDDEN in the request (detection is the system's job; the
+     OUTCOME phrasings describe what the system then does). The request must also CARRY INLINE all
+     per-event content the workflow later reads (the message text, the amount, the category, the
+     ask) — per-event content cannot live in the seed.
      IMPORTANT — the examples above show the FORMAT per family; phrase EVERY template for THIS
      workflow's actual domain, entities, action, and channels. A different rate_limit might be
      "API calls per user per hour" (not reorders/SKUs); a different counter might be on-call shifts
@@ -101,6 +108,10 @@ user_prompt: |
      customer/company flavor ("from Northwind Logistics requesting a demo"). cap: the customer/account
      the quote is for, e.g. "for Acme Corp's annual renewal", "for the Globex expansion deal" (the
      submitting rep + manager come from the seed, NOT decorations).
+     Decorations MUST be ENTITY-NEUTRAL: never name a seed entity (a rep, SKU, subscription, contact,
+     channel) — code pairs {KEY}/{ENTITY} with decorations INDEPENDENTLY, so an entity-bearing
+     decoration creates contradictions (e.g. a reminder for contact A decorated with contact B's
+     subscription). Invent outside flavor (customers, products, reasons) instead.
 
   8. `entities` — counter ONLY: the rotation members IN ORDER, as a flat list of names EXACTLY as
      they appear in the seed (any domain — reps, channels, agents, queues): e.g.

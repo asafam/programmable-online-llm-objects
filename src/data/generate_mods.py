@@ -58,10 +58,11 @@ def _process_spec(llm, spec: WorkflowSpec, prompt_tmpl: str, args) -> tuple[Work
     # mod changes the invariant's threshold; the post-mod events EXERCISE the new rule (with a flip),
     # placed clear of the base events to avoid date/window conflicts.
     if spec.state_constraint and spec.base_events:
-        from src.data.generate_state_constraints import build_mod_scenario
+        from src.data.generate_state_constraints import build_mod_scenario, pick_mod_dim
         from src.data.schema import SpecModification
         mt = mod_types[0]
-        intent, mod_when, post_events = build_mod_scenario(spec, mt)
+        dim = pick_mod_dim(spec, getattr(args, "mod_dim", "mixed") or "mixed")
+        intent, mod_when, post_events = build_mod_scenario(spec, mt, mod_dim=dim)
         spec.modifications = [SpecModification(id="M001", when=mod_when, intent=intent,
                                                mod_type=ModType(mt), ambiguity=Ambiguity(ambiguity))]
         spec.events = post_events
@@ -158,11 +159,12 @@ def run(args: argparse.Namespace) -> Path:
                 # miss where a state spec slipped through with no modification.
                 if not spec.modifications and spec.state_constraint and spec.base_events:
                     try:
-                        from src.data.generate_state_constraints import build_mod_scenario
+                        from src.data.generate_state_constraints import build_mod_scenario, pick_mod_dim
                         from src.data.schema import SpecModification
                         mt = args.mod_type if args.mod_type not in (None, "mixed") else "expansion"
                         amb = random.choice(list(AMBIGUITY_DESCRIPTIONS.keys())) if args.ambiguity == "random" else args.ambiguity
-                        intent, mod_when, post = build_mod_scenario(spec, mt)
+                        dim = pick_mod_dim(spec, getattr(args, "mod_dim", "mixed") or "mixed")
+                        intent, mod_when, post = build_mod_scenario(spec, mt, mod_dim=dim)
                         spec.modifications = [SpecModification(id="M001", when=mod_when, intent=intent,
                                                               mod_type=ModType(mt), ambiguity=Ambiguity(amb))]
                         spec.events = post
@@ -197,6 +199,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input", "-i", type=Path, required=True)
     p.add_argument("--output", "-o", type=Path, default=None)
     p.add_argument("--mod-type", type=str, choices=list(MODIFICATION_TYPES.keys()) + ["mixed"], default=None)
+    p.add_argument("--mod-dim", type=str, choices=["limit", "window", "exempt", "mixed"], default="mixed",
+                   help="state-scenario modification DIMENSION (mixed = stable per-template pick)")
     p.add_argument("--mods-per-scenario", type=int, default=1)
     p.add_argument("--ambiguity", type=str, choices=list(AMBIGUITY_DESCRIPTIONS.keys()) + ["random"], default="random")
     p.add_argument("--events-before", type=int, default=0)

@@ -109,7 +109,11 @@ def _ground_template(llm, template: dict, prompt_cfg: dict, seed: str = "") -> G
             "- Refer to specific data entities GENERICALLY by their role/position — e.g. 'the rep "
             "currently in position 1', 'the submitting rep's manager', 'the SKU at/below its reorder "
             "level'. Do NOT hard-code specific names, SKUs, or people into the steps (no 'Maya Patel', "
-            "no 'A100-XL') — the seed holds those values; the steps reference them by role/position."
+            "no 'A100-XL') — the seed holds those values; the steps reference them by role/position.\n"
+            "- The workflow COVERS ALL PEERS: when the seed lists multiple peer entities (channels, "
+            "reps, categories, contacts), the workflow monitors/serves ALL of them equally — do NOT "
+            "specialize any step to a single one (not 'monitor #eng-platform' when the seed has three "
+            "channels; write 'monitor each configured channel')."
         )
     return generate_with_retries(
         llm=llm,
