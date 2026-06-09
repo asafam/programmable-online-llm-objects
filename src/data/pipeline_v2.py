@@ -50,13 +50,19 @@ def _scenario_coherence_issues(s) -> list[str]:
     failures annotators flagged: a scenario that never blocks the gated action (so the
     invariant is untestable) and a counter/rate_limit with no period-reset event. Shares the
     term lists + logic with the infuse validator (src.data.generate_state_constraints)."""
-    from src.data.generate_state_constraints import coherence_issues
+    from src.data.generate_state_constraints import coherence_issues, concurrent_pair_issues
     sc = getattr(s, "state_constraint", None)
     if not sc:
         return []
-    texts = [f"{e.expect.action} {e.expect.reason or ''}"
-             for e in s.events if e.role == "base" and e.expect]
-    return coherence_issues(texts, getattr(sc.type, "value", sc.type))
+    base = [e for e in s.events if e.role == "base"]
+    texts = [f"{e.expect.action} {e.expect.reason or ''}" for e in base if e.expect]
+    issues = coherence_issues(texts, getattr(sc.type, "value", sc.type))
+    ev = [{"input": e.input, "when": e.when or "",
+           "action": e.expect.action if e.expect else "",
+           "reason": (e.expect.reason if e.expect else "") or "",
+           "concurrent_group": e.concurrent_group} for e in base]
+    issues += concurrent_pair_issues(ev, sc.threshold or "")
+    return issues
 
 
 def _validate_unified(path: Path) -> int:

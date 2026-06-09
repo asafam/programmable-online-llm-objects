@@ -75,10 +75,14 @@ user_prompt: |
          SUPPRESSED; the expect says the action did NOT happen, with a reason that REFERENCES
          THE ACCUMULATED STATE: "2 reorders were already sent for this SKU within the last
          7 days, so NO new reorder is sent (only the routine data reply goes out)".
-       - REQUIRED — a CONCURRENT pair at the threshold (every workflow): TWO requests sharing
-         the SAME non-empty `when` (e.g. both "W01-1T11:00") and the SAME `concurrent_group`
-         label (e.g. "cg_limit") such that admitting both would breach the limit — exactly ONE
-         gets the action, the other is blocked. Shows the rule holds for simultaneous arrivals.
+       - REQUIRED — a CONCURRENT pair at the threshold (every workflow): TWO requests for the
+         SAME key (same SKU / same rep / same pool) sharing the SAME non-empty `when` (e.g. both
+         "W01-1T11:00") and the SAME `concurrent_group` label (e.g. "cg_limit"). POSITION IT
+         CORRECTLY: that key must ALREADY have exactly (limit − 1) ACCEPTED same-key requests
+         earlier in-window, so the two simultaneous arrivals compete for the ONE remaining slot —
+         one takes it (accepted), the other is blocked. For limit = 2 that means EXACTLY ONE
+         prior accepted same-key request before the pair. A pair on a FRESH key (no prior
+         accepted requests) is WRONG: both are within the limit, so NEITHER should block.
        - REQUIRED for `counter` and `rate_limit` — a RESET / WINDOW-EXPIRY event: a request for
          the SAME key as a blocked one, timestamped PAST the period (the NEXT DAY for a per-day
          counter; 8+ days later for a rolling-7-day limit), which is ALLOWED AGAIN — the action

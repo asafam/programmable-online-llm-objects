@@ -67,6 +67,51 @@ _RESET_TERMS = (
 )
 
 
+import re as _re
+_KEYTOK = _re.compile(r"#\d+|[A-Za-z0-9][A-Za-z0-9-]{3,}")
+
+
+def _is_blocked(text: str) -> bool:
+    return any(b in text.lower() for b in _BLOCK_TERMS)
+
+
+def concurrent_pair_issues(events: list[dict], threshold: str) -> list[str]:
+    """The simultaneous pair only RACES if its key already has exactly (limit-1) accepted
+    same-key requests in-window — then the two arrivals compete for the last slot (one
+    accepted, one blocked). A pair on a FRESH key (0 prior) is wrong: both are within the
+    limit, neither should block. events: dicts {input, when, action, reason, concurrent_group}.
+    Conservative — returns [] when it can't confidently identify the key/limit."""
+    pair = [e for e in events if e.get("concurrent_group")]
+    if len(pair) < 2:
+        return []
+    m = _re.search(r"\d+", threshold or "")
+    if not m:
+        return []
+    limit = int(m.group())
+    if limit < 1:
+        return []
+    # key = distinctive tokens shared by BOTH pair inputs but NOT by every event (drops generic
+    # words like "SKU"/"Inventory"/"lead" common everywhere, leaving the actual key code).
+    pair_keys = set.intersection(*[set(_KEYTOK.findall(e["input"])) for e in pair])
+    everywhere = set.intersection(*[set(_KEYTOK.findall(e["input"])) for e in events])
+    # keep only CODE-like keys (id/SKU/placeholder), not generic lowercase words like "data"
+    key = {k for k in (pair_keys - everywhere)
+           if any(c.isdigit() for c in k) or k.isupper() or k.startswith("#")}
+    if not key:
+        return []
+    pair_when = min((e["when"] for e in pair if e.get("when")), default="")
+    prior = sum(1 for e in events
+                if not e.get("concurrent_group")
+                and (not e.get("when") or e["when"] < pair_when)
+                and any(k in e["input"] for k in key)
+                and not _is_blocked(f"{e.get('action', '')} {e.get('reason', '')}"))
+    if prior != limit - 1:
+        return [f"concurrent pair (key {sorted(key)[:2]}) has {prior} prior accepted same-key "
+                f"request(s); needs limit-1={limit - 1} so the pair races for the last slot "
+                f"(else one is wrongly blocked/allowed)"]
+    return []
+
+
 def coherence_issues(expect_texts: list[str], constraint_type: str) -> list[str]:
     """A state scenario is valid only if its base expects actually exercise the invariant:
     at least one BLOCKS the gated action, and (for counter/rate_limit) one shows the period
@@ -122,7 +167,13 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
         and sum(1 for e in r.base_events if e.concurrent_group) >= 2
         and not coherence_issues(
             [f"{e.expect.action} {e.expect.reason or ''}" for e in r.base_events if e.expect],
-            getattr(r.constraint_type, "value", r.constraint_type)),
+            getattr(r.constraint_type, "value", r.constraint_type))
+        and not concurrent_pair_issues(
+            [{"input": e.input, "when": e.when or "",
+              "action": e.expect.action if e.expect else "",
+              "reason": (e.expect.reason if e.expect else "") or "",
+              "concurrent_group": e.concurrent_group} for e in r.base_events],
+            r.threshold or ""),
     )
     if gen is None:
         return spec, False
