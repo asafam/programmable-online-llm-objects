@@ -140,7 +140,8 @@ def _ground_base_events(llm, grounded: GroundedTemplate, base_events: list, seed
 
 
 def _process_spec(llm, spec: WorkflowSpec, ground_cfg, steps_cfg, ground_be_cfg) -> WorkflowSpec | None:
-    grounded = _ground_template(llm, _template_from_spec(spec), ground_cfg)
+    # Pass the seed so the grounded steps use the SAME entities/roles/titles as the scenario.
+    grounded = _ground_template(llm, _template_from_spec(spec), ground_cfg, seed=spec.seed)
     if not grounded:
         return None
     spec.name = grounded.name
@@ -160,10 +161,15 @@ def _process_spec(llm, spec: WorkflowSpec, ground_cfg, steps_cfg, ground_be_cfg)
             rule = (f"{rule} ({sc.threshold})" if rule else sc.threshold).strip()
         if rule:
             spec.grounded_steps.append(rule)
-    spec_steps = _write_steps_spec(llm, grounded, spec.id, steps_cfg)
-    if not spec_steps:
-        return None
-    spec.steps = spec_steps.steps
+    # State scenarios drop the external-trigger S-events in binding (the code-built base IS the
+    # test), so don't spend a call generating them — and they were a source of seed drift.
+    if spec.state_constraint:
+        spec.steps = []
+    else:
+        spec_steps = _write_steps_spec(llm, grounded, spec.id, steps_cfg)
+        if not spec_steps:
+            return None
+        spec.steps = spec_steps.steps
     spec.base_events, spec.seed = _ground_base_events(
         llm, grounded, spec.base_events, spec.seed, ground_be_cfg)
     spec.base_events = _normalize_concurrent_whens(spec.base_events)

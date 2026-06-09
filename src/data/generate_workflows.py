@@ -93,12 +93,22 @@ def _format_objects(graph: ObjectGraph) -> str:
     return "\n".join(lines)
 
 
-def _ground_template(llm, template: dict, prompt_cfg: dict) -> GroundedTemplate | None:
-    """Stage 1a: resolve abstract placeholders into specific concrete values."""
-    prompt = (
-        prompt_cfg["prompt"]
-        .replace("{TEMPLATE}", _format_template(template))
-    )
+def _ground_template(llm, template: dict, prompt_cfg: dict, seed: str = "") -> GroundedTemplate | None:
+    """Stage 1a: resolve abstract placeholders into specific concrete values. When a `seed` (the
+    state scenario's structured reference data) is supplied, the grounded steps are CONSTRAINED to
+    that seed's exact entities/roles/titles — so the workflow description and the seed/scenario
+    stay in sync (no drift between 'Sales Manager' in a step and 'Regional Sales Director' in seed)."""
+    prompt = prompt_cfg["prompt"].replace("{TEMPLATE}", _format_template(template))
+    if seed:
+        prompt += (
+            f"\n\n## Reference state (SEED) — the system's read-only data for THIS scenario\n{seed}\n\n"
+            "CRITICAL — keep the grounded steps CONSISTENT with this seed: use the SAME people, roles, "
+            "TITLES, SKUs, and approvers exactly as the seed names them (e.g. if the seed's approver is "
+            "titled 'Regional Sales Director', do NOT call them 'Sales Manager'). Refer to the roster / "
+            "catalog / approvers as the seed defines them, and do NOT introduce any person, role, title, "
+            "SKU, or approver that is absent from the seed. Where approval routes to a manager, describe "
+            "it as routing to the submitting rep's manager per the seed's mapping."
+        )
     return generate_with_retries(
         llm=llm,
         prompt=prompt,
