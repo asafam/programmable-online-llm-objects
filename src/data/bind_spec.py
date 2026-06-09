@@ -183,8 +183,9 @@ def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict
                     run_tag: str | None = None) -> Sample:
     """Pure binding + assembly: bind recipients/targets and build the unified Sample.
     Raises ValueError if a recipient/target cannot be resolved to an object_id.
-    run_tag (optional) makes the sample `id` unique per run (`{template}__{run_tag}`) while
-    `sample_id` stays the template id for grouping — needed for the freeze-on-write upload."""
+    The sample `id` IS the template id — plain, never suffixed (user rule: no per-run id
+    variants like `__{run_tag}`; the dataset name+version carries the versioning). run_tag is
+    accepted for call-compat but no longer alters the id."""
     for obj in graph.objects:
         obj.object_id = slugify(obj.object_id)
         for p in obj.peers:
@@ -241,7 +242,7 @@ def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict
             raise ValueError(f"{spec.id}: modification {m.id} target '{m.target}' ∉ objects")
 
     return Sample(
-        id=f"{spec.id}__{run_tag}" if run_tag else spec.id, sample_id=spec.id,
+        id=spec.id, sample_id=spec.id,
         name=spec.name, domain=spec.domain,
         source_type=spec.source_type, link=spec.link,
         template=list(spec.template),          # raw base steps

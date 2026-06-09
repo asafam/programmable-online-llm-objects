@@ -121,10 +121,10 @@ def test_every_event_is_timed_and_triggers_spread():
     assert len({e.when for e in trig}) == len(trig), "trigger steps must have distinct times"
 
 
-def test_run_tag_versions_sample_id():
-    """run_tag makes the sample id unique per run, keeping sample_id for grouping."""
+def test_sample_id_is_plain_template_id():
+    """The sample id IS the template id — never suffixed, even when a run_tag is passed
+    (user rule: no per-run id variants; dataset name+version carries the versioning)."""
     s = B.assemble_sample(_spec(), _graph(), run_tag="20260608_state_timed")
-    assert s.id == "rr__20260608_state_timed"
+    assert s.id == "rr"
     assert s.sample_id == "rr"
-    # default (no run_tag) keeps the plain id
     assert B.assemble_sample(_spec(), _graph()).id == "rr"
