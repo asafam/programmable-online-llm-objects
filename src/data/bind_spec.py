@@ -194,12 +194,15 @@ def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict
     business = _business_objects(graph)
 
     events: list[Event] = []
-    # external-trigger steps → base events (S###)
-    for i, s in enumerate(spec.steps, 1):
-        rcpt = _bind_recipient(s.text, entries)
-        events.append(Event(id=f"S{i:03d}", call_type="send", source=s.source,
-                            recipient=rcpt, input=s.text, when=_step_when(i),
-                            expect=s.expect, role="base"))
+    # external-trigger steps → base events (S###). SKIP for state scenarios: the code-built SC
+    # events ARE the test and use the seed's entities, whereas these LLM-grounded trigger steps
+    # reference entities (approvers/SKUs) absent from the seed — an inconsistency reviewers flag.
+    if not spec.state_constraint:
+        for i, s in enumerate(spec.steps, 1):
+            rcpt = _bind_recipient(s.text, entries)
+            events.append(Event(id=f"S{i:03d}", call_type="send", source=s.source,
+                                recipient=rcpt, input=s.text, when=_step_when(i),
+                                expect=s.expect, role="base"))
     # state-infused base scenario (SC###) — preserve cumulative expects
     sc_remap = {}
     for i, se in enumerate(spec.base_events, 1):

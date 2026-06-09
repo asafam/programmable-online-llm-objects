@@ -71,8 +71,8 @@ def test_assemble_is_eval_compatible():
     # every recipient/target resolves to a real object
     assert all(e.recipient in ids for e in s.events)
     assert all(m.target in ids for m in s.modifications)
-    # base scenario present, roles carried, ids unique, references remapped
-    assert sum(1 for e in s.events if e.role == "base") == 3
+    # base scenario present (state scenario → only the SC code-built events, trigger S### dropped)
+    assert sum(1 for e in s.events if e.role == "base") == 2
     assert len({e.id for e in s.events}) == len(s.events)
     sc2 = next(e for e in s.events if e.id == "SC002")
     assert sc2.triggered_by == "SC001" and sc2.depends_on == ["SC001"]

@@ -142,23 +142,36 @@ def run(args: argparse.Namespace) -> Path:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     ok = 0
     fail = 0
-    write_lock = threading.Lock()
+    # State scenarios are code-generated and DETERMINISTIC — process them SEQUENTIALLY (the parallel
+    # pool intermittently dropped one sample's mod). Only the LLM-path specs need the thread pool.
+    state_pending = [s for s in pending if s.state_constraint and s.base_events]
+    llm_pending = [s for s in pending if not (s.state_constraint and s.base_events)]
     with open(args.output, file_mode) as f:
         with tqdm(total=len(pending), desc="Modifications") as pbar:
-            with ThreadPoolExecutor(max_workers=workers) as ex:
-                futs = {ex.submit(_process_spec, llm, s, prompt_tmpl, args): s for s in pending}
-                for fut in as_completed(futs):
-                    s = futs[fut]
-                    try:
-                        spec, okk = fut.result()
-                    except Exception as e:
-                        tqdm.write(f"  FAILED {s.id}: {e}", file=sys.stderr)
-                        spec, okk = s, False
-                    with write_lock:
-                        f.write(spec.model_dump_json() + "\n")
-                        f.flush()
-                    ok += int(okk); fail += int(not okk)
-                    pbar.update(1)
+            for s in state_pending:
+                try:
+                    spec, okk = _process_spec(llm, s, prompt_tmpl, args)
+                except Exception as e:
+                    tqdm.write(f"  FAILED {s.id}: {e}", file=sys.stderr)
+                    spec, okk = s, False
+                f.write(spec.model_dump_json() + "\n"); f.flush()
+                ok += int(okk); fail += int(not okk); pbar.update(1)
+            if llm_pending:
+                write_lock = threading.Lock()
+                with ThreadPoolExecutor(max_workers=workers) as ex:
+                    futs = {ex.submit(_process_spec, llm, s, prompt_tmpl, args): s for s in llm_pending}
+                    for fut in as_completed(futs):
+                        s = futs[fut]
+                        try:
+                            spec, okk = fut.result()
+                        except Exception as e:
+                            tqdm.write(f"  FAILED {s.id}: {e}", file=sys.stderr)
+                            spec, okk = s, False
+                        with write_lock:
+                            f.write(spec.model_dump_json() + "\n")
+                            f.flush()
+                        ok += int(okk); fail += int(not okk)
+                        pbar.update(1)
     print(f"\nComplete. Output: {args.output}\nModifications added: {ok}, failed: {fail}")
     return args.output
 

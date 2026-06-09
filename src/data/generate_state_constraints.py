@@ -35,6 +35,7 @@ from tqdm import tqdm
 load_dotenv()
 
 from src.data.schema import (
+    EventExpect,
     GeneratedScenarioSpec,
     GeneratedStateConstraint,
     SpecEventWithExpect,
@@ -448,6 +449,20 @@ def build_mod_scenario(spec, mod_type: str):
         e.id = f"PM{i:03d}"
         e.role = "post_mod"
         e.after_mod_ids = ["M001"]
+
+    # IRRELEVANT post-mod event: a request OUTSIDE the invariant, handled normally — proves the
+    # modification is scoped and does NOT change unrelated behavior.
+    irr_tmpl = {p.role: p.template for p in spec.phrasings}.get("irrelevant")
+    if irr_tmpl:
+        last_abs = max((_ev_abs_day(e.when) for e in events if e.when), default=_ev_abs_day(mod_when))
+        irr_input = _re.sub(r"\{[A-Z_]+\}", "", irr_tmpl.replace("{ID}", "IRR-0001")).strip()
+        events.append(SpecEventWithExpect(
+            id="IRR001", call_type="send_event", source="__external__", input=irr_input,
+            when=_abs_to_day(last_abs + 1) + "T09:00", role="irrelevant", after_mod_ids=["M001"],
+            expect=EventExpect(
+                action="The request is handled normally; the modification does not change it.",
+                reason=f"this request is outside the {spec.unit or 'gated'} invariant, so the rule "
+                       f"change does not apply to it.")))
     return intent, mod_when, events
 
 

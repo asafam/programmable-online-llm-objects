@@ -29,8 +29,10 @@ user_prompt: |
      post-modification events must contain a FLIP — an outcome allowed under the new rule that was
      blocked under the old (e.g. a 3rd lead/day allowed after the cap is raised to 3). It must NOT
      collide with the base (same key within the same rolling window; same timestamps).
-  8. NO LEAKAGE / NO META: no event or step literally says "State constraint"; the read-service mock
-     data must be reference state only (no assignments, outcomes, or running counts baked in).
+  8. NO LEAKAGE / NO META: the read-service mock data must be reference state only (no assignments,
+     outcomes, or running counts baked in). Do NOT flag the natural business RULE stated as a step
+     (e.g. "approved discounts must not exceed the quarterly cap") — that is the invariant baked into
+     the steps and is EXPECTED. Only flag the literal meta-label "State constraint" used as a heading.
   9. SCALE: the roster/catalog should be MINIMAL (2-3 entities), not a large cast that floods traffic.
 
   Return JSON: {"passed": bool, "issues": [<one short specific string per problem, citing the
