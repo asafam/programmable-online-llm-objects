@@ -157,9 +157,16 @@ class GeneratedStateConstraint(BaseModel):
 
 class RolePhrasing(BaseModel):
     """How one kind of request READS (NL template with {ID}/{AMOUNT}/{KEY}/{APPROVER}/{DECO}
-    placeholders that code fills). role ∈ {request, submit, approve}."""
+    placeholders that code fills). role ∈ {request, submit, approve, allowed, blocked, approved,
+    held, submitted}."""
     role: str
     template: str
+
+
+class SampleVerdict(BaseModel):
+    """LLM-judge output for the pre-upload verifier."""
+    passed: bool
+    issues: list[str] = Field(default_factory=list)
 
 
 class GeneratedScenarioSpec(BaseModel):

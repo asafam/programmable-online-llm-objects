@@ -228,11 +228,21 @@ def run(args: argparse.Namespace) -> Path:
     print("\n--- Phase 2 validation ---")
     _validate_unified(unified_path)
 
+    # Automated pre-release gate: run the recurring annotation feedback as checks (deterministic
+    # always; the LLM-judge for fidelity when --verify-judge). Refuse to upload a flagged batch.
+    print("\n--- Pre-release verification ---")
+    from src.data.verify_samples import verify
+    flagged = verify(unified_path, judge=getattr(args, "verify_judge", False),
+                     provider=args.provider, model=args.model)
+
     print(f"\nDone. Unified (eval-compatible) output: {unified_path}")
     print(f"Artifacts: {infused_path.name}, {spec_path.name}, {mods_path.name}, {unified_path.name}")
 
     if args.upload:
-        _upload_to_firestore(unified_path, args.service_account, getattr(args, "run_id", None))
+        if flagged:
+            print(f"\nNOT uploading: {flagged} sample(s) flagged by verification. Fix and re-run.")
+        else:
+            _upload_to_firestore(unified_path, args.service_account, getattr(args, "run_id", None))
 
     return unified_path
 
@@ -256,6 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", "-s", type=int, default=None)
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--force", action="store_true")
+    p.add_argument("--verify-judge", dest="verify_judge", action="store_true",
+                   help="In pre-release verification, also run the LLM-judge (fidelity/semantic checks)")
     p.add_argument("--upload", action="store_true",
                    help="Upload unified output to Firestore (samples + sample_summaries) after pipeline completes")
     p.add_argument("--service-account", type=Path, default=None,
