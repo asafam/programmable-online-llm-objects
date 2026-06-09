@@ -21,7 +21,9 @@ def _abs_day(when: str) -> int:
 
 
 def _parse_window_days(threshold: str, default: int = 7) -> int:
-    m = re.search(r"(\d+)\s*(?:day|d\b)", threshold or "", re.I)
+    # allow one qualifier word between the number and "day(s)": "1 business day",
+    # "30 calendar days", "7-day", "7 days"
+    m = re.search(r"(\d+)[-\s]*(?:[a-z]+[-\s]+)?days?\b", threshold or "", re.I)
     return int(m.group(1)) if m else default
 
 
@@ -105,6 +107,7 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
     `phrase(req_id, is_blocked, key)` returns the input text (never states the outcome)."""
     N = _parse_limit(threshold)
     D = _parse_window_days(threshold)
+    DAYS = f"{D} day" + ("s" if D != 1 else "")
     week, day = int(base_day[1:3]), int(base_day[4:])
     key2 = _second_key(seed, key, keys)
     events: list = []   # list of (event, key)
@@ -138,7 +141,7 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
         if in_window < N:
             aged = any(d - ad >= D for ad in accepted.get(k, []))
             accepted.setdefault(k, []).append(d)
-            note = (f" More than {D} days have passed since the earlier {unit}s for {k}, which have "
+            note = (f" More than {DAYS} have passed since the earlier {unit}s for {k}, which have "
                     f"aged out of the rolling {D}-day window." if aged else "")
             flip = (f" THIS IS THE FLIP: the original limit of {flip_old_limit} would have BLOCKED "
                     f"this {unit} (#{in_window + 1} for {k} in the window), but the modification "
@@ -147,14 +150,14 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                 action=_fill_outcome(outcomes, "allowed",
                     f"the {unit} for {k} is within the limit and IS performed ({_ev_ref(e)}).",
                     ID=_ev_ref(e), KEY=k),
-                reason=f"only {in_window} {unit}(s) for {k} in the last {D} days (< {N}); the limit is "
+                reason=f"only {in_window} {unit}(s) for {k} in the last {DAYS} (< {N}); the limit is "
                        f"PER key, so {k} is unaffected by other keys.{note}{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "blocked",
                     f"the {unit} for {k} ({_ev_ref(e)}) is NOT performed — it is blocked by the rolling-window limit.",
                     ID=_ev_ref(e), KEY=k),
-                reason=f"{in_window} {unit}(s) were already done for {k} within the last {D} days (the "
+                reason=f"{in_window} {unit}(s) were already done for {k} within the last {DAYS} (the "
                        f"limit of {N}), so a new one is blocked until that key's window clears.")
         out.append(e)
     return out
