@@ -370,7 +370,7 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="", *
                                          outcomes=tmpl, unit=unit or "reorder", **kw)
     if ct == "cap":
         sub = tmpl.get("submit") or "Sales rep {SUBMITTER} submits quote {ID} requesting a ${AMOUNT} discount {DECO}."
-        app = tmpl.get("approve") or "{APPROVER} reviews quote {ID} in Slack."
+        app = tmpl.get("approve") or "{APPROVER} responds in Slack to the approval request for quote {ID}."
         reps = _seed_sales_reps(seed)
         if not reps:                              # no chain in the seed → fall back to bare approvers
             reps = [("an account executive", a) for a in (_seed_approvers(seed) or ["the approver"])]

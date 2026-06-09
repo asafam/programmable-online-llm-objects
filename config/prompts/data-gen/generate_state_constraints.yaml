@@ -40,8 +40,9 @@ user_prompt: |
                       {"sku":"B205-M","reorder_level":8,"on_hand":5}]}}   (2-3 SKUs — the limit is PER SKU,
                       so a second SKU is REQUIRED to show it generalizes. EVERY SKU the scenario reorders
                       MUST be AT/BELOW its reorder_level (on_hand <= reorder_level) so a reorder is valid.
-                      Do NOT put running counts like "reorders_last_7d" in the seed — that is accumulated
-                      state, not reference state; the window is computed from the event timestamps.)
+                      Do NOT put ANY reorder history in the seed — no "reorders_last_7d", no
+                      "last_reorder_date", no counts or dates. The window is computed from the event
+                      timestamps; history fields in the seed contradict it. Standing catalog facts ONLY.)
        - cap       → {"sales_reps":[{"name":"James Brown","title":"Account Executive","manager":"Daniel Kim"},
                       {"name":"Laura Chen","title":"Account Executive","manager":"Olivia Chen"}],
                       "approvers":[{"name":"Daniel Kim","title":"Regional Sales Director","manages":["James Brown"]},
@@ -62,16 +63,17 @@ user_prompt: |
                       role="allowed":  "{KEY} is at/below its reorder level, so a supplier reorder IS sent ({ID})."
                       role="blocked":  "NO new reorder is sent for {KEY} ({ID}); only the routine reply goes out."
        - cap        → role="submit":   "Sales rep {SUBMITTER} submits quote {ID} in HubSpot requesting a ${AMOUNT} discount {DECO}."
-                      role="approve":  "{APPROVER} reviews quote {ID} in Slack."
-                      role="submitted":"Quote {ID} is recorded in HubSpot; the system routes the approval request to
-                                        {SUBMITTER}'s manager, {MANAGER}, who receives the confirmation request by email."
-                      role="approved": "{ENTITY} approves {ID} (${AMOUNT}); it is approved in HubSpot and posted in Slack."
-                      role="held":     "{ENTITY} approves {ID} (${AMOUNT}), BUT the system holds it for exception
+                      role="approve":  "{APPROVER} responds in Slack to the approval request for quote {ID}."
+                      role="submitted":"Quote {ID} is recorded in HubSpot; the system EMAILS the approval request to
+                                        {SUBMITTER}'s manager, {MANAGER}, who can act on it in Slack."
+                      role="approved": "{ENTITY} approves {ID} (${AMOUNT}) back via Slack; HubSpot records it as approved."
+                      role="held":     "{ENTITY} approves {ID} (${AMOUNT}) in Slack, BUT the system holds it for exception
                                         handling — the approval cannot take effect because it would breach the cap."
-       (The submit EVENT is only the stimulus — the rep submitting. It MUST NOT name the approver:
-        choosing the manager is the quote-approval-policy object's job. The "submitted" EXPECT is
-        what VERIFIES the system routed to the correct manager. {SUBMITTER}=rep, {MANAGER}=that rep's
-        manager, {ENTITY}=the manager who decides — all filled by code from the seed's sales_reps.)
+       (CHANNELS: the approval REQUEST goes OUT by EMAIL to the manager; the manager's DECISION comes
+        BACK via SLACK. The submit EVENT is only the stimulus — it MUST NOT name the approver (routing
+        is the quote-approval-policy object's job; the "submitted" EXPECT VERIFIES the email went to the
+        right manager). {SUBMITTER}=rep, {MANAGER}=that rep's manager, {ENTITY}=the manager who decides
+        — all filled by code from the seed's sales_reps.)
      ALL families ALSO provide role="irrelevant": ONE request CLEARLY OUTSIDE this invariant, handled
      normally (it proves the modification is SCOPED). e.g.
            counter:    "A CRM status webhook {ID} (no lead attached) is received."

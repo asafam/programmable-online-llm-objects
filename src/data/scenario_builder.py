@@ -176,8 +176,8 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
         # The submission expect VERIFIES the system routed the approval to the rep's MANAGER.
         e.expect = EventExpect(
             action=_fill_outcome(outcomes, "submitted",
-                f"Quote {qid} is recorded in HubSpot and the system routes the approval request to "
-                f"{rep}'s manager, {mgr}, who receives the confirmation request by email.",
+                f"Quote {qid} is recorded in HubSpot; the system EMAILS the approval request to "
+                f"{rep}'s manager, {mgr}, who can act on it in Slack.",
                 ID=qid, SUBMITTER=rep, MANAGER=mgr),
             reason=f"the quote-approval-policy routes each request to the submitter's manager ({mgr} "
                    f"for {rep}); the submission itself is always recorded and is not the gated action.")
@@ -201,14 +201,14 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
                     f"(${cap:,}) ALLOWS it." if flip_old_limit and total > flip_old_limit else "")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "approved",
-                    f"{mgr} approves {qid} (${amt:,}); it is approved in HubSpot and the approval is posted in Slack.",
+                    f"{mgr} approves {qid} (${amt:,}) back via Slack; HubSpot records it as approved.",
                     ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}"),
                 reason=f"the {unit} of ${amt:,} keeps the running approved total at ${total:,}, within the ${cap:,} cap.{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "held",
-                    f"{mgr} approves {qid}, BUT the system holds it for exception handling and no approval "
-                    f"is recorded — the approver acts, but it cannot take effect because it would breach the cap.",
+                    f"{mgr} approves {qid} in Slack, BUT the system holds it for exception handling and no "
+                    f"approval is recorded — the approver acts, but it cannot take effect because it would breach the cap.",
                     ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}"),
                 reason=f"the {unit} of ${amt:,} would push the running total from ${total:,} to ${total + amt:,}, "
                        f"over the ${cap:,} cap, so the system intercepts it and routes it to exception handling.")
