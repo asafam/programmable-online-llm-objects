@@ -87,15 +87,21 @@ def deterministic_issues(s: Sample) -> list[str]:
     if ct == "rate_limit":
         from src.data.scenario_builder import _parse_window_days
         D = _parse_window_days(sc.threshold)
-        bkeys = _skus(base)
+        # DOMAIN-GENERIC: prefer the declared limit-tracked keys (SKUs/categories/contacts);
+        # the SKU-code regex is only a legacy fallback for samples that predate `keys`.
+        def keys_in(events):
+            if s.keys:
+                return {k for k in s.keys if any(k in e.input for e in events)}
+            return _skus(events)
+        bkeys = keys_in(base)
         if len(bkeys) < 2:
-            issues.append("rate_limit base uses <2 SKUs (per-key generalization not shown)")
-        # a shared SKU is only a conflict if the base + post events for it fall within the window
-        for k in bkeys & _skus(post):
+            issues.append("rate_limit base exercises <2 distinct keys (per-key generalization not shown)")
+        # a shared key is only a conflict if the base + post events for it fall within the window
+        for k in bkeys & keys_in(post):
             bd = [_absday(e.when) for e in base if k in e.input and e.when]
             pd = [_absday(e.when) for e in post if k in e.input and e.when]
             if bd and pd and min(pd) - max(bd) < D:
-                issues.append(f"base & post-mod reuse SKU {k} within the {D}-day window (conflict)")
+                issues.append(f"base & post-mod reuse key {k} within the {D}-day window (conflict)")
 
     if base and post:
         bd = max((_absday(e.when) for e in base if e.when), default=0)
@@ -110,8 +116,9 @@ def deterministic_issues(s: Sample) -> list[str]:
         if ct == "rate_limit":
             named = _skus([e])
             seed_skus = set(re.findall(r'"sku"\s*:\s*"([^"]+)"', s.seed or ""))
-            if named and not (named & seed_skus):
-                issues.append(f"irrelevant event names SKU {sorted(named)} absent from the seed")
+            known = seed_skus | set(s.keys)
+            if named and known and not (named & known):
+                issues.append(f"irrelevant event names key {sorted(named)} absent from the seed/keys")
     # cap: the approval request is emailed to the manager — approvers must carry email addresses
     if ct == "cap" and s.seed:
         try:

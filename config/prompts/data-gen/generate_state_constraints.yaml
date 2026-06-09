@@ -102,8 +102,22 @@ user_prompt: |
      the quote is for, e.g. "for Acme Corp's annual renewal", "for the Globex expansion deal" (the
      submitting rep + manager come from the seed, NOT decorations).
 
-  8. `key` — rate_limit ONLY: the exact SKU code (from the seed catalog) the scenario exercises.
-     Leave empty for cap/counter.
+  8. `entities` — counter ONLY: the rotation members IN ORDER, as a flat list of names EXACTLY as
+     they appear in the seed (any domain — reps, channels, agents, queues): e.g.
+     ["Maya Patel","Jordan Lee"] or ["#eng-platform","#eng-apps","#eng-data"]. Code drives the
+     round-robin from THIS list. Leave empty for cap/rate_limit.
+
+  9. `keys` — rate_limit ONLY: the limit-tracked KEY VALUES from the seed, as a flat list (any
+     domain — SKU codes, expense categories, contact emails, user ids): e.g. ["A100-XL","B205-M"]
+     or ["Travel","Meals"]. At least 2 (the scenario proves the limit is PER KEY); the FIRST is the
+     main key it exercises. Leave empty for cap/counter.
+
+  10. `key` — rate_limit ONLY: the main key (same as keys[0]). Leave empty for cap/counter.
+
+  11. `irrelevant_key` — the REAL seed entity the irrelevant event references (clearly OUTSIDE the
+      invariant): the well-stocked SKU, a category with no limit pressure, a $0 quote's account.
+      Must exist in the seed.
 
   Return only the JSON object (constraint_type, threshold, description, seed, phrasings, unit,
-  decorations, key). Do NOT write events, timestamps, or expectations — code builds those.
+  decorations, entities, keys, key, irrelevant_key). Do NOT write events, timestamps, or
+  expectations — code builds those.

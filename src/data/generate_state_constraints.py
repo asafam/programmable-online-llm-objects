@@ -150,21 +150,30 @@ def _parse_limit(threshold: str, default: int = 2) -> int:
     return int(m.group().replace(",", "")) if m else default
 
 
-def _seed_reps(seed_str: str):
-    """Parse the roster (name, position, daily_cap) out of the structured seed. None if absent."""
+def _seed_reps(seed_str: str, entities: list | None = None):
+    """The rotation roster as (name, position, cap) tuples — DOMAIN-GENERIC.
+    Prefer the explicit `entities` list (the LLM names the rotation members in order); else scan
+    the seed for ANY list of named members (reps, channels, agents, queues…), not a fixed key."""
+    if entities:
+        return [(name, i + 1, None) for i, name in enumerate(entities)]
     import json as _json
     try:
         d = _json.loads(seed_str)
     except Exception:
         return None
-    reps = d.get("reps") or d.get("roster") or d.get("representatives")
-    if not isinstance(reps, list) or not reps:
+    candidates = []
+    for v in (d.values() if isinstance(d, dict) else []):
+        if isinstance(v, list) and v and all(isinstance(r, dict) and r.get("name") for r in v):
+            candidates.append(v)
+    if not candidates:
         return None
+    # prefer a list whose members carry a rotation `position`; else the first named list
+    members = next((c for c in candidates if all("position" in r for r in c)), candidates[0])
     out = []
-    for r in reps:
-        if isinstance(r, dict) and r.get("name"):
-            cap = r.get("daily_lead_cap") or r.get("daily_cap") or r.get("cap")
-            out.append((r["name"], r.get("position", len(out) + 1), cap))
+    for r in members:
+        cap = next((r[k] for k in r if isinstance(r.get(k), int) and k.endswith("_cap")), None) \
+            or r.get("cap")
+        out.append((r["name"], r.get("position", len(out) + 1), cap))
     return out or None
 
 
@@ -186,14 +195,14 @@ def _fill_outcome(outcomes, role, fallback, **vals):
 
 def simulate_rotation(seed_str: str, events: list[dict], threshold: str,
                       outcomes: dict | None = None, unit: str = "assignment",
-                      flip_old_limit: int | None = None) -> list[dict]:
+                      flip_old_limit: int | None = None, entities: list | None = None) -> list[dict]:
     """DETERMINISTIC round-robin/counter simulation. events: dicts {id, input, when,
     concurrent_group}. Processes in (when, id) order, assigns each lead to the next eligible rep
     in rotation order (under the per-day cap, daily reset), holds when all are capped. The action
     wording comes from the LLM `outcomes` templates (domain-generic) with a built-in fallback.
     `flip_old_limit` (mod scenario): when an allowed event exceeds the OLD limit, the reason marks
     it as the FLIP (would have been blocked before the modification). Empty list if no roster."""
-    reps = _seed_reps(seed_str)
+    reps = _seed_reps(seed_str, entities)
     if not reps:
         return []
     reps.sort(key=lambda r: r[1])
@@ -334,9 +343,12 @@ def _first_key(seed_str: str):
     return None
 
 
-def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="", **kw) -> list:
+def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
+                 entities=None, keys=None, **kw) -> list:
     """Construct the phrase closures from the LLM's phrasing templates + decorations, then call
-    the family builder. Shared by the base scenario AND the modification scenario."""
+    the family builder. Shared by the base scenario AND the modification scenario.
+    `entities` (counter) / `keys` (rate_limit) are the LLM-named domain values — the builders use
+    them directly instead of guessing the seed's shape (which is domain-specific)."""
     from src.data.scenario_builder import (
         build_cap_scenario, build_counter_scenario, build_rate_limit_scenario,
     )
@@ -361,13 +373,13 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="", *
         req = tmpl.get("request") or tmpl.get("submit") or "A new request {ID} arrives {DECO}."
         phrase = lambda lid, d: fill(req, ID=lid, DECO=(d if isinstance(d, str) else deco_for(lid)))
         return build_counter_scenario(seed, threshold, phrase, decos or [""],
-                                      outcomes=tmpl, unit=unit or "lead assignment", **kw)
+                                      outcomes=tmpl, unit=unit or "assignment", entities=entities, **kw)
     if ct == "rate_limit":
         req = tmpl.get("request") or "A request {ID} arrives for {KEY} {DECO}."
-        k = key or _first_key(seed) or "SKU-1"
+        k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
         phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=kk, DECO=deco_for(rid))
         return build_rate_limit_scenario(seed, threshold, k, phrase,
-                                         outcomes=tmpl, unit=unit or "reorder", **kw)
+                                         outcomes=tmpl, unit=unit or "request", keys=keys, **kw)
     if ct == "cap":
         sub = tmpl.get("submit") or "{SUBMITTER} submits request {ID} for ${AMOUNT} {DECO}."
         app = tmpl.get("approve") or "{APPROVER} reviews request {ID}."
@@ -384,7 +396,8 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="", *
 def _build_scenario(gen: GeneratedScenarioSpec) -> list:
     """CODE builds the base request sequence + derives expects from the LLM's seed + phrasing."""
     return _run_builder(getattr(gen.constraint_type, "value", gen.constraint_type),
-                        gen.seed, gen.threshold, gen.phrasings, gen.decorations, gen.key, gen.unit)
+                        gen.seed, gen.threshold, gen.phrasings, gen.decorations, gen.key, gen.unit,
+                        entities=gen.entities, keys=gen.keys)
 
 
 def _base_cap_total(base_events) -> int:
@@ -466,25 +479,30 @@ def build_mod_scenario(spec, mod_type: str):
     if ct == "cap":
         new_limit = int(round(old_limit * 1.5)) if expand else int(round(old_limit * 0.67))
         kw = {"base_day": post_day, "starting_total": _base_cap_total(spec.base_events)}
-        intent = (f"Starting now, raise the quarter's approved-discount cap to ${new_limit:,} "
-                  f"(from ${old_limit:,})." if expand else
-                  f"Starting now, lower the quarter's approved-discount cap to ${new_limit:,} (from ${old_limit:,}).")
+        cap_noun = f"cumulative {spec.unit} cap" if spec.unit else "cumulative cap"
+        intent = (f"Starting now, raise the {cap_noun} to ${new_limit:,} (from ${old_limit:,})."
+                  if expand else
+                  f"Starting now, lower the {cap_noun} to ${new_limit:,} (from ${old_limit:,}).")
     else:
         new_limit = old_limit + 1 if expand else max(1, old_limit - 1)
         if ct == "rate_limit":
-            key = _other_key(spec.seed, spec.key) or spec.key   # different SKU → no window overlap
+            # a DIFFERENT limit-tracked key → no rolling-window overlap with the base
+            from src.data.scenario_builder import _second_key
+            key = _second_key(spec.seed, spec.key, spec.keys) or spec.key
             kw = {"base_day": post_day}
-            unit = "reorders for the same product within the rolling window"
         else:
             kw = {"base_day": post_day, "reset_day": _abs_to_day(base_abs + 1)}  # distinct later day
-            unit = "new lead assignments per representative per day"
-        intent = (f"Starting now, allow up to {new_limit} {unit} instead of {old_limit}." if expand else
-                  f"Starting now, allow only {new_limit} {unit} instead of {old_limit}.")
 
     new_thr = _re.sub(r"\d[\d,]*", str(new_limit), old_thr, count=1)
+    if ct != "cap":
+        # DOMAIN-GENERIC intent: the threshold text itself carries the workflow's own nouns
+        # ("3 reminder emails per contact within 30 days"), so reuse it verbatim.
+        intent = (f"Starting now, allow up to {new_thr} (instead of {old_thr})." if expand else
+                  f"Starting now, allow only {new_thr} (instead of {old_thr}).")
     kw["id_offset"] = 100   # post-mod request ids start at 100+ so they never reuse a base id
     kw["flip_old_limit"] = old_limit   # mark the event allowed-under-new but blocked-under-old (the FLIP)
-    events = _run_builder(ct, spec.seed, new_thr, spec.phrasings, spec.decorations, key, spec.unit, **kw)
+    events = _run_builder(ct, spec.seed, new_thr, spec.phrasings, spec.decorations, key, spec.unit,
+                          entities=spec.entities, keys=spec.keys, **kw)
     for i, e in enumerate(events, 1):
         e.id = f"PM{i:03d}"
         e.role = "post_mod"
@@ -497,7 +515,9 @@ def build_mod_scenario(spec, mod_type: str):
         last_abs = max((_ev_abs_day(e.when) for e in events if e.when), default=_ev_abs_day(mod_when))
         # A real, in-domain request for a real entity OUTSIDE the invariant — domain id, no placeholder.
         irr_id = {"cap": "Q-9001", "counter": "LD-2026-9001", "rate_limit": "REQ-9001"}.get(ct, "REQ-9001")
-        irr_key = _well_stocked_sku(spec.seed) or _first_key(spec.seed) or "" if ct == "rate_limit" else ""
+        # the LLM names the outside-the-invariant entity (any domain); legacy SKU scan as fallback
+        irr_key = (spec.irrelevant_key
+                   or (_well_stocked_sku(spec.seed) or _first_key(spec.seed) or "" if ct == "rate_limit" else ""))
         irr_input = irr_tmpl.replace("{ID}", irr_id).replace("{KEY}", irr_key)
         irr_input = _re.sub(r"\{[A-Z_]+\}", "", irr_input).strip()
         ref = irr_key or irr_id
@@ -522,7 +542,11 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
         llm=llm, prompt=prompt, response_model=GeneratedScenarioSpec,
         item_id=template["id"],
         # The LLM only needs to give a valid type/threshold, a JSON seed, and phrasing.
-        validator=lambda r: bool(r.threshold) and _valid_seed(r.seed) and bool(r.phrasings),
+        # The builder must be able to BUILD from the response (counter needs a rotation it can see —
+        # entities or a parseable roster; rate_limit needs a key). Retrying here is what catches a
+        # seed shape the code can't drive, instead of emitting a spec with 0 base events.
+        validator=lambda r: bool(r.threshold) and _valid_seed(r.seed) and bool(r.phrasings)
+        and bool(_build_scenario(r)),
     )
     if gen is None:
         return spec, False
@@ -533,6 +557,9 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     spec.decorations = gen.decorations
     spec.key = gen.key
     spec.unit = gen.unit
+    spec.entities = gen.entities
+    spec.keys = gen.keys
+    spec.irrelevant_key = gen.irrelevant_key
     spec.state_constraint = StateConstraint(
         type=gen.constraint_type, threshold=gen.threshold, description=gen.description,
     )

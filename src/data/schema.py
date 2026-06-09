@@ -182,6 +182,11 @@ class GeneratedScenarioSpec(BaseModel):
     decorations: list[str] = Field(default_factory=list)  # realistic NL fragments for {DECO}
     key: str = ""                   # rate_limit: the specific key (SKU) to exercise, from the seed
     unit: str = ""                  # the gated action's noun ("reorder", "lead assignment", "approval")
+    entities: list[str] = Field(default_factory=list)  # counter: rotation members IN ORDER (any domain:
+                                                       # reps/channels/agents) — names exactly as in the seed
+    keys: list[str] = Field(default_factory=list)      # rate_limit: the limit-tracked key values from the
+                                                       # seed (SKUs/categories/contacts); first = main
+    irrelevant_key: str = ""        # a real seed entity OUTSIDE the invariant for the irrelevant event
 
 
 class StateProbeScenario(BaseModel):
@@ -390,6 +395,7 @@ class Sample(BaseModel):
     link: str = ""
     template: list[str] = Field(default_factory=list)  # raw/abstract base steps (the original template)
     seed: str = ""  # initial reference state the system reads (roster/catalog/approvers/starting totals)
+    keys: list[str] = Field(default_factory=list)  # rate_limit: limit-tracked key values (for verification)
     objects: list[ObjectDef] = Field(default_factory=list)
     llm_classes: list[LLMClassDef] = Field(default_factory=list, description="llm-class templates available for spawning during evaluation")
     steps: list[str] = Field(default_factory=list)  # grounded workflow steps (incl. the state-constraint step)
@@ -774,6 +780,9 @@ class WorkflowSpec(BaseModel):
     decorations: list[str] = Field(default_factory=list)
     key: str = ""                                            # rate_limit: the key the base scenario exercised
     unit: str = ""                                           # the gated action's noun (carried for the mod)
+    entities: list[str] = Field(default_factory=list)        # counter rotation members (carried for the mod)
+    keys: list[str] = Field(default_factory=list)            # rate_limit key values (carried for the mod)
+    irrelevant_key: str = ""                                 # entity outside the invariant (irrelevant event)
     steps: list[SpecStep] = Field(default_factory=list)      # external-stimulus steps with observable expects
     base_events: list[SpecEventWithExpect] = Field(default_factory=list)  # state-infused base scenario
     modifications: list[SpecModification] = Field(default_factory=list)

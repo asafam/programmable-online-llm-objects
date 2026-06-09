@@ -246,6 +246,7 @@ def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict
         source_type=spec.source_type, link=spec.link,
         template=list(spec.template),          # raw base steps
         seed=spec.seed,                        # initial reference state the read-services hold
+        keys=list(spec.keys),                  # limit-tracked key values (for generic verification)
         objects=graph.objects, steps=list(spec.grounded_steps),  # grounded steps (incl. constraint)
         modifications=modifications, events=events,
         state_constraint=spec.state_constraint,

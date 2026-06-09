@@ -38,13 +38,15 @@ def _ev(n: int, text: str, when: str, cg: str | None = None) -> SpecEventWithExp
 def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
                            base_day: str = "W01-1", reset_day: str = "W01-2", id_offset: int = 0,
                            outcomes: dict | None = None, unit: str = "assignment",
-                           flip_old_limit: int | None = None) -> list:
-    """Round-robin / per-key daily counter. Builds, BY CONSTRUCTION:
-      - (cap*R - 1) leads in round-robin order (all assigned) → leaves exactly ONE slot open,
+                           flip_old_limit: int | None = None, entities: list | None = None) -> list:
+    """Round-robin / per-key daily counter — DOMAIN-GENERIC (reps/channels/agents). Builds,
+    BY CONSTRUCTION:
+      - (cap*R - 1) requests in round-robin order (all assigned) → leaves exactly ONE slot open,
       - a concurrent pair at that last slot (same `when`) → one assigned, one held (the race),
       - a next-day reset (assigned again, daily counter cleared).
-    `phrase(lead_id, decoration)` returns the NL input text. Returns [] if the seed has no roster."""
-    reps = _seed_reps(seed)
+    `entities` (preferred) names the rotation members in order; else parsed generically from the
+    seed. `phrase(req_id, decoration)` returns the NL input text. Returns [] if no rotation found."""
+    reps = _seed_reps(seed, entities)
     if not reps:
         return []
     cap = _parse_limit(threshold)
@@ -66,13 +68,18 @@ def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
     # Derive every expect deterministically by simulating the rotation over the built sequence.
     sim = simulate_rotation(seed, [{"id": e.id, "input": e.input, "when": e.when,
                                     "concurrent_group": e.concurrent_group} for e in events], threshold,
-                            outcomes=outcomes, unit=unit, flip_old_limit=flip_old_limit)
+                            outcomes=outcomes, unit=unit, flip_old_limit=flip_old_limit, entities=entities)
     for e, s in zip(events, sim):
         e.expect = EventExpect(action=s["action"], reason=s["reason"])
     return events
 
 
-def _second_sku(seed: str, exclude: str):
+def _second_key(seed: str, exclude: str, keys: list | None = None):
+    """A DIFFERENT limit-tracked key — DOMAIN-GENERIC. Prefer the explicit `keys` list (the LLM
+    names the key values); else scan the seed for any list whose dicts carry a 'sku' field (legacy)."""
+    for k in (keys or []):
+        if k and k != exclude:
+            return k
     import json
     try:
         d = json.loads(seed)
@@ -89,16 +96,17 @@ def _second_sku(seed: str, exclude: str):
 def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                               base_day: str = "W01-1", id_offset: int = 0,
                               outcomes: dict | None = None, unit: str = "reorder",
-                              flip_old_limit: int | None = None) -> list:
-    """Per-key rolling-window rate limit (N per key per D days). Builds BY CONSTRUCTION for the
-    main key: (N-1) accepted inside the window, a concurrent pair at the last slot (one accepted,
-    one blocked), a post-window reset. It ALSO fires one request for a SECOND key while the main
-    key is at its limit — allowed, proving the limit is PER-KEY, not global. Simulated per-key.
+                              flip_old_limit: int | None = None, keys: list | None = None) -> list:
+    """Per-key rolling-window rate limit (N per key per D days) — DOMAIN-GENERIC (SKUs/categories/
+    contacts). Builds BY CONSTRUCTION for the main key: (N-1) accepted inside the window, a
+    concurrent pair at the last slot (one accepted, one blocked), a post-window reset. It ALSO
+    fires one request for a SECOND key while the main key is at its limit — allowed, proving the
+    limit is PER-KEY, not global. `keys` (preferred) lists the limit-tracked key values.
     `phrase(req_id, is_blocked, key)` returns the input text (never states the outcome)."""
     N = _parse_limit(threshold)
     D = _parse_window_days(threshold)
     week, day = int(base_day[1:3]), int(base_day[4:])
-    key2 = _second_sku(seed, key)
+    key2 = _second_key(seed, key, keys)
     events: list = []   # list of (event, key)
 
     def add(text, when, k, cg=None):
@@ -106,11 +114,16 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
 
     rid = lambda i: f"REQ-{i + id_offset:04d}"
     n = 0
+    # spacing must keep all (N-1) accepted + the pair INSIDE one rolling window: spread by 2 days
+    # when the window is wide enough, else same-day hourly steps (e.g. a 1-day window).
+    gap = 2 if (N - 1) * 2 < D else 0
     for i in range(N - 1):                          # (N-1) accepted for the main key, in-window
-        n += 1; add(phrase(rid(n), False, key), f"W{week:02d}-{day + i * 2}T09:00", key)
-    pair_day = day + (N - 1) * 2                     # concurrent pair at the last in-window slot
-    n += 1; add(phrase(rid(n), False, key), f"W{week:02d}-{pair_day}T11:00", key, "cg_limit")
-    n += 1; add(phrase(rid(n), True, key), f"W{week:02d}-{pair_day}T11:00", key, "cg_limit")
+        n += 1
+        add(phrase(rid(n), False, key), f"W{week:02d}-{day + i * gap}T{9 + (0 if gap else i):02d}:00", key)
+    pair_day = day + (N - 1) * gap                   # concurrent pair at the last in-window slot
+    pair_t = f"T{11 + (0 if gap else N - 1):02d}:30"
+    n += 1; add(phrase(rid(n), False, key), f"W{week:02d}-{pair_day}{pair_t}", key, "cg_limit")
+    n += 1; add(phrase(rid(n), True, key), f"W{week:02d}-{pair_day}{pair_t}", key, "cg_limit")
     if key2:                                         # a SECOND key, same window → ALLOWED (per-key)
         n += 1; add(phrase(rid(n), False, key2), f"W{week:02d}-{pair_day}T13:00", key2)
     reset_abs = (week - 1) * 7 + pair_day + D + 1    # main-key post-window reset
