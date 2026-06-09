@@ -405,6 +405,7 @@ def build_mod_scenario(spec, mod_type: str):
                   f"Starting now, allow only {new_limit} {unit} instead of {old_limit}.")
 
     new_thr = _re.sub(r"\d[\d,]*", str(new_limit), old_thr, count=1)
+    kw["id_offset"] = 100   # post-mod request ids start at 100+ so they never reuse a base id
     events = _run_builder(ct, spec.seed, new_thr, spec.phrasings, spec.decorations, key, **kw)
     for i, e in enumerate(events, 1):
         e.id = f"PM{i:03d}"

@@ -36,7 +36,7 @@ def _ev(n: int, text: str, when: str, cg: str | None = None) -> SpecEventWithExp
 
 
 def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
-                           base_day: str = "W01-1", reset_day: str = "W01-2") -> list:
+                           base_day: str = "W01-1", reset_day: str = "W01-2", id_offset: int = 0) -> list:
     """Round-robin / per-key daily counter. Builds, BY CONSTRUCTION:
       - (cap*R - 1) leads in round-robin order (all assigned) → leaves exactly ONE slot open,
       - a concurrent pair at that last slot (same `when`) → one assigned, one held (the race),
@@ -48,7 +48,7 @@ def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
     cap = _parse_limit(threshold)
     nfill = cap * len(reps) - 1        # round-robin fill that leaves exactly one open slot
     deco = lambda k: decorations[(k - 1) % len(decorations)] if decorations else {}
-    lead = lambda k: f"LD-2026-{k:04d}"
+    lead = lambda k: f"LD-2026-{k + id_offset:04d}"
 
     events: list[SpecEventWithExpect] = []
     idx = 0
@@ -70,7 +70,7 @@ def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
 
 
 def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
-                              base_day: str = "W01-1") -> list:
+                              base_day: str = "W01-1", id_offset: int = 0) -> list:
     """Per-key rolling-window rate limit (N per key per D days). Builds BY CONSTRUCTION for one
     key: (N-1) accepted requests inside the window, a concurrent pair at the last slot (one
     accepted, one blocked), and a post-window request (>D days later) that is allowed again.
@@ -83,7 +83,7 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
     def add(text, when, cg=None):
         events.append(_ev(len(events) + 1, text, when, cg))
 
-    rid = lambda k: f"REQ-{k:04d}"
+    rid = lambda k: f"REQ-{k + id_offset:04d}"
     n = 0
     # (N-1) accepted, spaced 2 days apart, all inside the window
     for i in range(N - 1):
@@ -122,7 +122,7 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
 
 
 def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
-                       approvers: list, base_day: str = "W01-1", starting_total: int = 0) -> list:
+                       approvers: list, base_day: str = "W01-1", starting_total: int = 0, id_offset: int = 0) -> list:
     """Cumulative cap with an APPROVER (submit + approve per quote). Builds amounts BY
     CONSTRUCTION so the running approved total approaches the cap from `starting_total`, a
     concurrent pair of approvals sits at the boundary (one fits the remaining budget, one
@@ -144,7 +144,7 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
     quotes = []                            # (qid, amount, is_pair)
     t = 0
     for i, amt in enumerate(amounts):
-        qid = f"Q-{1001 + i}"
+        qid = f"Q-{1001 + id_offset + i}"
         quotes.append((qid, amt, i >= 2))  # last two are the pair
         events.append(_ev(len(events) + 1, submit_phrase(qid, amt), f"W{week:02d}-{day}T{9 + t:02d}:00"))
         t += 1
