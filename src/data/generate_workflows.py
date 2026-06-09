@@ -102,12 +102,14 @@ def _ground_template(llm, template: dict, prompt_cfg: dict, seed: str = "") -> G
     if seed:
         prompt += (
             f"\n\n## Reference state (SEED) — the system's read-only data for THIS scenario\n{seed}\n\n"
-            "CRITICAL — keep the grounded steps CONSISTENT with this seed: use the SAME people, roles, "
-            "TITLES, SKUs, and approvers exactly as the seed names them (e.g. if the seed's approver is "
-            "titled 'Regional Sales Director', do NOT call them 'Sales Manager'). Refer to the roster / "
-            "catalog / approvers as the seed defines them, and do NOT introduce any person, role, title, "
-            "SKU, or approver that is absent from the seed. Where approval routes to a manager, describe "
-            "it as routing to the submitting rep's manager per the seed's mapping."
+            "CRITICAL — the grounded steps describe the PROCEDURE and must stay consistent with this seed:\n"
+            "- Use the seed's ROLES and TITLES exactly (if the seed's approver is a 'Regional Sales "
+            "Director', do NOT call them 'Sales Manager'); do NOT introduce any role, title, or kind of "
+            "entity that is absent from the seed.\n"
+            "- Refer to specific data entities GENERICALLY by their role/position — e.g. 'the rep "
+            "currently in position 1', 'the submitting rep's manager', 'the SKU at/below its reorder "
+            "level'. Do NOT hard-code specific names, SKUs, or people into the steps (no 'Maya Patel', "
+            "no 'A100-XL') — the seed holds those values; the steps reference them by role/position."
         )
     return generate_with_retries(
         llm=llm,
