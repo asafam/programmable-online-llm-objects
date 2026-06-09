@@ -124,6 +124,98 @@ def concurrent_pair_issues(events: list[dict], threshold: str) -> list[str]:
     return []
 
 
+def _parse_limit(threshold: str, default: int = 2) -> int:
+    m = _re.search(r"\d+", threshold or "")
+    return int(m.group()) if m else default
+
+
+def _seed_reps(seed_str: str):
+    """Parse the roster (name, position, daily_cap) out of the structured seed. None if absent."""
+    import json as _json
+    try:
+        d = _json.loads(seed_str)
+    except Exception:
+        return None
+    reps = d.get("reps") or d.get("roster") or d.get("representatives")
+    if not isinstance(reps, list) or not reps:
+        return None
+    out = []
+    for r in reps:
+        if isinstance(r, dict) and r.get("name"):
+            cap = r.get("daily_lead_cap") or r.get("daily_cap") or r.get("cap")
+            out.append((r["name"], r.get("position", len(out) + 1), cap))
+    return out or None
+
+
+def _lead_ref(text: str) -> str:
+    m = _re.search(r"\b([A-Z]{2,}-?\d[\w/-]*|Lead\s+#\d+|#\d+)\b", text or "")
+    return m.group(1) if m else "the lead"
+
+
+def simulate_rotation(seed_str: str, events: list[dict], threshold: str) -> list[dict]:
+    """DETERMINISTIC round-robin/counter simulation. events: dicts {id, input, when,
+    concurrent_group}. Processes in (when, id) order, assigns each lead to the next eligible rep
+    in rotation order (under the per-day cap, daily reset), holds when all are capped. Returns a
+    list of {action, reason} aligned to `events` (original order). Empty list if no parseable roster."""
+    reps = _seed_reps(seed_str)
+    if not reps:
+        return []
+    reps.sort(key=lambda r: r[1])
+    names = [r[0] for r in reps]
+    dcap = _parse_limit(threshold)
+    caps = {r[0]: (r[2] or dcap) for r in reps}
+    n = len(names)
+    order = sorted(range(len(events)), key=lambda i: (events[i].get("when", ""), events[i].get("id", "")))
+    res: dict[int, dict] = {}
+    counts: dict[str, int] = {}
+    cur_day = None
+    ptr = 0
+    for i in order:
+        e = events[i]
+        day = (e.get("when", "") or "").split("T")[0]
+        if day != cur_day:
+            cur_day, counts = day, {nm: 0 for nm in names}
+        assigned = None
+        for step in range(n):
+            cand = names[(ptr + step) % n]
+            if counts[cand] < caps[cand]:
+                assigned = cand
+                ptr = (ptr + step + 1) % n
+                counts[cand] += 1
+                break
+        ref = _lead_ref(e.get("input", ""))
+        if assigned:
+            res[i] = {"action": f"{ref} IS assigned to {assigned} and the assignment is posted.",
+                      "reason": f"{assigned} is the next eligible rep in the round-robin order and is "
+                                f"under the daily cap of {caps[assigned]} (now {counts[assigned]} of "
+                                f"{caps[assigned]} today)."}
+        else:
+            res[i] = {"action": f"{ref} is NOT assigned to any rep and is held unassigned; no "
+                                f"assignment is posted.",
+                      "reason": f"every rep has reached the daily cap of {dcap}, so the lead is held "
+                                f"until the cap resets the next day."}
+    return [res[i] for i in range(len(events))]
+
+
+def rotation_scenario_valid(seed_str: str, events: list[dict], threshold: str) -> bool:
+    """For a counter/rotation scenario: the simulation must show the concurrent pair as a real
+    RACE (exactly one of the two held), at least one held overall (cap exercised), and >=2 days
+    (the daily reset is exercised)."""
+    sim = simulate_rotation(seed_str, events, threshold)
+    if not sim:
+        return False
+    pair = [i for i, e in enumerate(events) if e.get("concurrent_group")]
+    if len(pair) != 2:
+        return False
+    held = lambda s: "not assigned" in s["action"].lower() or "is held" in s["action"].lower()
+    if sum(1 for i in pair if held(sim[i])) != 1:    # exactly one of the pair held → race
+        return False
+    if not any(held(s) for s in sim):                # the cap is exercised
+        return False
+    days = {(e.get("when", "") or "").split("T")[0] for e in events}
+    return len(days) >= 2                            # the daily reset is exercised
+
+
 def coherence_issues(expect_texts: list[str], constraint_type: str) -> list[str]:
     """A state scenario is valid only if its base expects actually exercise the invariant:
     at least one BLOCKS the gated action, and (for counter/rate_limit) one shows the period
