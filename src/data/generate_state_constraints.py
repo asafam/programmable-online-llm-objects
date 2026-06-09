@@ -110,9 +110,11 @@ def concurrent_pair_issues(events: list[dict], threshold: str) -> list[str]:
     if not key:
         return []
     pair_when = min((e["when"] for e in pair if e.get("when")), default="")
+    # A non-pair accept AT the pair's timestamp also consumes a slot (<=, not <), so count it —
+    # otherwise an accepted same-key request sharing the pair's `when` is missed (inventory SC002).
     prior = sum(1 for e in events
                 if not e.get("concurrent_group")
-                and (not e.get("when") or e["when"] < pair_when)
+                and (not e.get("when") or e["when"] <= pair_when)
                 and any(k in e["input"] for k in key)
                 and not _is_blocked(f"{e.get('action', '')} {e.get('reason', '')}"))
     if prior != limit - 1:

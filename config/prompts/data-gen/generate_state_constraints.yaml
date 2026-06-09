@@ -100,6 +100,9 @@ user_prompt: |
          one takes it (accepted), the other is blocked. For limit = 2 that means EXACTLY ONE
          prior accepted same-key request before the pair. A pair on a FRESH key (no prior
          accepted requests) is WRONG: both are within the limit, so NEITHER should block.
+         The pair must be ISOLATED at its timestamp: NO other request for the pair's key may share
+         the pair's `when` — those two simultaneous requests are the ONLY same-key activity at
+         that instant (otherwise the slot count is ambiguous).
        - REQUIRED for `counter` and `rate_limit` — a RESET / WINDOW-EXPIRY event: a request for
          the SAME key as a blocked one, timestamped PAST the period (the NEXT DAY for a per-day
          counter; 8+ days later for a rolling-7-day limit), which is ALLOWED AGAIN — the action
@@ -123,18 +126,35 @@ user_prompt: |
     - BAD:  "New lead arrives. Reps Maya, Jordan, Sofia are active and it's a clean start."  (mixes roster state)
 
   GATED-ACTION ACTOR — who performs the action matters. If the workflow's steps show the gated
-  action is taken by a DISTINCT named role/actor — an approver, reviewer, or dispatcher who must
-  act (e.g. "an approval request is sent to the Sales Director, who approves or rejects it in
-  Slack") rather than the system deciding automatically — then the base events that move the
-  accumulator MUST be THAT ACTOR's decisions, phrased as the actor acting:
-    - GOOD: "Approver #1 (the Sales Director) approves quote Q-1001 ($12,000 discount) in Slack."
-    - BAD:  "Rep submits quote Q-1001 in HubSpot." then expecting it to just be "approved"  (there
-            is NO auto-approval — the approver must act; a bare submission never approves anything).
-  The accumulation happens on the ACTOR's action, and the threshold blocks the ACTOR from taking
-  it: "approving Q-N would push the quarter's approved discount over $50,000, so Approver #1 does
-  NOT approve Q-N — it is held for exception handling; no approval is recorded." List the actor(s)
-  in the seed. (When the gated action IS automatic — a system reorder/assignment — the event is the
-  triggering request itself, as usual.)
+  action is taken by a DISTINCT named role/actor — an approver/reviewer/dispatcher who must act
+  (e.g. "the quote is submitted in HubSpot, an approval request goes to the Sales Director, who
+  approves or rejects it in Slack") — then model BOTH steps for each item, as TWO separate events:
+    1. the SUBMISSION/trigger that ENTERS the workflow — e.g. "Account Executive submits quote
+       Q-1001 ($12,000 discount) in HubSpot; an approval request is sent to the approvers." This
+       is ALWAYS handled (it is NOT the gated action — a submission never approves anything; it
+       just records the quote and routes the approval request). Its expect: the quote is created
+       and the approval request is sent.
+    2. the ACTOR's DECISION that moves the accumulator — e.g. "Approver #1 approves Q-1001 in
+       Slack." THIS is the gated action; the threshold blocks the actor from taking it:
+       "approving Q-N would push the quarter's approved discount over $50,000, so Approver #1 does
+       NOT approve Q-N — it is held for exception handling; no approval is recorded."
+  Pair them: every approval event names a quote submitted by an EARLIER submission event (so the
+  HubSpot submission/approval-request is always present before the Slack approval). The submission
+  carries the discount amount; only the APPROVAL counts toward the cap. List the actor(s) in the
+  seed. (When the gated action IS automatic — a system reorder/assignment — there is no separate
+  actor and no submission step; the event is the triggering request itself, as usual.)
+
+  ROTATION & COUNTERS — when the invariant is a round-robin rotation and/or per-key counter, the
+  assignments MUST follow the rule MECHANICALLY and stay consistent with the seed:
+    - Maintain the rotation ORDER from the seed (position 1, 2, 3, …). Assign each request to the
+      NEXT entity in rotation order that is UNDER its per-period cap, then advance the pointer.
+    - Track every entity's running count for the period. NEVER skip an entity that is still
+      eligible (under cap); NEVER assign to one already at cap. Name the entity the rotation
+      ACTUALLY lands on in each expect — not an arbitrary one.
+    - The blocked/held case is ONLY when EVERY eligible entity is at cap.
+    - Worked example (3 reps, cap 2/day): L1→Rep#1, L2→Rep#2, L3→Rep#3, L4→Rep#1 (its 2nd),
+      L5→Rep#2 (2nd), L6→Rep#3 (2nd, now all at cap), L7→held. Do NOT skip Rep#3 on L6, and do
+      NOT name a capped rep when an eligible one remains.
 
   DECOUPLING — this is critical. Do NOT assume or mention HOW the rule is implemented.
   Do NOT reference any specific object as "the owner", and do NOT use internal mechanics
