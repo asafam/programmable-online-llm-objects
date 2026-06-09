@@ -19,13 +19,23 @@ user_prompt: |
 
   Return JSON with:
 
-  1. `constraint_type` — one of:
+  1. `constraint_type` — pick the one that GENUINELY FITS this workflow (do not default to a limit):
      - "cap": a cumulative total must stay at/below a ceiling (e.g. quarterly approved discount).
      - "counter": a per-key count within a period is capped, usually round-robin (e.g. leads/rep/day).
      - "rate_limit": at most N for the same key in a rolling window (e.g. reorders/SKU within 7 days).
+     - "trigger": the INVERSE — the Nth related occurrence for a key within a rolling window FIRES
+       the gated action (an escalation, a ticket, a digest); earlier occurrences only accumulate,
+       and the count resets after firing (e.g. 3 complaints about the same product in 7 days →
+       escalation). Fits escalation/aggregation/alerting workflows.
+     - "dedup": repeats are SUPPRESSED — the first occurrence for a key is processed; an identical
+       one within a SHORT rolling window (minutes/hours) is ignored as a duplicate; past the window
+       it is processed as new (e.g. the same complaint ignored within a rolling 10 minutes). Fits
+       intake/notification/alerting workflows where repeats are noise.
 
-  2. `threshold` — the numeric limit, e.g. "$50,000 cumulative per quarter", "2 leads per rep per day",
-     "2 reorders per SKU within any rolling 7 days". A limit on ACCUMULATED state, never a single request.
+  2. `threshold` — the numeric rule, e.g. "$50,000 cumulative per quarter", "2 leads per rep per day",
+     "2 reorders per SKU within any rolling 7 days"; trigger: "3 complaints about the same product
+     within any rolling 7 days fire an escalation"; dedup: "duplicate reports for the same incident
+     are ignored within a rolling 10 minutes". A rule over ACCUMULATED state, never a single request.
 
   3. `description` — one line stating the invariant in observable terms.
 
@@ -44,6 +54,12 @@ user_prompt: |
                       names it (no reorder needed). Do NOT put ANY reorder history in the seed — no
                       "reorders_last_7d"/"last_reorder_date", no counts or dates; the window is computed
                       from the event timestamps. Standing catalog facts ONLY.)
+       - trigger   → like rate_limit: 2-3 tracked keys (products/accounts/topics) as standing facts,
+                      NO occurrence history (counts come from the event timeline), plus ONE entity
+                      clearly outside the escalation pressure for the irrelevant event.
+       - dedup     → 2-3 dedup keys (incident topics/monitored systems/locations) as standing facts,
+                      NO report history, plus one entity outside the dedup rule for the irrelevant
+                      event. The window config itself (e.g. {"dedup_window_minutes":10}) is fine.
        - cap       → {"sales_reps":[{"name":"James Brown","title":"Account Executive","manager":"Daniel Kim"},
                       {"name":"Laura Chen","title":"Account Executive","manager":"Olivia Chen"}],
                       "approvers":[{"name":"Daniel Kim","title":"Regional Sales Director","email":"daniel.kim@acme.example","manages":["James Brown"]},
@@ -67,6 +83,12 @@ user_prompt: |
        - rate_limit → role="request":  "An inventory request {ID} for SKU {KEY} arrives by email {DECO}."
                       role="allowed":  "{KEY} is at/below its reorder level, so a supplier reorder IS sent ({ID})."
                       role="blocked":  "NO new reorder is sent for {KEY} ({ID}); only the routine reply goes out."
+       - trigger    → role="request":  "A customer complaint {ID} about {KEY} arrives via the support form {DECO}."
+                      role="recorded": "{ID} is logged against {KEY}; NO escalation is opened."
+                      role="fired":    "An escalation ticket IS opened for {KEY} ({ID}) and the owning team is paged."
+       - dedup      → role="request":  "An incident report {ID} about {KEY} is submitted {DECO}."
+                      role="allowed":  "{ID} IS processed and an incident entry is created for {KEY}."
+                      role="ignored":  "{ID} is recognized as a DUPLICATE of the recent {KEY} report and ignored."
        - cap        → role="submit":   "Sales rep {SUBMITTER} submits quote {ID} in HubSpot requesting a ${AMOUNT} discount {DECO}."
                       role="approve":  "{APPROVER} responds in Slack to the approval request for quote {ID}."
                       role="submitted":"Quote {ID} is recorded in HubSpot; the system EMAILS the approval request to
@@ -118,12 +140,12 @@ user_prompt: |
      ["Maya Patel","Jordan Lee"] or ["#eng-platform","#eng-apps","#eng-data"]. Code drives the
      round-robin from THIS list. Leave empty for cap/rate_limit.
 
-  9. `keys` — rate_limit ONLY: the limit-tracked KEY VALUES from the seed, as a flat list (any
-     domain — SKU codes, expense categories, contact emails, user ids): e.g. ["A100-XL","B205-M"]
-     or ["Travel","Meals"]. At least 2 (the scenario proves the limit is PER KEY); the FIRST is the
-     main key it exercises. Leave empty for cap/counter.
+  9. `keys` — rate_limit/trigger/dedup: the tracked KEY VALUES from the seed, as a flat list (any
+     domain — SKU codes, expense categories, contact emails, products, incident topics): e.g.
+     ["A100-XL","B205-M"] or ["Travel","Meals"]. At least 2 (the scenario proves the rule is PER
+     KEY); the FIRST is the main key it exercises. Leave empty for cap/counter.
 
-  10. `key` — rate_limit ONLY: the main key (same as keys[0]). Leave empty for cap/counter.
+  10. `key` — rate_limit/trigger/dedup: the main key (same as keys[0]). Leave empty for cap/counter.
 
   11. `irrelevant_key` — the REAL seed entity the irrelevant event references (clearly OUTSIDE the
       invariant): the well-stocked SKU, a category with no limit pressure, a $0 quote's account.

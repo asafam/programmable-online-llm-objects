@@ -59,7 +59,7 @@ def deterministic_issues(s: Sample) -> list[str]:
                 "action": e.expect.action if e.expect else "",
                 "reason": (e.expect.reason if e.expect else "") or "",
                 "concurrent_group": e.concurrent_group} for e in base]
-        issues += concurrent_pair_issues(evd, sc.threshold or "")
+        issues += concurrent_pair_issues(evd, sc.threshold or "", ct)
         if not s.modifications:
             issues.append("no modification")
         if not post:
@@ -84,7 +84,7 @@ def deterministic_issues(s: Sample) -> list[str]:
         except Exception:
             issues.append("seed is not valid JSON")
 
-    if ct == "rate_limit":
+    if ct in ("rate_limit", "trigger", "dedup"):
         from src.data.scenario_builder import _parse_window_days
         D = _parse_window_days(sc.threshold)
         # DOMAIN-GENERIC: prefer the declared limit-tracked keys (SKUs/categories/contacts);
@@ -95,13 +95,15 @@ def deterministic_issues(s: Sample) -> list[str]:
             return _skus(events)
         bkeys = keys_in(base)
         if len(bkeys) < 2:
-            issues.append("rate_limit base exercises <2 distinct keys (per-key generalization not shown)")
+            issues.append(f"{ct} base exercises <2 distinct keys (per-key generalization not shown)")
         # a shared key is only a conflict if the base + post events for it fall within the window
-        for k in bkeys & keys_in(post):
-            bd = [_absday(e.when) for e in base if k in e.input and e.when]
-            pd = [_absday(e.when) for e in post if k in e.input and e.when]
-            if bd and pd and min(pd) - max(bd) < D:
-                issues.append(f"base & post-mod reuse key {k} within the {D}-day window (conflict)")
+        # (dedup windows are MINUTES — post-mod lands on a later day, never in-window)
+        if ct != "dedup":
+            for k in bkeys & keys_in(post):
+                bd = [_absday(e.when) for e in base if k in e.input and e.when]
+                pd = [_absday(e.when) for e in post if k in e.input and e.when]
+                if bd and pd and min(pd) - max(bd) < D:
+                    issues.append(f"base & post-mod reuse key {k} within the {D}-day window (conflict)")
 
     if base and post:
         bd = max((_absday(e.when) for e in base if e.when), default=0)

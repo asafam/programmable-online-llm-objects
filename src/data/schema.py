@@ -43,6 +43,10 @@ class StateConstraintType(str, Enum):
     cap = "cap"               # cumulative total across requests must stay at/below a ceiling (e.g. $50K discounts)
     counter = "counter"       # per-key count within a period is capped (e.g. max 2 leads / rep / day)
     rate_limit = "rate_limit" # at most N occurrences for the same key in a rolling window (e.g. 2 reorders / 7d)
+    trigger = "trigger"       # INVERSE: the Nth related occurrence FIRES the gated action (e.g. 3 complaints
+                              # about the same product within 7d → escalation); earlier ones only accumulate
+    dedup = "dedup"           # repeats suppressed: the first occurrence per key is processed; identical ones
+                              # within a SHORT rolling window (e.g. 10 min) are ignored as duplicates
 
 class EventExpect(BaseModel):
     action: str

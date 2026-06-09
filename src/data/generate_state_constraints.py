@@ -105,14 +105,25 @@ def _trim_seed(seed_str: str, mx: int = 3) -> str:
     return _json.dumps(d) if changed else seed_str
 
 
-def concurrent_pair_issues(events: list[dict], threshold: str) -> list[str]:
+def concurrent_pair_issues(events: list[dict], threshold: str, ct: str = "counter") -> list[str]:
     """The simultaneous pair only RACES if its key already has exactly (limit-1) accepted
     same-key requests in-window — then the two arrivals compete for the last slot (one
     accepted, one blocked). A pair on a FRESH key (0 prior) is wrong: both are within the
     limit, neither should block. events: dicts {input, when, action, reason, concurrent_group}.
-    Conservative — returns [] when it can't confidently identify the key/limit."""
+    Conservative — returns [] when it can't confidently identify the key/limit.
+    trigger/dedup have their own race semantics: exactly ONE of the pair fires the quorum /
+    exactly ONE is deduplicated."""
     pair = [e for e in events if e.get("concurrent_group")]
     if len(pair) < 2:
+        return []
+    if ct in ("trigger", "dedup"):
+        txt = lambda e: f"{e.get('action', '')} {e.get('reason', '')}".lower()
+        marker = "is reached" if ct == "trigger" else "duplicate"
+        hits = sum(1 for e in pair if marker in txt(e))
+        if hits != 1:
+            return [f"{ct}: the concurrent pair must race — exactly one of the two should "
+                    f"{'fire the quorum' if ct == 'trigger' else 'be ignored as a duplicate'} "
+                    f"(found {hits})"]
         return []
     m = _re.search(r"\d+", threshold or "")
     if not m:
@@ -286,6 +297,22 @@ def coherence_issues(expect_texts: list[str], constraint_type: str) -> list[str]
     if not texts:
         return []
     issues = []
+    if constraint_type == "trigger":
+        # INVERSE semantics: the invariant is exercised when the quorum FIRES the action at least
+        # once AND at least one event only accumulates (below quorum).
+        if not any("quorum" in x and "is reached" in x for x in texts):
+            issues.append("trigger: no base event reaches the quorum (the action never fires)")
+        if not any("below the quorum" in x for x in texts):
+            issues.append("trigger: no accumulating event below the quorum (no state build-up shown)")
+        return issues
+    if constraint_type == "dedup":
+        # the invariant is exercised when ≥1 repeat is IGNORED as a duplicate AND ≥1 same-key
+        # repeat past the window is processed again (the window expires).
+        if not any("duplicate" in x for x in texts):
+            issues.append("dedup: no base event is ignored as a duplicate (invariant never exercised)")
+        if not any("window has expired" in x or "window expired" in x for x in texts):
+            issues.append("dedup: no same-key repeat past the window (window expiry never shown)")
+        return issues
     if not any(any(b in x for b in _BLOCK_TERMS) for x in texts):
         issues.append("no base event blocks/holds/suppresses the gated action (invariant never exercised)")
     if constraint_type in ("counter", "rate_limit"):
@@ -295,7 +322,7 @@ def coherence_issues(expect_texts: list[str], constraint_type: str) -> list[str]
 
 # Retained for the pipeline opt-in flag's choices; the type is now CLASSIFIED by
 # the LLM from the custodian's invariant, not script-assigned.
-CONSTRAINT_TYPES = ["cap", "counter", "rate_limit"]
+CONSTRAINT_TYPES = ["cap", "counter", "rate_limit", "trigger", "dedup"]
 
 
 def format_template(template: dict) -> str:
@@ -391,6 +418,20 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=kk, DECO=deco_for(rid))
         return build_rate_limit_scenario(seed, threshold, k, phrase,
                                          outcomes=tmpl, unit=unit or "request", keys=keys, **kw)
+    if ct == "trigger":
+        from src.data.scenario_builder import build_trigger_scenario
+        req = tmpl.get("request") or "An event {ID} for {KEY} arrives {DECO}."
+        k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, DECO=deco_for(rid))
+        return build_trigger_scenario(seed, threshold, k, phrase,
+                                      outcomes=tmpl, unit=unit or "escalation", keys=keys, **kw)
+    if ct == "dedup":
+        from src.data.scenario_builder import build_dedup_scenario
+        req = tmpl.get("request") or "A report {ID} about {KEY} arrives {DECO}."
+        k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, DECO=deco_for(rid))
+        return build_dedup_scenario(seed, threshold, k, phrase,
+                                    outcomes=tmpl, unit=unit or "report", keys=keys, **kw)
     if ct == "cap":
         sub = tmpl.get("submit") or "{SUBMITTER} submits request {ID} for ${AMOUNT} {DECO}."
         app = tmpl.get("approve") or "{APPROVER} reviews request {ID}."
@@ -466,7 +507,7 @@ def _other_key(seed_str: str, exclude: str):
 
 
 MOD_DIMS = {"counter": ["limit", "exempt"], "rate_limit": ["limit", "window", "exempt"],
-            "cap": ["limit"]}
+            "cap": ["limit"], "trigger": ["limit", "exempt"], "dedup": ["window", "exempt"]}
 
 
 def pick_mod_dim(spec, choice: str = "mixed") -> str:
@@ -503,8 +544,9 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = "limit"):
     latest = max((_ev_abs_day(e.when) for e in spec.base_events if e.when), default=7)
     mod_abs = latest + 1                                     # mod fires after the whole base scenario
     mod_when = _abs_to_day(mod_abs) + "T10:30"
-    # post-mod starts after the mod, and for rate_limit fully past the base rolling window
-    window = _parse_window_days(old_thr) if ct == "rate_limit" else 1
+    # post-mod starts after the mod, and for windowed families fully past the base rolling window
+    # (dedup windows are MINUTES — the next day is already clear of the base)
+    window = _parse_window_days(old_thr) if ct in ("rate_limit", "trigger") else 1
     base_abs = mod_abs + window + 1
     post_day = _abs_to_day(base_abs)
     key = spec.key
@@ -521,6 +563,18 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = "limit"):
                   f"Starting now, lower the {cap_noun} to ${new_limit:,} (from ${old_limit:,}).")
         new_thr = _re.sub(r"\d[\d,]*", str(new_limit), old_thr, count=1)
 
+    elif mod_dim == "window" and ct == "dedup":      # dedup: change the MINUTE-granular window
+        from src.data.scenario_builder import _parse_window_minutes
+        old_W = _parse_window_minutes(old_thr)
+        m = _re.search(r"(\d+)([-\s]*(?:[a-z]+[-\s]+)?(?:minutes?|mins?|hours?|hrs?|days?)\b)",
+                       old_thr, _re.I)
+        new_n = max(1, int(m.group(1)) // 2) if (m and expand) else (int(m.group(1)) * 2 if m else 0)
+        new_thr = old_thr[:m.start(1)] + str(new_n) + old_thr[m.end(1):] if m else old_thr
+        kw = {"base_day": post_day, "flip_old_window_min": old_W}
+        intent = (f"Starting now, shorten the dedup window: {new_thr} (instead of {old_thr})."
+                  if expand else
+                  f"Starting now, lengthen the dedup window: {new_thr} (instead of {old_thr}).")
+
     elif mod_dim == "window":                        # rate_limit: change the WINDOW length, not N
         old_D = _parse_window_days(old_thr)
         new_D = max(1, old_D // 2) if expand else old_D * 2   # shorter window = looser
@@ -533,7 +587,7 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = "limit"):
                   f"Starting now, lengthen the rolling window: {new_thr} (instead of {old_thr}).")
 
     elif mod_dim == "exempt":                        # one REAL seed entity becomes exempt
-        if ct == "rate_limit":
+        if ct in ("rate_limit", "trigger", "dedup"):
             ex = _second_key(spec.seed, "", spec.keys) or spec.key
             key = ex
             kw = {"base_day": post_day, "exempt_key": ex}
@@ -543,8 +597,18 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = "limit"):
             ex = roster[0] if roster else "the first member"
             kw = {"base_day": post_day, "reset_day": _abs_to_day(base_abs + 1), "exempt": ex}
             noun = "member"
-        intent = (f"Starting now, {ex} is exempt from the limit ({old_thr}); "
-                  f"every other {noun} remains limited as before.")
+        rule_noun = {"trigger": "quorum", "dedup": "deduplication"}.get(ct, "limit")
+        intent = (f"Starting now, {ex} is exempt from the {rule_noun} ({old_thr}); "
+                  f"every other {noun} remains subject to it as before.")
+
+    elif ct == "trigger":                            # "limit" on a quorum: expansion FIRES SOONER
+        new_limit = max(2, old_limit - 1) if expand else old_limit + 1
+        key = _second_key(spec.seed, spec.key, spec.keys) or spec.key
+        kw = {"base_day": post_day, "flip_old_limit": old_limit}
+        new_thr = _re.sub(r"\d[\d,]*", str(new_limit), old_thr, count=1)
+        intent = (f"Starting now, the action fires at {new_thr} (instead of {old_thr})."
+                  if expand else
+                  f"Starting now, the action only fires at {new_thr} (instead of {old_thr}).")
 
     else:                                            # "limit": change the count N
         new_limit = old_limit + 1 if expand else max(1, old_limit - 1)
@@ -575,7 +639,8 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = "limit"):
     if irr_tmpl:
         last_abs = max((_ev_abs_day(e.when) for e in events if e.when), default=_ev_abs_day(mod_when))
         # A real, in-domain request for a real entity OUTSIDE the invariant — domain id, no placeholder.
-        irr_id = {"cap": "Q-9001", "counter": "LD-2026-9001", "rate_limit": "REQ-9001"}.get(ct, "REQ-9001")
+        irr_id = {"cap": "Q-9001", "counter": "LD-2026-9001", "rate_limit": "REQ-9001",
+                  "trigger": "REQ-9001", "dedup": "REQ-9001"}.get(ct, "REQ-9001")
         # the LLM names the outside-the-invariant entity (any domain); legacy SKU scan as fallback
         irr_key = (spec.irrelevant_key
                    or (_well_stocked_sku(spec.seed) or _first_key(spec.seed) or "" if ct == "rate_limit" else ""))
@@ -636,7 +701,7 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
             "action": e.expect.action if e.expect else "",
             "reason": (e.expect.reason if e.expect else "") or "",
             "concurrent_group": e.concurrent_group} for e in base_events]
-    issues = coherence_issues(texts, ct) + concurrent_pair_issues(evd, gen.threshold or "")
+    issues = coherence_issues(texts, ct) + concurrent_pair_issues(evd, gen.threshold or "", ct)
     if issues:
         tqdm.write(f"  [builder] {template['id']}: built scenario flagged: {issues}", file=sys.stderr)
     return spec, True

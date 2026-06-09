@@ -27,6 +27,33 @@ def _parse_window_days(threshold: str, default: int = 7) -> int:
     return int(m.group(1)) if m else default
 
 
+def _parse_window_minutes(threshold: str, default: int = 10) -> int:
+    """MINUTE-granular window ('10 minutes', '2 hours', '1 day') — dedup windows are short."""
+    m = re.search(r"(\d+)[-\s]*(?:[a-z]+[-\s]+)?(minutes?|mins?|hours?|hrs?|days?)\b",
+                  threshold or "", re.I)
+    if not m:
+        return default
+    n, unit = int(m.group(1)), m.group(2).lower()
+    return n * (1 if unit.startswith("min") else 60 if unit.startswith(("hour", "hr")) else 1440)
+
+
+def _abs_minutes(when: str) -> int:
+    m = re.match(r"W(\d+)-(\d+)T(\d+):(\d+)", when or "")
+    if not m:
+        return _abs_day(when) * 1440
+    return (((int(m.group(1)) - 1) * 7 + int(m.group(2))) * 1440
+            + int(m.group(3)) * 60 + int(m.group(4)))
+
+
+def _minutes_to_when(week: int, day: int, minutes_after_9: int) -> str:
+    total = 9 * 60 + minutes_after_9
+    day += total // 1440
+    total %= 1440
+    week += (day - 1) // 7
+    day = (day - 1) % 7 + 1
+    return f"W{week:02d}-{day}T{total // 60:02d}:{total % 60:02d}"
+
+
 def _when(day: str, idx: int) -> str:
     total = 9 * 60 + idx * 5          # 09:00, 09:05, … 5 minutes apart
     return f"{day}T{total // 60:02d}:{total % 60:02d}"
@@ -183,6 +210,161 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                     ID=_ev_ref(e), KEY=k),
                 reason=f"{in_window} {unit}(s) were already done for {k} within the last {DAYS} (the "
                        f"limit of {N}), so a new one is blocked until that key's window clears.")
+        out.append(e)
+    return out
+
+
+def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
+                           base_day: str = "W01-1", id_offset: int = 0,
+                           outcomes: dict | None = None, unit: str = "escalation",
+                           keys: list | None = None, flip_old_limit: int | None = None,
+                           exempt_key: str | None = None) -> list:
+    """Quorum / threshold-trigger — the INVERSE of a rate limit: the Nth related occurrence for a
+    key within the rolling window FIRES the gated action (an escalation, a digest, a ticket);
+    earlier occurrences only accumulate. After firing, that key's count RESETS. Builds BY
+    CONSTRUCTION: (N-1) accumulating events for the main key, one mid-stream event for a SECOND
+    key (counts are per-key), a CONCURRENT PAIR at the quorum boundary (exactly ONE of the two is
+    the Nth and fires; the other lands on the fresh post-fire count), and one post-window event.
+    Mod flips: `flip_old_limit` (quorum changed) marks fires/records that flip vs the old quorum;
+    `exempt_key` never fires (its quorum-reaching event is the FLIP).
+    `phrase(req_id, key)` returns the raw-stimulus input text."""
+    N = _parse_limit(threshold)
+    D = _parse_window_days(threshold)
+    DAYS = f"{D} day" + ("s" if D != 1 else "")
+    week, day = int(base_day[1:3]), int(base_day[4:])
+    key2 = _second_key(seed, key, keys)
+    events: list = []   # (event, key)
+
+    def add(text, when, k, cg=None):
+        events.append((_ev(len(events) + 1, text, when, cg), k))
+
+    rid = lambda i: f"REQ-{i + id_offset:04d}"
+    n = 0
+    gap = 2 if (N - 1) * 2 < D else 0
+    for i in range(N - 1):                           # (N-1) accumulating events for the main key
+        n += 1
+        add(phrase(rid(n), key), f"W{week:02d}-{day + i * gap}T{9 + (0 if gap else i):02d}:00", key)
+        if i == 0 and key2:                          # a SECOND key mid-stream → counts are PER KEY
+            n += 1
+            add(phrase(rid(n), key2), f"W{week:02d}-{day + i * gap}T{10 + (0 if gap else i):02d}:00", key2)
+    pair_day = day + (N - 1) * gap                   # the pair races at the quorum boundary
+    pair_t = f"T{11 + (0 if gap else N - 1):02d}:30"
+    n += 1; add(phrase(rid(n), key), f"W{week:02d}-{pair_day}{pair_t}", key, "cg_limit")
+    n += 1; add(phrase(rid(n), key), f"W{week:02d}-{pair_day}{pair_t}", key, "cg_limit")
+    post_abs = (week - 1) * 7 + pair_day + D + 1     # past the window → fresh accumulation
+    n += 1; add(phrase(rid(n), key), f"W{(post_abs - 1) // 7 + 1:02d}-{(post_abs - 1) % 7 + 1}T09:00", key)
+
+    # simulate the quorum PER KEY: accumulate in-window; the Nth fires and resets the key
+    acc: dict[str, list[int]] = {}
+    out = []
+    for e, k in events:
+        d = _abs_day(e.when)
+        c = sum(1 for ad in acc.get(k, []) if d - ad < D) + 1   # incl. this occurrence
+        is_exempt = exempt_key is not None and k == exempt_key
+        if c >= N and not is_exempt:
+            acc[k] = []                                          # fired → reset the key's count
+            flip = (f" THIS IS THE FLIP: under the original quorum of {flip_old_limit} this is only "
+                    f"occurrence #{c} and would NOT have fired yet; the modification (quorum {N}) "
+                    f"fires it." if flip_old_limit and c < flip_old_limit else "")
+            e.expect = EventExpect(
+                action=_fill_outcome(outcomes, "fired",
+                    f"the {unit} FIRES for {k} ({_ev_ref(e)}).", ID=_ev_ref(e), KEY=k),
+                reason=f"this is occurrence #{c} for {k} within the last {DAYS} — the quorum of {N} "
+                       f"is reached, so the {unit} fires and {k}'s count resets.{flip}")
+        else:
+            acc.setdefault(k, []).append(d)
+            if is_exempt and c >= N:
+                flip = (f" THIS IS THE FLIP: without the exemption, occurrence #{c} reaches the "
+                        f"quorum of {N} and the {unit} would have FIRED; the modification exempts "
+                        f"{k}, so it is only recorded.")
+            elif flip_old_limit and c >= flip_old_limit and c < N:
+                flip = (f" THIS IS THE FLIP: under the original quorum of {flip_old_limit} this "
+                        f"occurrence #{c} would have FIRED; the modification (quorum {N}) only "
+                        f"records it.")
+            else:
+                flip = ""
+            e.expect = EventExpect(
+                action=_fill_outcome(outcomes, "recorded",
+                    f"{_ev_ref(e)} is recorded for {k}; NO {unit} fires.", ID=_ev_ref(e), KEY=k),
+                reason=f"only {c} occurrence(s) for {k} within the last {DAYS} — below the quorum "
+                       f"of {N}; counts are PER key.{flip}")
+        out.append(e)
+    return out
+
+
+def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
+                         base_day: str = "W01-1", id_offset: int = 0,
+                         outcomes: dict | None = None, unit: str = "complaint",
+                         keys: list | None = None, flip_old_window_min: int | None = None,
+                         exempt_key: str | None = None) -> list:
+    """Duplicate suppression in a SHORT rolling window (minute-granular): the first occurrence for
+    a key is processed; an identical repeat within W of the last processed one is IGNORED as a
+    duplicate; past the window it is processed again as new. Builds BY CONSTRUCTION: processed →
+    in-window repeat (ignored) → a DIFFERENT key mid-window (processed; dedup is per-key) → a
+    CONCURRENT PAIR on a fresh key (exactly one processed, one deduplicated) → a same-key repeat
+    past the window (processed again — the window expired).
+    Mod flips: `flip_old_window_min` (window shortened) marks repeats processed-now/ignored-before;
+    `exempt_key` is never deduplicated (its in-window repeat is the FLIP).
+    `phrase(req_id, key)` returns the raw-stimulus input text."""
+    W = _parse_window_minutes(threshold)
+    WTXT = (f"{W} minute" + ("s" if W != 1 else "")) if W < 60 else \
+           (f"{W // 60} hour" + ("s" if W // 60 != 1 else "")) if W % 60 == 0 and W < 1440 else \
+           f"{W // 1440} day" + ("s" if W // 1440 != 1 else "")
+    week, day = int(base_day[1:3]), int(base_day[4:])
+    key2 = _second_key(seed, key, keys) or f"{key}-B"
+    events: list = []   # (event, key)
+
+    def add(text, mins, k, cg=None):
+        events.append((_ev(len(events) + 1, text, _minutes_to_when(week, day, mins), cg), k))
+
+    rid = lambda i: f"REQ-{i + id_offset:04d}"
+    # repeats land mid-window; the flip-window variant places the repeat between the NEW (shorter)
+    # window and the OLD one, so it is processed now but would have been ignored before
+    gap_in = (W + (flip_old_window_min - W) // 2) if flip_old_window_min and flip_old_window_min > W \
+        else max(1, W // 3)
+    add(phrase(rid(1), key), 0, key)                            # processed (first occurrence)
+    add(phrase(rid(2), key), gap_in, key)                       # in-window repeat → ignored (or flip)
+    pair_t = gap_in + 2
+    # the pair is key2's FIRST contact → a true race (one processed, one deduplicated); the
+    # processed one also proves dedup is PER KEY (key's window is still active at this moment)
+    add(phrase(rid(3), key2), pair_t, key2, "cg_limit")
+    add(phrase(rid(4), key2), pair_t, key2, "cg_limit")
+    add(phrase(rid(5), key), gap_in + W + 5, key)               # past the window → processed again
+
+    # simulate: per key, the time of the LAST PROCESSED occurrence
+    last: dict[str, int] = {}
+    out = []
+    for e, k in events:
+        t = _abs_minutes(e.when)
+        delta = t - last[k] if k in last else None
+        is_exempt = exempt_key is not None and k == exempt_key
+        if delta is not None and delta < W and not is_exempt:
+            e.expect = EventExpect(
+                action=_fill_outcome(outcomes, "ignored",
+                    f"{_ev_ref(e)} is IGNORED as a duplicate; the {unit} is not processed again.",
+                    ID=_ev_ref(e), KEY=k),
+                reason=f"an identical {unit} for {k} was processed only {delta} minute(s) ago — "
+                       f"within the {WTXT} dedup window, so this one is ignored as a duplicate.")
+        else:
+            expired = delta is not None and delta >= W
+            if is_exempt and delta is not None and delta < W:
+                flip = (f" THIS IS THE FLIP: without the exemption, this repeat ({delta} minute(s) "
+                        f"after the last) falls inside the {WTXT} window and would have been "
+                        f"IGNORED as a duplicate; the modification exempts {k}.")
+            elif flip_old_window_min and delta is not None and delta < flip_old_window_min:
+                flip = (f" THIS IS THE FLIP: under the original {flip_old_window_min}-minute window "
+                        f"this repeat ({delta} minute(s) after the last) would have been IGNORED as "
+                        f"a duplicate; the modification ({WTXT} window) processes it.")
+            else:
+                flip = ""
+            note = (f" The dedup window has expired — more than {WTXT} have passed since the last "
+                    f"processed {unit} for {k}." if expired and not flip else "")
+            last[k] = t
+            e.expect = EventExpect(
+                action=_fill_outcome(outcomes, "allowed",
+                    f"the {unit} {_ev_ref(e)} IS processed.", ID=_ev_ref(e), KEY=k),
+                reason=(f"no {unit} for {k} was processed within the last {WTXT}; dedup is PER key."
+                        f"{note}{flip}"))
         out.append(e)
     return out
 
