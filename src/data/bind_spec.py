@@ -242,6 +242,7 @@ def assemble_sample(spec: WorkflowSpec, graph: ObjectGraph, *, mod_mapping: dict
         name=spec.name, domain=spec.domain,
         source_type=spec.source_type, link=spec.link,
         template=list(spec.template),          # raw base steps
+        seed=spec.seed,                        # initial reference state the read-services hold
         objects=graph.objects, steps=list(spec.grounded_steps),  # grounded steps (incl. constraint)
         modifications=modifications, events=events,
         state_constraint=spec.state_constraint,
@@ -282,7 +283,7 @@ def bind_one(llm, spec: WorkflowSpec, objects_cfg: dict, bind_mods_tmpl: str | N
     wf = Workflow(id=spec.id, name=spec.name, domain=spec.domain, source_type=spec.source_type,
                   objects=sample.objects, steps=list(sample.steps) + base_entity_texts,
                   events=sample.events, tools=[])
-    _add_mock_tools(llm, wf)            # mock data fed the bound step + base-event texts
+    _add_mock_tools(llm, wf, seed=sample.seed)  # read-service data built FROM the authoritative seed
     sample.tools = wf.tools
     sample.objects = wf.objects
     _rewrite_event_expectations(llm, sample, wf)  # object-specific expects (skips pre-authored base)

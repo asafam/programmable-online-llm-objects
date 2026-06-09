@@ -53,7 +53,22 @@ user_prompt: |
 
   3. `description` — one line stating the invariant in observable terms.
 
-  4. `base_events` — an ordered role="base" sequence, authored as ONE coherent unit from a
+  4. `seed` — the INITIAL REFERENCE STATE the system READS before any base event: the
+     authoritative starting picture, object-agnostic, using the SAME placeholder labels as the
+     events. This is what the workflow looks up — NOT the events, NOT the outcomes. Include the
+     standing facts the scenario depends on (so a reader can tell where every name/number comes
+     from), e.g.:
+       - roster: "Rep #1 (position 1), Rep #2 (position 2), Rep #3 (position 3); daily cap 2
+         leads per rep; all start the day with 0 leads assigned."
+       - catalog: "SKU #1: reorder level 10, on-hand 6 (at/below level → triggers a reorder);
+         no reorders sent for any SKU in the last 7 days."
+       - approvers + running total: "Approver #1, Approver #2; quarter-to-date approved discount
+         $0 of the $50,000 cap."
+     The base events and their expects MUST be consistent with this seed (positions, caps,
+     starting totals, reorder history). Do NOT put outcomes or post-event counts in the seed —
+     it is the state BEFORE the scenario runs.
+
+  5. `base_events` — an ordered role="base" sequence, authored as ONE coherent unit from a
      clean initial state.
 
      THE ACTION CHAIN (the crux — get this right). Each request is a pure external stimulus;
@@ -133,5 +148,5 @@ user_prompt: |
     concurrent_group = a label (e.g. "cg_limit") on the two simultaneous events; null otherwise,
     expect = { action, reason }   (observable outcome, no internal mechanism).
 
-  Return only the JSON object (constraint_type, threshold, description, base_events).
+  Return only the JSON object (constraint_type, threshold, description, seed, base_events).
   Do not output any object definitions or modifications.

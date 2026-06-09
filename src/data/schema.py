@@ -150,6 +150,8 @@ class GeneratedStateConstraint(BaseModel):
     constraint_type: StateConstraintType
     threshold: str
     description: str
+    seed: str = ""  # initial reference state the system READS (roster/catalog/approvers/
+                    # starting totals), object-agnostic; the base events + expects are consistent with it
     base_events: list["SpecEventWithExpect"]  # object-free; recipient bound in Phase 2
 
 
@@ -358,6 +360,7 @@ class Sample(BaseModel):
     source_type: str
     link: str = ""
     template: list[str] = Field(default_factory=list)  # raw/abstract base steps (the original template)
+    seed: str = ""  # initial reference state the system reads (roster/catalog/approvers/starting totals)
     objects: list[ObjectDef] = Field(default_factory=list)
     llm_classes: list[LLMClassDef] = Field(default_factory=list, description="llm-class templates available for spawning during evaluation")
     steps: list[str] = Field(default_factory=list)  # grounded workflow steps (incl. the state-constraint step)
@@ -737,6 +740,7 @@ class WorkflowSpec(BaseModel):
     link: str = ""
     template: list[str] = Field(default_factory=list)        # abstract template steps
     grounded_steps: list[str] = Field(default_factory=list)  # grounded NL steps (no object_ids)
+    seed: str = ""                                            # initial reference state the system reads (grounded)
     steps: list[SpecStep] = Field(default_factory=list)      # external-stimulus steps with observable expects
     base_events: list[SpecEventWithExpect] = Field(default_factory=list)  # state-infused base scenario
     modifications: list[SpecModification] = Field(default_factory=list)

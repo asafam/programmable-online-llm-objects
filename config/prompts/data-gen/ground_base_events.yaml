@@ -20,9 +20,9 @@ prompt: |
   {BASE_EVENTS}
 
   ## Rules
-  - List EVERY distinct placeholder that appears anywhere in the events above — both named
-    entities ("Rep #1", "Customer #2") and id-style labels ("Lead #1", "SKU #1", "Quote #1").
-    Scan the inputs AND the expects.
+  - List EVERY distinct placeholder that appears anywhere above — both named entities
+    ("Rep #1", "Customer #2", "Approver #1") and id-style labels ("Lead #1", "SKU #1",
+    "Quote #1"). Scan the inputs, the expects, AND the SEED section.
   - Map each to ONE concrete, realistic value, used consistently:
       - people / accounts: "Rep #1" → "Maya Patel", "Customer #1" → "Northwind Bio"
       - id-style labels: "Lead #1" → "LF-2026-0417", "SKU #1" → "A100-XL", "Quote #1" → "Q-1001",

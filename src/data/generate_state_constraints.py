@@ -184,6 +184,7 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
         d["role"] = "base"
         base_events.append(SpecEventWithExpect(**d))
     spec.base_events = base_events
+    spec.seed = gen.seed
     spec.state_constraint = StateConstraint(
         type=gen.constraint_type, threshold=gen.threshold, description=gen.description,
     )

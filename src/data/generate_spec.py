@@ -83,39 +83,44 @@ def _apply_mapping(text: str, pairs: list[tuple[str, str]]) -> str:
     return text
 
 
-def _ground_base_events(llm, grounded: GroundedTemplate, base_events: list, prompt_cfg: dict) -> list:
-    """Ground the infused base scenario by DETERMINISTIC substitution: the LLM returns only a
-    placeholder→concrete map, which we apply in code to inputs AND expects. This preserves the
-    expect SEMANTICS (reset/block/concurrent language) by construction — the grounding LLM kept
-    rephrasing expects and dropping those clauses. All structural fields are untouched (we mutate
-    the infused events in place). Falls back to the ungrounded events on failure."""
-    if not base_events:
-        return base_events
+def _ground_base_events(llm, grounded: GroundedTemplate, base_events: list, seed: str,
+                        prompt_cfg: dict) -> tuple[list, str]:
+    """Ground the infused base scenario AND the seed by DETERMINISTIC substitution: the LLM
+    returns only a placeholder→concrete map, which we apply in code to inputs, expects, and the
+    seed — one consistent cast. This preserves expect SEMANTICS (reset/block/concurrent) and
+    keeps the seed roster/catalog consistent with the events. Falls back to ungrounded on failure."""
+    if not base_events and not seed:
+        return base_events, seed
     grounded_steps = "\n".join(f"- {s}" for s in grounded.grounded_steps)
     be_text = "\n".join(
         f"{e.id} | input: {e.input}\n   expect: {(e.expect.action if e.expect else '')}"
         for e in base_events
     )
+    if seed:
+        be_text += f"\n\nSEED (initial reference state — also contains placeholders to map):\n{seed}"
     prompt = (prompt_cfg["prompt"]
               .replace("{NAME}", grounded.name).replace("{DOMAIN}", grounded.domain)
               .replace("{GROUNDED_STEPS}", grounded_steps).replace("{BASE_EVENTS}", be_text))
+
+    def _blobs(pairs):
+        out = [f"{e.input} {e.expect.action if e.expect else ''} {e.expect.reason if e.expect and e.expect.reason else ''}"
+               for e in base_events]
+        if seed:
+            out.append(seed)
+        return [_apply_mapping(b, pairs) for b in out]
 
     def _covers_all(m: EntityGroundingMap) -> bool:
         if not m.mappings:
             return False
         pairs = sorted(((e.placeholder, e.value) for e in m.mappings), key=lambda p: -len(p[0]))
-        for e in base_events:  # no placeholder may survive substitution anywhere
-            blob = f"{e.input} {e.expect.action if e.expect else ''} {e.expect.reason if e.expect and e.expect.reason else ''}"
-            if _PLACEHOLDER_RE.search(_apply_mapping(blob, pairs)):
-                return False
-        return True
+        return not any(_PLACEHOLDER_RE.search(b) for b in _blobs(pairs))
 
     res = generate_with_retries(
         llm=llm, prompt=prompt, response_model=EntityGroundingMap,
         item_id="ground-base-events", validator=_covers_all,
     )
     if not res:
-        return base_events
+        return base_events, seed
     # longest placeholder first so "Lead #10" is replaced before "Lead #1"
     pairs = sorted(((e.placeholder, e.value) for e in res.mappings), key=lambda p: -len(p[0]))
     for e in base_events:
@@ -125,7 +130,7 @@ def _ground_base_events(llm, grounded: GroundedTemplate, base_events: list, prom
             e.expect.action = _apply_mapping(e.expect.action, pairs)
             if e.expect.reason:
                 e.expect.reason = _apply_mapping(e.expect.reason, pairs)
-    return base_events
+    return base_events, _apply_mapping(seed, pairs) if seed else seed
 
 
 def _process_spec(llm, spec: WorkflowSpec, ground_cfg, steps_cfg, ground_be_cfg) -> WorkflowSpec | None:
@@ -153,9 +158,9 @@ def _process_spec(llm, spec: WorkflowSpec, ground_cfg, steps_cfg, ground_be_cfg)
     if not spec_steps:
         return None
     spec.steps = spec_steps.steps
-    spec.base_events = _normalize_concurrent_whens(
-        _ground_base_events(llm, grounded, spec.base_events, ground_be_cfg)
-    )
+    spec.base_events, spec.seed = _ground_base_events(
+        llm, grounded, spec.base_events, spec.seed, ground_be_cfg)
+    spec.base_events = _normalize_concurrent_whens(spec.base_events)
     return spec
 
 

@@ -252,12 +252,24 @@ def _infer_data_hint(tool_name: str) -> str:
     )
 
 
-def _generate_mock_tool_data(llm, tool_name: str, description: str, step_texts: list[str]) -> MockToolDef | None:
+def _generate_mock_tool_data(llm, tool_name: str, description: str, step_texts: list[str],
+                             seed: str = "") -> MockToolDef | None:
     """Generate a mock tool for a read-service object.
 
     tool_name: the exact tool name (e.g. ``org_directory_data``)
     description: what the service stores (from state_description or role)
+    seed: the authoritative initial reference state — if this tool holds part of it (roster,
+          catalog, approvers, starting totals), the data MUST match the seed exactly.
     """
+    seed_context = ""
+    if seed:
+        seed_context = (
+            "\n\nAUTHORITATIVE SEED — initial reference state of the whole automation:\n"
+            f"{seed}\n\nIf any of this seed is data THIS tool would serve (e.g. the roster, the "
+            "catalog, the approvers, the starting totals), reproduce it EXACTLY — same entities, "
+            "same positions/order, same numeric values. Do not invent different names or numbers "
+            "for state the seed already fixes. (Ignore the parts of the seed another tool serves.)"
+        )
     step_context = ""
     if step_texts:
         step_context = (
@@ -279,6 +291,7 @@ def _generate_mock_tool_data(llm, tool_name: str, description: str, step_texts: 
                 f"Generate realistic reference data for a read-service mock API tool.\n\n"
                 f"Tool: {tool_name}\n"
                 f"What it stores: {description}"
+                f"{seed_context}"
                 f"{step_context}\n\n"
                 f"IMPORTANT: {data_hint}\n\n"
                 "CRITICAL — your data is the reference state the system READS, never the results "
@@ -494,11 +507,12 @@ def _make_write_tool(entry: dict) -> "MockToolDef | None":
     )
 
 
-def _add_mock_tools(llm, sample: Workflow) -> None:
+def _add_mock_tools(llm, sample: Workflow, seed: str = "") -> None:
     """Post-process: generate read-side mock tools and stub write-side tools.
 
     Mutates sample.tools AND obj.skills (adds the tool name so the runtime exposes it).
     Read services are detected by: "call the `{object_id}_data` tool to retrieve data"
+    `seed` (optional) is the authoritative initial reference state the read-services must hold.
     """
     # Workflow.steps are plain strings (schema); tolerate legacy Step objects too.
     step_texts = [(_s if isinstance(_s, str) else getattr(_s, "text", "")) for _s in sample.steps]
@@ -520,7 +534,7 @@ def _add_mock_tools(llm, sample: Workflow) -> None:
         if tool_name in existing_tool_names:
             continue
         description = (obj.state_description or "").strip() or obj.role
-        tool = _generate_mock_tool_data(llm, tool_name, description, step_texts)
+        tool = _generate_mock_tool_data(llm, tool_name, description, step_texts, seed=seed)
         if tool:
             sample.tools.append(tool)
             existing_tool_names.add(tool_name)
