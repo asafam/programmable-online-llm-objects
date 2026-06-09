@@ -75,6 +75,15 @@ def _is_blocked(text: str) -> bool:
     return any(b in text.lower() for b in _BLOCK_TERMS)
 
 
+def _valid_seed(s: str) -> bool:
+    """The seed must be a non-empty JSON object (it becomes the read-service mock data verbatim)."""
+    import json as _json
+    try:
+        return isinstance(_json.loads(s), dict) and bool(_json.loads(s))
+    except Exception:
+        return False
+
+
 def concurrent_pair_issues(events: list[dict], threshold: str) -> list[str]:
     """The simultaneous pair only RACES if its key already has exactly (limit-1) accepted
     same-key requests in-window — then the two arrivals compete for the last slot (one
@@ -164,6 +173,7 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
         # AND scenario coherence — at least one BLOCKED action, plus a RESET event for
         # counter/rate_limit. Retries until the LLM actually exercises the invariant + reset.
         validator=lambda r: bool(r.base_events) and bool(r.threshold)
+        and _valid_seed(r.seed)
         and sum(1 for e in r.base_events if e.concurrent_group) >= 2
         and not coherence_issues(
             [f"{e.expect.action} {e.expect.reason or ''}" for e in r.base_events if e.expect],

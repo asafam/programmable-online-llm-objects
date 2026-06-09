@@ -53,20 +53,22 @@ user_prompt: |
 
   3. `description` — one line stating the invariant in observable terms.
 
-  4. `seed` — the INITIAL REFERENCE STATE the system READS before any base event: the
-     authoritative starting picture, object-agnostic, using the SAME placeholder labels as the
-     events. This is what the workflow looks up — NOT the events, NOT the outcomes. Include the
-     standing facts the scenario depends on (so a reader can tell where every name/number comes
-     from), e.g.:
-       - roster: "Rep #1 (position 1), Rep #2 (position 2), Rep #3 (position 3); daily cap 2
-         leads per rep; all start the day with 0 leads assigned."
-       - catalog: "SKU #1: reorder level 10, on-hand 6 (at/below level → triggers a reorder);
-         no reorders sent for any SKU in the last 7 days."
-       - approvers + running total: "Approver #1, Approver #2; quarter-to-date approved discount
-         $0 of the $50,000 cap."
+  4. `seed` — the INITIAL REFERENCE STATE the system READS, as a single JSON OBJECT serialized
+     to a string. This is the AUTHORITATIVE reference data the read-services serve (it becomes the
+     mock-API responses verbatim), object-agnostic, using the SAME placeholder labels as the
+     events. It is what the workflow LOOKS UP — standing facts ONLY: NOT events, NOT outcomes,
+     NOT post-event counts. Make it COMPLETE — include EVERY piece of reference state the scenario
+     reads — and structure it with clear field names. Examples (return as a JSON string):
+       - roster: {"reps":[{"name":"Rep #1","position":1,"daily_lead_cap":2},
+                  {"name":"Rep #2","position":2,"daily_lead_cap":2},
+                  {"name":"Rep #3","position":3,"daily_lead_cap":2}]}
+       - catalog: {"skus":[{"sku":"SKU #1","reorder_level":10,"on_hand":6,"reorders_last_7d":0},
+                  {"sku":"SKU #2","reorder_level":8,"on_hand":20,"reorders_last_7d":0}]}
+       - approvers: {"approvers":["Approver #1","Approver #2"],
+                  "quarter_to_date_approved_discount":0,"discount_cap":50000}
      The base events and their expects MUST be consistent with this seed (positions, caps,
-     starting totals, reorder history). Do NOT put outcomes or post-event counts in the seed —
-     it is the state BEFORE the scenario runs.
+     starting totals, reorder history). Do NOT put outcomes, decisions, or post-event counts in
+     the seed — it is the state BEFORE the scenario runs. Return valid JSON.
 
   5. `base_events` — an ordered role="base" sequence, authored as ONE coherent unit from a
      clean initial state.
