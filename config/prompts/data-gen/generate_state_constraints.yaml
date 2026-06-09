@@ -120,6 +120,20 @@ user_prompt: |
     - GOOD: "New lead arrives: Olivia Chen, Northwind Bio, enterprise plan."
     - BAD:  "New lead arrives. Reps Maya, Jordan, Sofia are active and it's a clean start."  (mixes roster state)
 
+  GATED-ACTION ACTOR — who performs the action matters. If the workflow's steps show the gated
+  action is taken by a DISTINCT named role/actor — an approver, reviewer, or dispatcher who must
+  act (e.g. "an approval request is sent to the Sales Director, who approves or rejects it in
+  Slack") rather than the system deciding automatically — then the base events that move the
+  accumulator MUST be THAT ACTOR's decisions, phrased as the actor acting:
+    - GOOD: "Approver #1 (the Sales Director) approves quote Q-1001 ($12,000 discount) in Slack."
+    - BAD:  "Rep submits quote Q-1001 in HubSpot." then expecting it to just be "approved"  (there
+            is NO auto-approval — the approver must act; a bare submission never approves anything).
+  The accumulation happens on the ACTOR's action, and the threshold blocks the ACTOR from taking
+  it: "approving Q-N would push the quarter's approved discount over $50,000, so Approver #1 does
+  NOT approve Q-N — it is held for exception handling; no approval is recorded." List the actor(s)
+  in the seed. (When the gated action IS automatic — a system reorder/assignment — the event is the
+  triggering request itself, as usual.)
+
   DECOUPLING — this is critical. Do NOT assume or mention HOW the rule is implemented.
   Do NOT reference any specific object as "the owner", and do NOT use internal mechanics
   (no "custodian", no "reserve/confirm/release", no "hold id", no per-object accumulator
