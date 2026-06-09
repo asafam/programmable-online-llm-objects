@@ -37,19 +37,21 @@ user_prompt: |
        - counter   → {"reps":[{"name":"Maya Patel","position":1,"daily_lead_cap":2},
                       {"name":"Jordan Lee","position":2,"daily_lead_cap":2}]}   (2-3 reps, NOT more)
        - rate_limit→ {"catalog":{"skus":[{"sku":"A100-XL","reorder_level":10,"on_hand":6},
-                      {"sku":"B205-M","reorder_level":8,"on_hand":5}]}}   (2-3 SKUs — the limit is PER SKU,
-                      so a second SKU is REQUIRED to show it generalizes. EVERY SKU the scenario reorders
-                      MUST be AT/BELOW its reorder_level (on_hand <= reorder_level) so a reorder is valid.
-                      Do NOT put ANY reorder history in the seed — no "reorders_last_7d", no
-                      "last_reorder_date", no counts or dates. The window is computed from the event
-                      timestamps; history fields in the seed contradict it. Standing catalog facts ONLY.)
+                      {"sku":"B205-M","reorder_level":8,"on_hand":5},
+                      {"sku":"C310-L","reorder_level":10,"on_hand":40}]}}   (the rate-limited SKUs MUST be
+                      AT/BELOW reorder_level (on_hand <= reorder_level) so reorders are valid; include ALSO
+                      exactly ONE WELL-STOCKED SKU (on_hand WELL ABOVE reorder_level) — the irrelevant event
+                      names it (no reorder needed). Do NOT put ANY reorder history in the seed — no
+                      "reorders_last_7d"/"last_reorder_date", no counts or dates; the window is computed
+                      from the event timestamps. Standing catalog facts ONLY.)
        - cap       → {"sales_reps":[{"name":"James Brown","title":"Account Executive","manager":"Daniel Kim"},
                       {"name":"Laura Chen","title":"Account Executive","manager":"Olivia Chen"}],
-                      "approvers":[{"name":"Daniel Kim","title":"Regional Sales Director","manages":["James Brown"]},
-                      {"name":"Olivia Chen","title":"Revenue Ops Manager","manages":["Laura Chen"]}],
+                      "approvers":[{"name":"Daniel Kim","title":"Regional Sales Director","email":"daniel.kim@acme.example","manages":["James Brown"]},
+                      {"name":"Olivia Chen","title":"Revenue Ops Manager","email":"olivia.chen@acme.example","manages":["Laura Chen"]}],
                       "discount_cap":50000}
                       (cap MUST show the full approval chain: each rep's TITLE + manager, and each
-                      approver's TITLE + who they manage — so the submitter→approver link is grounded.)
+                      approver's TITLE, EMAIL, and who they manage — the approval request is emailed to
+                      the manager, so every approver MUST have an email address.)
      Include every entity the scenario reads. The seed is STANDING REFERENCE STATE only: NO outcomes,
      NO assignments, and NO accumulated/running/STARTING counts or totals (no "quarter_to_date...",
      no current counts, no history dates). The configured LIMIT/cap itself is fine (it's config); the
@@ -77,11 +79,12 @@ user_prompt: |
         is the quote-approval-policy object's job; the "submitted" EXPECT VERIFIES the email went to the
         right manager). {SUBMITTER}=rep, {MANAGER}=that rep's manager, {ENTITY}=the manager who decides
         — all filled by code from the seed's sales_reps.)
-     ALL families ALSO provide role="irrelevant": ONE request CLEARLY OUTSIDE this invariant, handled
-     normally (it proves the modification is SCOPED). e.g.
-           counter:    "A CRM status webhook {ID} (no lead attached) is received."
-           rate_limit: "A stock-level lookup {ID} for a product well above its reorder level arrives."
-           cap:        "A $0-discount quote {ID} that needs no approval is recorded."
+     ALL families ALSO provide role="irrelevant": ONE request for a REAL seed entity that is CLEARLY
+     OUTSIDE this invariant, handled normally (it proves the modification is SCOPED). It must name a
+     real entity from the seed — NOT a placeholder. e.g.
+           counter:    "A CRM status webhook {ID} (no lead attached, no assignment) is received."
+           rate_limit: "A stock-level check {ID} for SKU {KEY} (well above its reorder level) arrives."
+           cap:        "Quote {ID} with a $0 discount (no approval required) is recorded."
      The OUTCOME phrasings MUST describe the workflow's REAL gated action (a reorder, an assignment,
      an approval) — make "blocked"/"held" clearly state the action did NOT happen. Put NO number,
      count, or date in any phrasing — only placeholders + flavor.

@@ -102,6 +102,24 @@ def deterministic_issues(s: Sample) -> list[str]:
         pd = min((_absday(e.when) for e in post if e.when), default=10 ** 6)
         if pd <= bd:
             issues.append("post_mod events overlap or precede the base events")
+
+    # the irrelevant event must be a REAL in-domain request (no placeholder id), naming a seed entity
+    for e in [ev for ev in s.events if ev.role == "irrelevant"]:
+        if re.search(r"\bIRR[-_]", e.input):
+            issues.append(f"irrelevant event {e.id} uses a placeholder id (IRR-…), not a real domain id")
+        if ct == "rate_limit":
+            named = _skus([e])
+            seed_skus = set(re.findall(r'"sku"\s*:\s*"([^"]+)"', s.seed or ""))
+            if named and not (named & seed_skus):
+                issues.append(f"irrelevant event names SKU {sorted(named)} absent from the seed")
+    # cap: the approval request is emailed to the manager — approvers must carry email addresses
+    if ct == "cap" and s.seed:
+        try:
+            ap = json.loads(s.seed).get("approvers") or []
+            if ap and not all(isinstance(a, dict) and a.get("email") for a in ap):
+                issues.append("cap seed approvers are missing email addresses (the request is emailed to them)")
+        except Exception:
+            pass
     return issues
 
 

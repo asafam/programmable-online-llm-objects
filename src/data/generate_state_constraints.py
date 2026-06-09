@@ -411,6 +411,22 @@ def _abs_to_day(absday: int) -> str:
     return f"W{(absday - 1) // 7 + 1:02d}-{(absday - 1) % 7 + 1}"
 
 
+def _well_stocked_sku(seed_str: str):
+    """The seed SKU that is WELL ABOVE its reorder level (no reorder needed) — the irrelevant
+    event names it as a real, outside-the-invariant request."""
+    import json as _json
+    try:
+        d = _json.loads(seed_str)
+    except Exception:
+        return None
+    skus = (d.get("catalog") or {}).get("skus") if isinstance(d.get("catalog"), dict) else d.get("skus")
+    for s in (skus or []):
+        if isinstance(s, dict) and s.get("sku") and s.get("on_hand") is not None and s.get("reorder_level") is not None:
+            if s["on_hand"] > s["reorder_level"]:
+                return s["sku"]
+    return None
+
+
 def _other_key(seed_str: str, exclude: str):
     import json as _json
     try:
@@ -479,14 +495,19 @@ def build_mod_scenario(spec, mod_type: str):
     irr_tmpl = {p.role: p.template for p in spec.phrasings}.get("irrelevant")
     if irr_tmpl:
         last_abs = max((_ev_abs_day(e.when) for e in events if e.when), default=_ev_abs_day(mod_when))
-        irr_input = _re.sub(r"\{[A-Z_]+\}", "", irr_tmpl.replace("{ID}", "IRR-0001")).strip()
+        # A real, in-domain request for a real entity OUTSIDE the invariant — domain id, no placeholder.
+        irr_id = {"cap": "Q-9001", "counter": "LD-2026-9001", "rate_limit": "REQ-9001"}.get(ct, "REQ-9001")
+        irr_key = _well_stocked_sku(spec.seed) or _first_key(spec.seed) or "" if ct == "rate_limit" else ""
+        irr_input = irr_tmpl.replace("{ID}", irr_id).replace("{KEY}", irr_key)
+        irr_input = _re.sub(r"\{[A-Z_]+\}", "", irr_input).strip()
+        ref = irr_key or irr_id
         events.append(SpecEventWithExpect(
             id="IRR001", call_type="send_event", source="__external__", input=irr_input,
             when=_abs_to_day(last_abs + 1) + "T09:00", role="irrelevant", after_mod_ids=["M001"],
             expect=EventExpect(
-                action="The request is handled normally; the modification does not change it.",
-                reason=f"this request is outside the {spec.unit or 'gated'} invariant, so the rule "
-                       f"change does not apply to it.")))
+                action=f"{ref} is handled normally; the modification does not change it.",
+                reason=f"this request falls outside the {spec.unit or 'gated'} invariant, so neither the "
+                       f"original rule nor the modification applies to it.")))
     return intent, mod_when, events
 
 
