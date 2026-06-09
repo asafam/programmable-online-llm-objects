@@ -125,21 +125,21 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
         if in_window < N:
             aged = any(d - ad >= D for ad in accepted.get(k, []))
             accepted.setdefault(k, []).append(d)
-            note = (f" More than {D} days have passed since the earlier reorders for {k}, which have "
+            note = (f" More than {D} days have passed since the earlier {unit}s for {k}, which have "
                     f"aged out of the rolling {D}-day window." if aged else "")
             flip = (f" THIS IS THE FLIP: the original limit of {flip_old_limit} would have BLOCKED "
                     f"this {unit} (#{in_window + 1} for {k} in the window), but the modification "
                     f"(limit {N}) ALLOWS it." if flip_old_limit and in_window >= flip_old_limit else "")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "allowed",
-                    f"{_ev_ref(e)} for {k} is at/below its reorder level and a reorder request IS sent to the supplier.",
+                    f"the {unit} for {k} is within the limit and IS performed ({_ev_ref(e)}).",
                     ID=_ev_ref(e), KEY=k),
                 reason=f"only {in_window} {unit}(s) for {k} in the last {D} days (< {N}); the limit is "
                        f"PER key, so {k} is unaffected by other keys.{note}{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "blocked",
-                    f"NO new reorder is sent for {_ev_ref(e)} ({k}); only the routine inventory reply goes out.",
+                    f"the {unit} for {k} ({_ev_ref(e)}) is NOT performed — it is blocked by the rolling-window limit.",
                     ID=_ev_ref(e), KEY=k),
                 reason=f"{in_window} {unit}(s) were already done for {k} within the last {D} days (the "
                        f"limit of {N}), so a new one is blocked until that key's window clears.")
@@ -176,10 +176,9 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
         # The submission expect VERIFIES the system routed the approval to the rep's MANAGER.
         e.expect = EventExpect(
             action=_fill_outcome(outcomes, "submitted",
-                f"Quote {qid} is recorded in HubSpot; the system EMAILS the approval request to "
-                f"{rep}'s manager, {mgr}, who can act on it in Slack.",
+                f"{qid} is recorded; the system routes the approval request to {rep}'s manager, {mgr}.",
                 ID=qid, SUBMITTER=rep, MANAGER=mgr),
-            reason=f"the quote-approval-policy routes each request to the submitter's manager ({mgr} "
+            reason=f"the system's routing policy sends each request to the submitter's manager ({mgr} "
                    f"for {rep}); the submission itself is always recorded and is not the gated action.")
         events.append(e)
 
@@ -201,14 +200,14 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
                     f"(${cap:,}) ALLOWS it." if flip_old_limit and total > flip_old_limit else "")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "approved",
-                    f"{mgr} approves {qid} (${amt:,}) back via Slack; HubSpot records it as approved.",
+                    f"{mgr} approves {qid} (${amt:,}); the {unit} is recorded.",
                     ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}"),
                 reason=f"the {unit} of ${amt:,} keeps the running approved total at ${total:,}, within the ${cap:,} cap.{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "held",
-                    f"{mgr} approves {qid} in Slack, BUT the system holds it for exception handling and no "
-                    f"approval is recorded — the approver acts, but it cannot take effect because it would breach the cap.",
+                    f"{mgr} acts on {qid}, BUT the system holds it for exception handling — the {unit} cannot "
+                    f"take effect because it would breach the cap, so none is recorded.",
                     ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}"),
                 reason=f"the {unit} of ${amt:,} would push the running total from ${total:,} to ${total + amt:,}, "
                        f"over the ${cap:,} cap, so the system intercepts it and routes it to exception handling.")

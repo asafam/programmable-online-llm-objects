@@ -82,6 +82,11 @@ user_prompt: |
      The OUTCOME phrasings MUST describe the workflow's REAL gated action (a reorder, an assignment,
      an approval) — make "blocked"/"held" clearly state the action did NOT happen. Put NO number,
      count, or date in any phrasing — only placeholders + flavor.
+     IMPORTANT — the examples above show the FORMAT per family; phrase EVERY template for THIS
+     workflow's actual domain, entities, action, and channels. A different rate_limit might be
+     "API calls per user per hour" (not reorders/SKUs); a different counter might be on-call shifts
+     (not leads/reps); a different cap might route via a ticketing tool (not email/Slack). Use the
+     real nouns and channels of the workflow in front of you — do NOT copy the example domains.
 
   6. `unit` — the gated action's noun for THIS workflow: "reorder", "lead assignment", "approval"
      (used in the computed reasons).

@@ -358,7 +358,7 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="", *
     # outcome wording: pass the full template map (the builders look up allowed/blocked/approved/
     # held/submitted) so the action text is domain-correct for any workflow; fallback inside builder.
     if ct == "counter":
-        req = tmpl.get("request") or tmpl.get("submit") or "A new lead {ID} arrives {DECO}."
+        req = tmpl.get("request") or tmpl.get("submit") or "A new request {ID} arrives {DECO}."
         phrase = lambda lid, d: fill(req, ID=lid, DECO=(d if isinstance(d, str) else deco_for(lid)))
         return build_counter_scenario(seed, threshold, phrase, decos or [""],
                                       outcomes=tmpl, unit=unit or "lead assignment", **kw)
@@ -369,8 +369,8 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="", *
         return build_rate_limit_scenario(seed, threshold, k, phrase,
                                          outcomes=tmpl, unit=unit or "reorder", **kw)
     if ct == "cap":
-        sub = tmpl.get("submit") or "Sales rep {SUBMITTER} submits quote {ID} requesting a ${AMOUNT} discount {DECO}."
-        app = tmpl.get("approve") or "{APPROVER} responds in Slack to the approval request for quote {ID}."
+        sub = tmpl.get("submit") or "{SUBMITTER} submits request {ID} for ${AMOUNT} {DECO}."
+        app = tmpl.get("approve") or "{APPROVER} reviews request {ID}."
         reps = _seed_sales_reps(seed)
         if not reps:                              # no chain in the seed → fall back to bare approvers
             reps = [("an account executive", a) for a in (_seed_approvers(seed) or ["the approver"])]
