@@ -164,7 +164,9 @@ def simulate_rotation(seed_str: str, events: list[dict], threshold: str) -> list
     reps.sort(key=lambda r: r[1])
     names = [r[0] for r in reps]
     dcap = _parse_limit(threshold)
-    caps = {r[0]: (r[2] or dcap) for r in reps}
+    # The THRESHOLD is the invariant — use it as the cap (the seed's per-rep cap is just reference
+    # data, and for a modification the threshold changes while the seed still shows the old cap).
+    caps = {nm: dcap for nm in names}
     n = len(names)
     order = sorted(range(len(events)), key=lambda i: (events[i].get("when", ""), events[i].get("id", "")))
     res: dict[int, dict] = {}
@@ -278,21 +280,20 @@ def _first_key(seed_str: str):
     return None
 
 
-def _build_scenario(gen: GeneratedScenarioSpec) -> list:
-    """CODE builds the request sequence + derives expects from the LLM's seed + phrasing —
-    the LLM never touches the arithmetic. Routes to the family builder by constraint_type."""
+def _run_builder(ct, seed, threshold, phrasings, decorations, key="", **kw) -> list:
+    """Construct the phrase closures from the LLM's phrasing templates + decorations, then call
+    the family builder. Shared by the base scenario AND the modification scenario."""
     from src.data.scenario_builder import (
         build_cap_scenario, build_counter_scenario, build_rate_limit_scenario,
     )
-    ct = getattr(gen.constraint_type, "value", gen.constraint_type)
-    tmpl = {p.role: p.template for p in gen.phrasings}
-    decos = gen.decorations or []
+    tmpl = {p.role: p.template for p in phrasings}
+    decos = decorations or []
 
     def fill(t, **vals):
         s = t or ""
         for k, v in vals.items():
             s = s.replace("{" + k + "}", str(v))
-        return _re.sub(r"\{[A-Z_]+\}", "", s).strip()  # drop any leftover placeholder
+        return _re.sub(r"\{[A-Z_]+\}", "", s).strip()
 
     def deco_for(idstr):
         if not decos:
@@ -303,20 +304,113 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
     if ct == "counter":
         req = tmpl.get("request") or tmpl.get("submit") or "A new lead {ID} arrives {DECO}."
         phrase = lambda lid, d: fill(req, ID=lid, DECO=(d if isinstance(d, str) else deco_for(lid)))
-        return build_counter_scenario(gen.seed, gen.threshold, phrase, decos or [""])
+        return build_counter_scenario(seed, threshold, phrase, decos or [""], **kw)
     if ct == "rate_limit":
         req = tmpl.get("request") or "A request {ID} arrives for {KEY} {DECO}."
-        key = gen.key or _first_key(gen.seed) or "SKU-1"
-        phrase = lambda rid, blk, k: fill(req, ID=rid, KEY=k, DECO=deco_for(rid))
-        return build_rate_limit_scenario(gen.seed, gen.threshold, key, phrase)
+        k = key or _first_key(seed) or "SKU-1"
+        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=kk, DECO=deco_for(rid))
+        return build_rate_limit_scenario(seed, threshold, k, phrase, **kw)
     if ct == "cap":
         sub = tmpl.get("submit") or "Quote {ID} is submitted requesting a ${AMOUNT} discount {DECO}."
         app = tmpl.get("approve") or "{APPROVER} approves {ID}."
-        approvers = _seed_approvers(gen.seed) or ["the approver"]
+        approvers = _seed_approvers(seed) or ["the approver"]
         submit_phrase = lambda qid, amt: fill(sub, ID=qid, AMOUNT=f"{amt:,}", DECO=deco_for(qid))
         approve_phrase = lambda qid, ap: fill(app, ID=qid, APPROVER=ap)
-        return build_cap_scenario(gen.seed, gen.threshold, submit_phrase, approve_phrase, approvers)
+        return build_cap_scenario(seed, threshold, submit_phrase, approve_phrase, approvers, **kw)
     return []
+
+
+def _build_scenario(gen: GeneratedScenarioSpec) -> list:
+    """CODE builds the base request sequence + derives expects from the LLM's seed + phrasing."""
+    return _run_builder(getattr(gen.constraint_type, "value", gen.constraint_type),
+                        gen.seed, gen.threshold, gen.phrasings, gen.decorations, gen.key)
+
+
+def _base_cap_total(base_events) -> int:
+    """Sum the approved discount amounts in the base cap scenario (the running total it ended at)."""
+    total = 0
+    for e in base_events:
+        if not e.expect:
+            continue
+        a = e.expect.action or ""
+        if "approves" in a and "BUT" not in a and "held" not in a.lower():
+            m = _re.search(r"\$([\d,]+)", a)
+            if m:
+                total += int(m.group(1).replace(",", ""))
+    return total
+
+
+def _ev_abs_day(when: str) -> int:
+    m = _re.match(r"W(\d+)-(\d+)", when or "")
+    return (int(m.group(1)) - 1) * 7 + int(m.group(2)) if m else 0
+
+
+def _abs_to_day(absday: int) -> str:
+    absday = max(1, absday)
+    return f"W{(absday - 1) // 7 + 1:02d}-{(absday - 1) % 7 + 1}"
+
+
+def _other_key(seed_str: str, exclude: str):
+    import json as _json
+    try:
+        d = _json.loads(seed_str)
+    except Exception:
+        return None
+    skus = (d.get("catalog") or {}).get("skus") if isinstance(d.get("catalog"), dict) else d.get("skus")
+    for s in (skus or []):
+        code = s.get("sku") if isinstance(s, dict) else s
+        if code and code != exclude:
+            return code
+    return None
+
+
+def build_mod_scenario(spec, mod_type: str):
+    """CODE-generate the modification + post-mod events for a state scenario: derive the MODIFIED
+    threshold and re-run the family builder so the post-mod scenario EXERCISES the new rule (with a
+    flip — allowed-under-new where it was blocked-under-old). Placed AFTER all base events to avoid
+    date conflicts: rate_limit also uses a DIFFERENT key (no rolling-window overlap), counter lands
+    on a fresh day (daily reset), cap continues the base's running total. Returns (intent, mod_when,
+    post_mod_events)."""
+    from src.data.scenario_builder import _parse_window_days
+    ct = spec.state_constraint.type.value
+    old_thr = spec.state_constraint.threshold
+    old_limit = _parse_limit(old_thr)
+    expand = mod_type != "restriction"
+
+    latest = max((_ev_abs_day(e.when) for e in spec.base_events if e.when), default=7)
+    mod_abs = latest + 1                                     # mod fires after the whole base scenario
+    mod_when = _abs_to_day(mod_abs) + "T10:30"
+    # post-mod starts after the mod, and for rate_limit fully past the base rolling window
+    window = _parse_window_days(old_thr) if ct == "rate_limit" else 1
+    base_abs = mod_abs + window + 1
+    post_day = _abs_to_day(base_abs)
+    key = spec.key
+
+    if ct == "cap":
+        new_limit = int(round(old_limit * 1.5)) if expand else int(round(old_limit * 0.67))
+        kw = {"base_day": post_day, "starting_total": _base_cap_total(spec.base_events)}
+        intent = (f"Starting now, raise the quarter's approved-discount cap to ${new_limit:,} "
+                  f"(from ${old_limit:,})." if expand else
+                  f"Starting now, lower the quarter's approved-discount cap to ${new_limit:,} (from ${old_limit:,}).")
+    else:
+        new_limit = old_limit + 1 if expand else max(1, old_limit - 1)
+        if ct == "rate_limit":
+            key = _other_key(spec.seed, spec.key) or spec.key   # different SKU → no window overlap
+            kw = {"base_day": post_day}
+            unit = "reorders for the same product within the rolling window"
+        else:
+            kw = {"base_day": post_day, "reset_day": _abs_to_day(base_abs + 1)}  # distinct later day
+            unit = "new lead assignments per representative per day"
+        intent = (f"Starting now, allow up to {new_limit} {unit} instead of {old_limit}." if expand else
+                  f"Starting now, allow only {new_limit} {unit} instead of {old_limit}.")
+
+    new_thr = _re.sub(r"\d[\d,]*", str(new_limit), old_thr, count=1)
+    events = _run_builder(ct, spec.seed, new_thr, spec.phrasings, spec.decorations, key, **kw)
+    for i, e in enumerate(events, 1):
+        e.id = f"PM{i:03d}"
+        e.role = "post_mod"
+        e.after_mod_ids = ["M001"]
+    return intent, mod_when, events
 
 
 def _process_template(llm, template: dict, prompt_template: str) -> tuple[WorkflowSpec, bool]:
@@ -336,6 +430,9 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
         return spec, False
 
     spec.seed = gen.seed
+    spec.phrasings = gen.phrasings
+    spec.decorations = gen.decorations
+    spec.key = gen.key
     spec.state_constraint = StateConstraint(
         type=gen.constraint_type, threshold=gen.threshold, description=gen.description,
     )

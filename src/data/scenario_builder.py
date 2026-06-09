@@ -122,19 +122,21 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
 
 
 def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
-                       approvers: list, base_day: str = "W01-1") -> list:
+                       approvers: list, base_day: str = "W01-1", starting_total: int = 0) -> list:
     """Cumulative cap with an APPROVER (submit + approve per quote). Builds amounts BY
-    CONSTRUCTION so the running approved total approaches the cap, a concurrent pair of approvals
-    sits at the boundary (one fits the remaining budget, one doesn't), and a clear over-cap one is
-    blocked. Each quote = a HubSpot submission (always handled) + the approver's Slack decision
-    (gated). submit_phrase(qid, amount) / approve_phrase(qid, approver) return input text."""
+    CONSTRUCTION so the running approved total approaches the cap from `starting_total`, a
+    concurrent pair of approvals sits at the boundary (one fits the remaining budget, one
+    doesn't), and a clear over-cap one is blocked. `starting_total` carries a prior cumulative
+    (the modification scenario continues the base's running total). Each quote = a HubSpot
+    submission (always handled) + the approver's Slack decision (gated)."""
     cap = _parse_limit(threshold)
     apr = approvers or ["the approver"]
+    budget = max(4, cap - starting_total)  # headroom remaining under the cap
     # amounts: two well under, then a boundary pair, then an over-cap one
-    a = cap // 4
-    amounts = [a, a]                       # 2*(cap/4) = cap/2 approved
-    remaining = cap - sum(amounts)         # = cap/2 left
-    pair_amt = remaining - max(1, cap // 10)  # fits once, not twice (amt <= remaining < 2*amt)
+    a = max(1, budget // 4)
+    amounts = [a, a]
+    remaining = budget - sum(amounts)
+    pair_amt = max(1, remaining - max(1, budget // 10))  # fits once, not twice
     amounts += [pair_amt, pair_amt]        # boundary pair
     week, day = int(base_day[1:3]), int(base_day[4:])
 
@@ -148,7 +150,7 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
         t += 1
 
     # approvals: non-pair approved in order; the two pair approvals share one `when` (the race)
-    total = 0
+    total = starting_total                 # continue a prior cumulative (mod scenario carries the base total)
     approve_events = []
     for j, (qid, amt, is_pair) in enumerate(quotes):
         apr_name = apr[j % len(apr)]
@@ -169,10 +171,12 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
                        f"within the ${cap:,} cap.")
         else:
             e.expect = EventExpect(
-                action=f"{apr_name} does NOT approve {qid}; it is held for exception handling and no "
-                       f"approval is recorded.",
+                action=f"{apr_name} approves {qid}, BUT the system holds it for exception handling and "
+                       f"no approval is recorded — the approver acts, but the approval cannot take effect "
+                       f"because it would breach the cap.",
                 reason=f"approving ${amt:,} would push the quarter's approved discount from "
-                       f"${total:,} to ${total + amt:,}, over the ${cap:,} cap.")
+                       f"${total:,} to ${total + amt:,}, over the ${cap:,} cap, so the system intercepts "
+                       f"the approval and routes it to exception handling.")
     # submissions are always handled
     for e in events:
         qid = re.search(r"Q-\d+", e.input)

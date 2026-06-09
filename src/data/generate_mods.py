@@ -53,6 +53,20 @@ def _process_spec(llm, spec: WorkflowSpec, prompt_tmpl: str, args) -> tuple[Work
     else:
         mod_types = [args.mod_type] * n
     ambiguity = random.choice(list(AMBIGUITY_DESCRIPTIONS.keys())) if args.ambiguity == "random" else args.ambiguity
+
+    # State scenarios: CODE-generate the modification + post-mod events (no LLM, no pre_mod). The
+    # mod changes the invariant's threshold; the post-mod events EXERCISE the new rule (with a flip),
+    # placed clear of the base events to avoid date/window conflicts.
+    if spec.state_constraint and spec.base_events:
+        from src.data.generate_state_constraints import build_mod_scenario
+        from src.data.schema import SpecModification
+        mt = mod_types[0]
+        intent, mod_when, post_events = build_mod_scenario(spec, mt)
+        spec.modifications = [SpecModification(id="M001", when=mod_when, intent=intent,
+                                               mod_type=ModType(mt), ambiguity=Ambiguity(ambiguity))]
+        spec.events = post_events
+        return spec, True
+
     mt_label = ", ".join(mod_types)
     mt_desc = "\n".join(f"- {mt}: {MODIFICATION_TYPES[mt]}" for mt in mod_types)
 

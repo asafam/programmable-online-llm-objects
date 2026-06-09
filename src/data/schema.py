@@ -738,7 +738,7 @@ class SpecScenario(BaseModel):
     sample_id: str = ""
     description: str = ""
     modifications: list[SpecModification]
-    events: list[SpecEvent]
+    events: list[SpecEventWithExpect]   # expect optional; code-built post_mod carry derived expects
 
 class WorkflowSpecScenarios(BaseModel):
     scenarios: list[SpecScenario]
@@ -762,10 +762,13 @@ class WorkflowSpec(BaseModel):
     template: list[str] = Field(default_factory=list)        # abstract template steps
     grounded_steps: list[str] = Field(default_factory=list)  # grounded NL steps (no object_ids)
     seed: str = ""                                            # initial reference state the system reads (grounded)
+    phrasings: list["RolePhrasing"] = Field(default_factory=list)  # carried from infuse for the mod builder
+    decorations: list[str] = Field(default_factory=list)
+    key: str = ""                                            # rate_limit: the key the base scenario exercised
     steps: list[SpecStep] = Field(default_factory=list)      # external-stimulus steps with observable expects
     base_events: list[SpecEventWithExpect] = Field(default_factory=list)  # state-infused base scenario
     modifications: list[SpecModification] = Field(default_factory=list)
-    events: list[SpecEvent] = Field(default_factory=list)    # mod/pre/post/irrelevant events
+    events: list[SpecEventWithExpect] = Field(default_factory=list)  # mod/pre/post/irrelevant (code-built post_mod carry expects)
     state_constraint: Optional[StateConstraint] = None
     flagged: bool = False
     flag_reasons: list[str] = Field(default_factory=list)
