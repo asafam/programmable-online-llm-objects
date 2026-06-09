@@ -101,10 +101,11 @@ def concurrent_pair_issues(events: list[dict], threshold: str) -> list[str]:
         return []
     # key = distinctive tokens shared by BOTH pair inputs but NOT by every event (drops generic
     # words like "SKU"/"Inventory"/"lead" common everywhere, leaving the actual key code).
+    # key = CODE-like tokens (id/SKU/placeholder) shared by BOTH pair inputs. Keep code-like
+    # only (drops generic lowercase words); do NOT subtract tokens common to all events — for a
+    # single-key scenario the key IS in every event, and subtracting it loses the key entirely.
     pair_keys = set.intersection(*[set(_KEYTOK.findall(e["input"])) for e in pair])
-    everywhere = set.intersection(*[set(_KEYTOK.findall(e["input"])) for e in events])
-    # keep only CODE-like keys (id/SKU/placeholder), not generic lowercase words like "data"
-    key = {k for k in (pair_keys - everywhere)
+    key = {k for k in pair_keys
            if any(c.isdigit() for c in k) or k.isupper() or k.startswith("#")}
     if not key:
         return []
