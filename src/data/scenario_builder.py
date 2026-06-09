@@ -37,7 +37,8 @@ def _ev(n: int, text: str, when: str, cg: str | None = None) -> SpecEventWithExp
 
 def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
                            base_day: str = "W01-1", reset_day: str = "W01-2", id_offset: int = 0,
-                           outcomes: dict | None = None, unit: str = "assignment") -> list:
+                           outcomes: dict | None = None, unit: str = "assignment",
+                           flip_old_limit: int | None = None) -> list:
     """Round-robin / per-key daily counter. Builds, BY CONSTRUCTION:
       - (cap*R - 1) leads in round-robin order (all assigned) → leaves exactly ONE slot open,
       - a concurrent pair at that last slot (same `when`) → one assigned, one held (the race),
@@ -65,7 +66,7 @@ def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
     # Derive every expect deterministically by simulating the rotation over the built sequence.
     sim = simulate_rotation(seed, [{"id": e.id, "input": e.input, "when": e.when,
                                     "concurrent_group": e.concurrent_group} for e in events], threshold,
-                            outcomes=outcomes, unit=unit)
+                            outcomes=outcomes, unit=unit, flip_old_limit=flip_old_limit)
     for e, s in zip(events, sim):
         e.expect = EventExpect(action=s["action"], reason=s["reason"])
     return events
@@ -87,7 +88,8 @@ def _second_sku(seed: str, exclude: str):
 
 def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                               base_day: str = "W01-1", id_offset: int = 0,
-                              outcomes: dict | None = None, unit: str = "reorder") -> list:
+                              outcomes: dict | None = None, unit: str = "reorder",
+                              flip_old_limit: int | None = None) -> list:
     """Per-key rolling-window rate limit (N per key per D days). Builds BY CONSTRUCTION for the
     main key: (N-1) accepted inside the window, a concurrent pair at the last slot (one accepted,
     one blocked), a post-window reset. It ALSO fires one request for a SECOND key while the main
@@ -125,12 +127,15 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
             accepted.setdefault(k, []).append(d)
             note = (f" More than {D} days have passed since the earlier reorders for {k}, which have "
                     f"aged out of the rolling {D}-day window." if aged else "")
+            flip = (f" THIS IS THE FLIP: the original limit of {flip_old_limit} would have BLOCKED "
+                    f"this {unit} (#{in_window + 1} for {k} in the window), but the modification "
+                    f"(limit {N}) ALLOWS it." if flip_old_limit and in_window >= flip_old_limit else "")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "allowed",
                     f"{_ev_ref(e)} for {k} is at/below its reorder level and a reorder request IS sent to the supplier.",
                     ID=_ev_ref(e), KEY=k),
                 reason=f"only {in_window} {unit}(s) for {k} in the last {D} days (< {N}); the limit is "
-                       f"PER key, so {k} is unaffected by other keys.{note}")
+                       f"PER key, so {k} is unaffected by other keys.{note}{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "blocked",
@@ -144,7 +149,8 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
 
 def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
                        approvers: list, base_day: str = "W01-1", starting_total: int = 0, id_offset: int = 0,
-                       outcomes: dict | None = None, unit: str = "approval") -> list:
+                       outcomes: dict | None = None, unit: str = "approval",
+                       flip_old_limit: int | None = None) -> list:
     """Cumulative cap with an APPROVER (submit + approve per quote). Builds amounts BY
     CONSTRUCTION so the running approved total approaches the cap from `starting_total`, a
     concurrent pair of approvals sits at the boundary (one fits the remaining budget, one
@@ -186,11 +192,14 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
     for e, qid, amt, apr_name in ordered:
         if total + amt <= cap:
             total += amt
+            flip = (f" THIS IS THE FLIP: this approval brings the running total to ${total:,}, above the "
+                    f"original ${flip_old_limit:,} cap which would have HELD it, but the modification "
+                    f"(${cap:,}) ALLOWS it." if flip_old_limit and total > flip_old_limit else "")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "approved",
                     f"{apr_name} approves {qid} (${amt:,}); it is approved in HubSpot and the approval is posted in Slack.",
                     ID=qid, ENTITY=apr_name, AMOUNT=f"{amt:,}"),
-                reason=f"the {unit} of ${amt:,} keeps the running approved total at ${total:,}, within the ${cap:,} cap.")
+                reason=f"the {unit} of ${amt:,} keeps the running approved total at ${total:,}, within the ${cap:,} cap.{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "held",

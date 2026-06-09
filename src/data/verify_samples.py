@@ -143,18 +143,22 @@ def verify(path: Path, judge: bool = False, provider=None, model="gpt-5.4") -> i
         llm = create_llm(provider=provider, model=model, temperature=0.0)
         prompt_tmpl = load_prompt_template(_VERIFY_PROMPT)["user_prompt"]
 
-    flagged = 0
+    # Deterministic issues BLOCK a release (reliable arithmetic); judge issues are ADVISORY
+    # (the LLM-judge is noisy — real findings mixed with miscounts), printed for human review.
+    blocking = 0
     for s in samples:
-        issues = deterministic_issues(s)
-        if judge:
-            issues += [f"(judge) {i}" for i in judge_issues(s, llm, prompt_tmpl)]
-        status = "OK" if not issues else f"{len(issues)} ISSUE(S)"
+        det = deterministic_issues(s)
+        jud = [f"(judge, advisory) {i}" for i in judge_issues(s, llm, prompt_tmpl)] if judge else []
+        status = "OK" if not (det or jud) else f"{len(det)} blocking, {len(jud)} advisory"
         print(f"\n[{s.id}] {status}")
-        for i in issues:
-            print(f"   - {i}")
-        flagged += bool(issues)
-    print(f"\n=== {len(samples) - flagged}/{len(samples)} clean; {flagged} flagged ===")
-    return flagged
+        for i in det:
+            print(f"   ✗ {i}")
+        for i in jud:
+            print(f"   · {i}")
+        blocking += bool(det)
+    print(f"\n=== {len(samples) - blocking}/{len(samples)} pass the BLOCKING (deterministic) gate; "
+          f"{blocking} blocked. Judge notes above are advisory. ===")
+    return blocking
 
 
 def build_parser() -> argparse.ArgumentParser:

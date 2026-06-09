@@ -185,12 +185,14 @@ def _fill_outcome(outcomes, role, fallback, **vals):
 
 
 def simulate_rotation(seed_str: str, events: list[dict], threshold: str,
-                      outcomes: dict | None = None, unit: str = "assignment") -> list[dict]:
+                      outcomes: dict | None = None, unit: str = "assignment",
+                      flip_old_limit: int | None = None) -> list[dict]:
     """DETERMINISTIC round-robin/counter simulation. events: dicts {id, input, when,
     concurrent_group}. Processes in (when, id) order, assigns each lead to the next eligible rep
     in rotation order (under the per-day cap, daily reset), holds when all are capped. The action
     wording comes from the LLM `outcomes` templates (domain-generic) with a built-in fallback.
-    Returns a list of {action, reason} aligned to `events`. Empty list if no parseable roster."""
+    `flip_old_limit` (mod scenario): when an allowed event exceeds the OLD limit, the reason marks
+    it as the FLIP (would have been blocked before the modification). Empty list if no roster."""
     reps = _seed_reps(seed_str)
     if not reps:
         return []
@@ -221,10 +223,14 @@ def simulate_rotation(seed_str: str, events: list[dict], threshold: str,
                 break
         ref = _lead_ref(e.get("input", ""))
         if assigned:
+            flip = (f" THIS IS THE FLIP: the original cap of {flip_old_limit} would have HELD this "
+                    f"{counts[assigned]}{'th' if 4 <= counts[assigned] % 100 <= 20 else {1:'st',2:'nd',3:'rd'}.get(counts[assigned] % 10, 'th')} "
+                    f"same-day {unit} for {assigned}, but the modification (cap {caps[assigned]}) ALLOWS it."
+                    if flip_old_limit and counts[assigned] > flip_old_limit else "")
             res[i] = {"action": _fill_outcome(outcomes, "allowed",
                         f"{ref} IS assigned to {assigned} and the {unit} is posted.", ID=ref, ENTITY=assigned),
                       "reason": f"{assigned} is the next eligible in rotation and is under the per-period "
-                                f"cap of {caps[assigned]} (now {counts[assigned]} of {caps[assigned]})."}
+                                f"cap of {caps[assigned]} (now {counts[assigned]} of {caps[assigned]}).{flip}"}
         else:
             res[i] = {"action": _fill_outcome(outcomes, "blocked",
                         f"{ref} is NOT assigned to any rep and is held; no {unit} is posted.", ID=ref),
@@ -444,6 +450,7 @@ def build_mod_scenario(spec, mod_type: str):
 
     new_thr = _re.sub(r"\d[\d,]*", str(new_limit), old_thr, count=1)
     kw["id_offset"] = 100   # post-mod request ids start at 100+ so they never reuse a base id
+    kw["flip_old_limit"] = old_limit   # mark the event allowed-under-new but blocked-under-old (the FLIP)
     events = _run_builder(ct, spec.seed, new_thr, spec.phrasings, spec.decorations, key, spec.unit, **kw)
     for i, e in enumerate(events, 1):
         e.id = f"PM{i:03d}"

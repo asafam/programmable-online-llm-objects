@@ -42,12 +42,13 @@ user_prompt: |
                       MUST be AT/BELOW its reorder_level (on_hand <= reorder_level) so a reorder is valid.
                       Do NOT put running counts like "reorders_last_7d" in the seed — that is accumulated
                       state, not reference state; the window is computed from the event timestamps.)
-       - cap       → {"sales_reps":[{"name":"James Brown","manager":"Daniel Kim"},
-                      {"name":"Laura Chen","manager":"Olivia Chen"}],
-                      "approvers":[{"name":"Daniel Kim","title":"Regional Sales Director"},
-                      {"name":"Olivia Chen","title":"Revenue Ops Manager"}],
+       - cap       → {"sales_reps":[{"name":"James Brown","title":"Account Executive","manager":"Daniel Kim"},
+                      {"name":"Laura Chen","title":"Account Executive","manager":"Olivia Chen"}],
+                      "approvers":[{"name":"Daniel Kim","title":"Regional Sales Director","manages":["James Brown"]},
+                      {"name":"Olivia Chen","title":"Revenue Ops Manager","manages":["Laura Chen"]}],
                       "quarter_to_date_approved_discount":0,"discount_cap":50000}
-                      (cap MUST show the sales reps AND their managers/approvers — the approval chain.)
+                      (cap MUST show the full approval chain: each rep's TITLE + manager, and each
+                      approver's TITLE + who they manage — so the submitter→approver link is grounded.)
      Include every entity the scenario reads. NO outcomes, NO assignments, NO post-event counts.
 
   5. `phrasings` — templates with placeholders CODE fills: {ID} (lead/quote/request id), {AMOUNT}
