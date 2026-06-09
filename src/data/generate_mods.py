@@ -154,6 +154,22 @@ def run(args: argparse.Namespace) -> Path:
                 except Exception as e:
                     tqdm.write(f"  FAILED {s.id}: {e}", file=sys.stderr)
                     spec, okk = s, False
+                # GUARANTEE the (deterministic) state mod — defends against an observed intermittent
+                # miss where a state spec slipped through with no modification.
+                if not spec.modifications and spec.state_constraint and spec.base_events:
+                    try:
+                        from src.data.generate_state_constraints import build_mod_scenario
+                        from src.data.schema import SpecModification
+                        mt = args.mod_type if args.mod_type not in (None, "mixed") else "expansion"
+                        amb = random.choice(list(AMBIGUITY_DESCRIPTIONS.keys())) if args.ambiguity == "random" else args.ambiguity
+                        intent, mod_when, post = build_mod_scenario(spec, mt)
+                        spec.modifications = [SpecModification(id="M001", when=mod_when, intent=intent,
+                                                              mod_type=ModType(mt), ambiguity=Ambiguity(amb))]
+                        spec.events = post
+                        okk = True
+                        tqdm.write(f"  [force-mod] {spec.id}: state mod was missing — regenerated", file=sys.stderr)
+                    except Exception as e:
+                        tqdm.write(f"  FORCE-MOD FAILED {s.id}: {e}", file=sys.stderr)
                 f.write(spec.model_dump_json() + "\n"); f.flush()
                 ok += int(okk); fail += int(not okk); pbar.update(1)
             if llm_pending:
