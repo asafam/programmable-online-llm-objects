@@ -198,12 +198,15 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                            f"exemption, the limit of {N} per {DAYS} would have BLOCKED this {unit}; "
                            f"the modification exempts {k}, so it is allowed.")
             else:
+                lead = (f"{k} is exempt from the rolling-window limit, so the {unit} proceeds "
+                        f"regardless of the window count." if is_exempt else
+                        f"only {in_window} {unit}(s) for {k} in the last {DAYS} (< {N}); the limit "
+                        f"is PER key, so {k} is unaffected by other keys.")
                 e.expect = EventExpect(
                     action=_fill_outcome(outcomes, "allowed",
                         f"the {unit} for {k} is within the limit and IS performed ({_ev_ref(e)}).",
                         ID=_ev_ref(e), KEY=k),
-                    reason=f"only {in_window} {unit}(s) for {k} in the last {DAYS} (< {N}); the limit is "
-                           f"PER key, so {k} is unaffected by other keys.{note}{flip}")
+                    reason=f"{lead}{note}{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "blocked",
@@ -288,7 +291,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                        f"is reached, so the {unit} fires and {k}'s count resets.{flip}")
         else:
             acc.setdefault(k, []).append(d)
-            if is_exempt and c >= N:
+            if is_exempt and c == N:
                 flip = (f" THIS IS THE FLIP: without the exemption, occurrence #{c} reaches the "
                         f"quorum of {N} and the {unit} would have FIRED; the modification exempts "
                         f"{k}, so it is only recorded.")
@@ -300,7 +303,8 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                 flip = ""
             # the exempt key's beyond-quorum events are recorded BECAUSE of the exemption — the
             # "below the quorum" lead-in would be false for them (occurrence #c >= N)
-            lead = (f"{k} is exempt from the quorum, so occurrence #{c} is only recorded."
+            lead = (f"{k} is exempt from the quorum, so occurrence #{c} is only recorded; the "
+                    f"exemption keeps {k} accumulating without firing."
                     if is_exempt and c >= N else
                     f"only {c} occurrence(s) for {k} within the last {DAYS} — below the quorum "
                     f"of {N}; counts are PER key.")
