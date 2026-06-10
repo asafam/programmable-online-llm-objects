@@ -300,7 +300,9 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                 action=_fill_outcome(outcomes, "fired",
                     f"the {unit} FIRES for {k} ({_ev_ref(e)}).", ID=_ev_ref(e), KEY=k),
                 reason=f"this is occurrence #{c} for {k} within the last {DAYS} — the quorum of {N} "
-                       f"is reached, so the {unit} fires and {k}'s count resets.{flip}")
+                       f"is reached, so the {unit} fires and {k}'s count resets. The fired {unit} "
+                       f"covers ALL of {k}'s occurrences accumulated in the window, not only this "
+                       f"event.{flip}")
         else:
             acc.setdefault(k, []).append(d)
             if is_exempt and c == N:
