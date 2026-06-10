@@ -361,18 +361,23 @@ def _seed_approvers(seed_str: str):
 
 
 def _seed_sales_reps(seed_str: str):
-    """Parse [(rep_name, manager_name)] from the cap seed — used so the system's routing of each
-    quote to the submitter's MANAGER can be VERIFIED in the submission expect."""
+    """[(person, manager)] pairs from the cap seed — DOMAIN-GENERIC: prefer "sales_reps", else
+    scan ANY list of named members carrying a manager (employees, requesters, agents). Used so
+    the system's routing of each request to the submitter's MANAGER is verifiable in the expect."""
     import json as _json
     try:
-        reps = _json.loads(seed_str).get("sales_reps")
+        d = _json.loads(seed_str)
     except Exception:
         return None
-    out = []
-    for r in reps or []:
-        if isinstance(r, dict) and r.get("name"):
-            out.append((r["name"], r.get("manager") or "their manager"))
-    return out or None
+    if not isinstance(d, dict):
+        return None
+    candidates = [d.get("sales_reps")] + [v for k, v in d.items() if k != "sales_reps"]
+    for reps in candidates:
+        if not (isinstance(reps, list) and reps
+                and all(isinstance(r, dict) and r.get("name") and r.get("manager") for r in reps)):
+            continue
+        return [(r["name"], r["manager"]) for r in reps]
+    return None
 
 
 def _first_key(seed_str: str):
