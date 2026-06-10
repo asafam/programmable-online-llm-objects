@@ -113,15 +113,26 @@ user_prompt: |
         is the quote-approval-policy object's job; the "submitted" EXPECT VERIFIES the email went to the
         right manager). {SUBMITTER}=rep, {MANAGER}=that rep's manager, {ENTITY}=the manager who decides
         — all filled by code from the seed's sales_reps.)
-     ALL families ALSO provide role="irrelevant": ONE request for a REAL seed entity that is CLEARLY
-     OUTSIDE this invariant, handled normally (it proves the modification is SCOPED). It must name a
-     real entity from the seed — NOT a placeholder. e.g.
-           counter:    "A CRM status webhook {ID} (no lead attached, no assignment) is received."
-           rate_limit: "A stock-level check {ID} for SKU {KEY} (well above its reorder level) arrives."
-           cap:        "Quote {ID} with a $0 discount (no approval required) is recorded."
+     (No special "irrelevant" phrasing is needed: code derives the scope-proof event from the
+     normal request phrasing — a request the workflow handles normally whose outcome is IDENTICAL
+     before and after the modification. `irrelevant_key` below names the entity it uses.)
      The OUTCOME phrasings MUST describe the workflow's REAL gated action (a reorder, an assignment,
      an approval) — make "blocked"/"held" clearly state the action did NOT happen. Put NO number,
      count, or date in any phrasing — only placeholders + flavor.
+     THE GATED ACTION IS DISTINCT: the invariant's gated action must be CLEARLY different from the
+     workflow's per-event behavior — a different action, channel, or recipient — OR explicitly
+     REPLACE it, stated in the threshold/description ("INSTEAD of the per-expense email, a single
+     consolidated alert..."). If the gated action is the same email to the same recipient that
+     every event already produces, the scenario cannot be judged — pick a distinct action.
+     DEFINED ARTIFACTS ONLY: every artifact an outcome mentions (a pending list, a digest, a
+     tracker, an open ticket) must be DEFINED in the seed or named in a workflow step — never
+     invent an entity inside an outcome. State the accumulated items' full LIFECYCLE explicitly:
+     where they are parked (the seed-defined artifact) and what releases them (the Nth occurrence
+     fires / the window clears).
+     trigger ONLY — optional role="consolidated": wording for occurrences arriving AFTER the fired
+     action while its window is open. Provide it ONLY if the fired artifact is MUTABLE (a ticket,
+     a doc, a list that can be amended); NEVER claim to amend a SENT email. If omitted, code words
+     these as "logged against the already-issued {unit}".
      OUTCOMES ARE EXPLICIT AND OBSERVABLE: every outcome names the concrete CHANNEL and RECIPIENT
      ("a consolidated escalation email IS sent to the finance team's inbox", not "finance is
      notified" / "the team is escalated"). An accumulate/recorded/not-yet outcome must say BOTH

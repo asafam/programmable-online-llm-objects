@@ -68,7 +68,7 @@ def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
                            base_day: str = "W01-1", reset_day: str = "W01-2", id_offset: int = 0,
                            outcomes: dict | None = None, unit: str = "assignment",
                            flip_old_limit: int | None = None, entities: list | None = None,
-                           exempt: str | None = None) -> list:
+                           exempt: str | None = None, rule_off: bool = False) -> list:
     """Round-robin / per-key daily counter — DOMAIN-GENERIC (reps/channels/agents). Builds,
     BY CONSTRUCTION:
       - (cap*R - 1) requests in round-robin order (all assigned) → leaves exactly ONE slot open,
@@ -100,7 +100,7 @@ def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
     sim = simulate_rotation(seed, [{"id": e.id, "input": e.input, "when": e.when,
                                     "concurrent_group": e.concurrent_group} for e in events], threshold,
                             outcomes=outcomes, unit=unit, flip_old_limit=flip_old_limit, entities=entities,
-                            exempt=exempt)
+                            exempt=exempt, rule_off=rule_off)
     for e, s in zip(events, sim):
         e.expect = EventExpect(action=s["action"], reason=s["reason"])
     return events
@@ -130,7 +130,7 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                               outcomes: dict | None = None, unit: str = "reorder",
                               flip_old_limit: int | None = None, keys: list | None = None,
                               flip_old_window: int | None = None,
-                              exempt_key: str | None = None) -> list:
+                              exempt_key: str | None = None, rule_off: bool = False) -> list:
     """Per-key rolling-window rate limit (N per key per D days) — DOMAIN-GENERIC (SKUs/categories/
     contacts). Builds BY CONSTRUCTION for the main key: (N-1) accepted inside the window, a
     sequential boundary pair at the last slot (first accepted, next blocked), a post-window reset. It ALSO
@@ -177,7 +177,7 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
     out = []
     for e, k in events:
         d = _abs_day(e.when)
-        is_exempt = exempt_key is not None and k == exempt_key
+        is_exempt = (exempt_key is not None and k == exempt_key) or rule_off
         in_window = sum(1 for ad in accepted.get(k, []) if d - ad < D)
         in_old_window = (sum(1 for ad in accepted.get(k, []) if d - ad < flip_old_window)
                          if flip_old_window else 0)
@@ -195,16 +195,23 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                         f"and this would have been BLOCKED; the modification ({D}-day window) lets "
                         f"them age out and ALLOWS it.")
             if is_exempt and in_window >= N:
+                why = (f"the rolling-window limit was RETIRED by the modification, so the {unit} "
+                       f"proceeds (#{in_window + 1} in the window). THIS IS THE FLIP: under the "
+                       f"retired limit of {N} per {DAYS} this {unit} would have been BLOCKED."
+                       if rule_off else
+                       f"{k} is exempt from the rolling-window limit, so the {unit} proceeds "
+                       f"(#{in_window + 1} in the window). THIS IS THE FLIP: without the "
+                       f"exemption, the limit of {N} per {DAYS} would have BLOCKED this {unit}; "
+                       f"the modification exempts {k}, so it is allowed.")
                 e.expect = EventExpect(
                     action=_fill_outcome(outcomes, "allowed",
                         f"the {unit} for {k} is within the limit and IS performed ({_ev_ref(e)}).",
                         ID=_ev_ref(e), KEY=k),
-                    reason=f"{k} is exempt from the rolling-window limit, so the {unit} proceeds "
-                           f"(#{in_window + 1} in the window). THIS IS THE FLIP: without the "
-                           f"exemption, the limit of {N} per {DAYS} would have BLOCKED this {unit}; "
-                           f"the modification exempts {k}, so it is allowed.")
+                    reason=why)
             else:
-                lead = (f"{k} is exempt from the rolling-window limit, so the {unit} proceeds "
+                lead = (f"the rolling-window limit was retired by the modification, so the {unit} "
+                        f"proceeds regardless of the window count." if rule_off else
+                        f"{k} is exempt from the rolling-window limit, so the {unit} proceeds "
                         f"regardless of the window count." if is_exempt else
                         f"only {in_window} {unit}(s) for {k} in the last {DAYS} (< {N}); the limit "
                         f"is PER key, so {k} is unaffected by other keys.")
@@ -228,7 +235,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                            base_day: str = "W01-1", id_offset: int = 0,
                            outcomes: dict | None = None, unit: str = "escalation",
                            keys: list | None = None, flip_old_limit: int | None = None,
-                           exempt_key: str | None = None) -> list:
+                           exempt_key: str | None = None, rule_off: bool = False) -> list:
     """Quorum / threshold-trigger — the INVERSE of a rate limit: the Nth related occurrence for a
     key within the rolling window FIRES the gated action (an escalation, a digest, a ticket);
     earlier occurrences only accumulate. After firing, that key's count RESETS. Builds BY
@@ -279,15 +286,20 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
     for e, k in events:
         d = _abs_day(e.when)
         c = sum(1 for ad in acc.get(k, []) if d - ad < D) + 1   # incl. this occurrence
-        is_exempt = exempt_key is not None and k == exempt_key
+        is_exempt = (exempt_key is not None and k == exempt_key) or rule_off
         if k in fired_at and d - fired_at[k] < D and not is_exempt:
             ago = d - fired_at[k]
+            # artifact-neutral wording: a sent email cannot be amended — post-fire occurrences are
+            # LOGGED AGAINST the already-issued unit. An LLM 'consolidated' phrasing (allowed only
+            # for MUTABLE artifacts like tickets/docs) overrides the action wording.
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "consolidated",
-                    f"{_ev_ref(e)} is CONSOLIDATED into the open {unit} for {k}; no new {unit} fires.",
+                    f"{_ev_ref(e)} is logged against the {unit} already issued for {k}; "
+                    f"NO new {unit} fires.",
                     ID=_ev_ref(e), KEY=k),
-                reason=f"a {unit} for {k} fired {ago} day(s) ago and its {DAYS} window is still "
-                       f"open — this occurrence is added to it rather than starting a new count.")
+                reason=f"a {unit} for {k} was already issued {ago} day(s) ago; until its {DAYS} "
+                       f"window clears, further occurrences are only logged against that record — "
+                       f"no new {unit} is started.")
             out.append(e)
             continue
         if c >= N and not is_exempt:
@@ -305,7 +317,11 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                        f"event.{flip}")
         else:
             acc.setdefault(k, []).append(d)
-            if is_exempt and c == N:
+            if rule_off and c == N:
+                flip = (f" THIS IS THE FLIP: the quorum rule was RETIRED by the modification — "
+                        f"occurrence #{c} would have fired the {unit} under the retired quorum of "
+                        f"{N}; now it is only recorded.")
+            elif is_exempt and c == N:
                 flip = (f" THIS IS THE FLIP: without the exemption, occurrence #{c} reaches the "
                         f"quorum of {N} and the {unit} would have FIRED; the modification exempts "
                         f"{k}, so it is only recorded.")
@@ -317,7 +333,9 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                 flip = ""
             # the exempt key's beyond-quorum events are recorded BECAUSE of the exemption — the
             # "below the quorum" lead-in would be false for them (occurrence #c >= N)
-            lead = (f"{k} is exempt from the quorum, so occurrence #{c} is only recorded; the "
+            lead = (f"the quorum rule was retired by the modification, so occurrence #{c} is only "
+                    f"recorded; nothing fires anymore." if rule_off and c >= N else
+                    f"{k} is exempt from the quorum, so occurrence #{c} is only recorded; the "
                     f"exemption keeps {k} accumulating without firing."
                     if is_exempt and c >= N else
                     f"only {c} occurrence(s) for {k} within the last {DAYS} — below the quorum "
@@ -334,7 +352,7 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
                          base_day: str = "W01-1", id_offset: int = 0,
                          outcomes: dict | None = None, unit: str = "complaint",
                          keys: list | None = None, flip_old_window_min: int | None = None,
-                         exempt_key: str | None = None) -> list:
+                         exempt_key: str | None = None, rule_off: bool = False) -> list:
     """Duplicate suppression in a SHORT rolling window (minute-granular): the first occurrence for
     a key is processed; an identical repeat within W of the last processed one is IGNORED as a
     duplicate; past the window it is processed again as new. Builds BY CONSTRUCTION: processed →
@@ -375,7 +393,7 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
     for e, k in events:
         t = _abs_minutes(e.when)
         delta = t - last[k] if k in last else None
-        is_exempt = exempt_key is not None and k == exempt_key
+        is_exempt = (exempt_key is not None and k == exempt_key) or rule_off
         if delta is not None and delta < W and not is_exempt:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "ignored",
@@ -387,7 +405,11 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
                        f"(merged, not re-processed).")
         else:
             expired = delta is not None and delta >= W
-            if is_exempt and delta is not None and delta < W:
+            if rule_off and delta is not None and delta < W:
+                flip = (f" THIS IS THE FLIP: deduplication was RETIRED by the modification — this "
+                        f"repeat ({delta} minute(s) after the last) would have been handled as a "
+                        f"duplicate under the retired {WTXT} window; now it is processed.")
+            elif is_exempt and delta is not None and delta < W:
                 flip = (f" THIS IS THE FLIP: without the exemption, this repeat ({delta} minute(s) "
                         f"after the last) falls inside the {WTXT} window and would have been "
                         f"IGNORED as a duplicate; the modification exempts {k}.")
@@ -402,7 +424,9 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
             last[k] = t
             # the exempt in-window repeat is processed BECAUSE of the exemption — the "no recent
             # occurrence" lead-in would be false for it (one WAS processed delta minutes ago)
-            lead = (f"{k} is exempt from deduplication, so the {unit} is processed despite the "
+            lead = (f"deduplication was retired by the modification, so the {unit} is processed "
+                    f"despite the repeat." if rule_off and delta is not None and delta < W else
+                    f"{k} is exempt from deduplication, so the {unit} is processed despite the "
                     f"repeat." if is_exempt and delta is not None and delta < W else
                     f"no {unit} for {k} was processed within the last {WTXT}; dedup is PER key.")
             e.expect = EventExpect(

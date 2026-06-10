@@ -58,17 +58,14 @@ def _process_spec(llm, spec: WorkflowSpec, prompt_tmpl: str, args) -> tuple[Work
     # mod changes the invariant's threshold; the post-mod events EXERCISE the new rule (with a flip),
     # placed clear of the base events to avoid date/window conflicts.
     if spec.state_constraint and spec.base_events:
-        from src.data.generate_state_constraints import build_mod_scenario, pick_mod_dim
+        from src.data.generate_state_constraints import VALID_MOD_TYPES, build_mod_scenario
         from src.data.schema import SpecModification
-        mt = mod_types[0]
-        # the modification DIMENSION (limit/window/exempt) is picked per template — stable,
-        # automatic variety, no flag. An exemption IS the taxonomy's "exception" type (an
-        # entity-specific override) — label it as such, whatever direction the CLI asked for.
-        dim = pick_mod_dim(spec)
-        if dim == "exempt":
-            mt = "exception"
-        intent, mod_when, post_events = build_mod_scenario(spec, mt if dim != "exempt" else "expansion",
-                                                           mod_dim=dim)
+        # mod_type is RANDOM-SAMPLED from the six taxonomy categories (CLI --mod-type overrides);
+        # each maps to a deterministic state-scenario transform in build_mod_scenario.
+        ct = spec.state_constraint.type.value
+        valid = VALID_MOD_TYPES.get(ct, ["correction"])
+        mt = mod_types[0] if mod_types[0] in valid else random.choice(valid)
+        intent, mod_when, post_events = build_mod_scenario(spec, mt)
         spec.modifications = [SpecModification(id="M001", when=mod_when, intent=intent,
                                                mod_type=ModType(mt), ambiguity=Ambiguity(ambiguity))]
         spec.events = post_events
@@ -165,15 +162,12 @@ def run(args: argparse.Namespace) -> Path:
                 # miss where a state spec slipped through with no modification.
                 if not spec.modifications and spec.state_constraint and spec.base_events:
                     try:
-                        from src.data.generate_state_constraints import build_mod_scenario, pick_mod_dim
+                        from src.data.generate_state_constraints import VALID_MOD_TYPES, build_mod_scenario
                         from src.data.schema import SpecModification
-                        mt = args.mod_type if args.mod_type not in (None, "mixed") else "expansion"
+                        valid = VALID_MOD_TYPES.get(spec.state_constraint.type.value, ["correction"])
+                        mt = args.mod_type if args.mod_type in valid else random.choice(valid)
                         amb = random.choice(list(AMBIGUITY_DESCRIPTIONS.keys())) if args.ambiguity == "random" else args.ambiguity
-                        dim = pick_mod_dim(spec)
-                        if dim == "exempt":
-                            mt = "exception"
-                        intent, mod_when, post = build_mod_scenario(spec, mt if dim != "exempt" else "expansion",
-                                                                    mod_dim=dim)
+                        intent, mod_when, post = build_mod_scenario(spec, mt)
                         spec.modifications = [SpecModification(id="M001", when=mod_when, intent=intent,
                                                               mod_type=ModType(mt), ambiguity=Ambiguity(amb))]
                         spec.events = post
