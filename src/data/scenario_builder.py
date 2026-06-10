@@ -131,7 +131,7 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                               flip_old_limit: int | None = None, keys: list | None = None,
                               flip_old_window: int | None = None,
                               exempt_key: str | None = None, rule_off: bool = False,
-                              single_key: bool = False) -> list:
+                              single_key: bool = False, contacts: dict | None = None) -> list:
     """Per-key rolling-window rate limit (N per key per D days) — DOMAIN-GENERIC (SKUs/categories/
     contacts). Builds BY CONSTRUCTION for the main key: (N-1) accepted inside the window, a
     sequential boundary pair at the last slot (first accepted, next blocked), a post-window reset. It ALSO
@@ -209,7 +209,7 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                 e.expect = EventExpect(
                     action=_fill_outcome(outcomes, "allowed",
                         f"the {unit} for {k} is within the limit and IS performed ({_ev_ref(e)}).",
-                        ID=_ev_ref(e), KEY=k),
+                        ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
                     reason=why)
             else:
                 lead = (f"the rolling-window limit was retired by the modification, so the {unit} "
@@ -221,13 +221,13 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                 e.expect = EventExpect(
                     action=_fill_outcome(outcomes, "allowed",
                         f"the {unit} for {k} is within the limit and IS performed ({_ev_ref(e)}).",
-                        ID=_ev_ref(e), KEY=k),
+                        ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
                     reason=f"{lead}{note}{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "blocked",
                     f"the {unit} for {k} ({_ev_ref(e)}) is NOT performed — it is blocked by the rolling-window limit.",
-                    ID=_ev_ref(e), KEY=k),
+                    ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
                 reason=f"{in_window} {unit}(s) were already done for {k} within the last {DAYS} (the "
                        f"limit of {N}), so a new one is blocked until that key's window clears.")
         out.append(e)
@@ -239,7 +239,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                            outcomes: dict | None = None, unit: str = "escalation",
                            keys: list | None = None, flip_old_limit: int | None = None,
                            exempt_key: str | None = None, rule_off: bool = False,
-                           single_key: bool = False) -> list:
+                           single_key: bool = False, contacts: dict | None = None) -> list:
     """Quorum / threshold-trigger — the INVERSE of a rate limit: the Nth related occurrence for a
     key within the rolling window FIRES the gated action (an escalation, a digest, a ticket);
     earlier occurrences only accumulate. After firing, that key's count RESETS. Builds BY
@@ -302,7 +302,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                 action=_fill_outcome(outcomes, "consolidated",
                     f"{_ev_ref(e)} is logged against the {unit} already issued for {k}; "
                     f"NO new {unit} fires.",
-                    ID=_ev_ref(e), KEY=k),
+                    ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
                 reason=f"a {unit} for {k} was already issued {ago} day(s) ago; until its {DAYS} "
                        f"window clears, further occurrences are only logged against that record — "
                        f"no new {unit} is started.")
@@ -316,7 +316,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                     f"fires it." if flip_old_limit and c < flip_old_limit else "")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "fired",
-                    f"the {unit} FIRES for {k} ({_ev_ref(e)}).", ID=_ev_ref(e), KEY=k),
+                    f"the {unit} FIRES for {k} ({_ev_ref(e)}).", ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
                 reason=f"this is occurrence #{c} for {k} within the last {DAYS} — the quorum of {N} "
                        f"is reached, so the {unit} fires and {k}'s count resets. The fired {unit} "
                        f"covers ALL of {k}'s occurrences accumulated in the window, not only this "
@@ -348,7 +348,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                     f"of {N}; counts are PER key.")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "recorded",
-                    f"{_ev_ref(e)} is recorded for {k}; NO {unit} fires.", ID=_ev_ref(e), KEY=k),
+                    f"{_ev_ref(e)} is recorded for {k}; NO {unit} fires.", ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
                 reason=f"{lead}{flip}")
         out.append(e)
     return out
@@ -359,7 +359,7 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
                          outcomes: dict | None = None, unit: str = "complaint",
                          keys: list | None = None, flip_old_window_min: int | None = None,
                          exempt_key: str | None = None, rule_off: bool = False,
-                         single_key: bool = False) -> list:
+                         single_key: bool = False, contacts: dict | None = None) -> list:
     """Duplicate suppression in a SHORT rolling window (minute-granular): the first occurrence for
     a key is processed; an identical repeat within W of the last processed one is IGNORED as a
     duplicate; past the window it is processed again as new. Builds BY CONSTRUCTION: processed →
@@ -407,7 +407,7 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
                 action=_fill_outcome(outcomes, "ignored",
                     f"{_ev_ref(e)} is recognized as a DUPLICATE and merged into the open {unit} "
                     f"for {k}; no new {unit} is created.",
-                    ID=_ev_ref(e), KEY=k),
+                    ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
                 reason=f"an identical {unit} for {k} was processed only {delta} minute(s) ago — "
                        f"within the {WTXT} dedup window, so this one is handled as a duplicate "
                        f"(merged, not re-processed).")
@@ -439,7 +439,7 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
                     f"no {unit} for {k} was processed within the last {WTXT}; dedup is PER key.")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "allowed",
-                    f"the {unit} {_ev_ref(e)} IS processed.", ID=_ev_ref(e), KEY=k),
+                    f"the {unit} {_ev_ref(e)} IS processed.", ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
                 reason=f"{lead}{note}{flip}")
         out.append(e)
     return out

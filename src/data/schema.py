@@ -190,7 +190,9 @@ class GeneratedScenarioSpec(BaseModel):
                                                        # reps/channels/agents) — names exactly as in the seed
     keys: list[str] = Field(default_factory=list)      # rate_limit: the limit-tracked key values from the
                                                        # seed (SKUs/categories/contacts); first = main
-    irrelevant_key: str = ""        # a real seed entity OUTSIDE the invariant for the irrelevant event
+    irrelevant_key: str = ""        # DEPRECATED (kept for back-compat)
+    key_contacts: dict[str, str] = Field(default_factory=dict)  # key → concrete recipient (email
+                                                                # address) the gated action notifies
 
 
 class StateProbeScenario(BaseModel):
@@ -787,7 +789,8 @@ class WorkflowSpec(BaseModel):
     unit: str = ""                                           # the gated action's noun (carried for the mod)
     entities: list[str] = Field(default_factory=list)        # counter rotation members (carried for the mod)
     keys: list[str] = Field(default_factory=list)            # rate_limit key values (carried for the mod)
-    irrelevant_key: str = ""                                 # entity outside the invariant (irrelevant event)
+    irrelevant_key: str = ""                                 # DEPRECATED (kept for back-compat)
+    key_contacts: dict[str, str] = Field(default_factory=dict)  # key → concrete recipient (carried)
     steps: list[SpecStep] = Field(default_factory=list)      # external-stimulus steps with observable expects
     base_events: list[SpecEventWithExpect] = Field(default_factory=list)  # state-infused base scenario
     modifications: list[SpecModification] = Field(default_factory=list)

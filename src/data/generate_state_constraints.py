@@ -389,7 +389,7 @@ def _first_key(seed_str: str):
 
 
 def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
-                 entities=None, keys=None, **kw) -> list:
+                 entities=None, keys=None, contacts=None, **kw) -> list:
     """Construct the phrase closures from the LLM's phrasing templates + decorations, then call
     the family builder. Shared by the base scenario AND the modification scenario.
     `entities` (counter) / `keys` (rate_limit) are the LLM-named domain values — the builders use
@@ -416,33 +416,40 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         m = _re.search(r"\d+", idstr or "")
         return f"{60 + (int(m.group()) if m else 0) * 35 % 440}"   # deterministic plausible value
 
+    _people = [r[0] for r in (_seed_reps(seed, entities) or [])] or \
+              [r for r, _m in (_seed_sales_reps(seed) or [])] or ["an employee"]
+
+    def submitter_for(idstr):
+        m = _re.search(r"\d+", idstr or "")
+        return _people[(int(m.group()) if m else 0) % len(_people)]
+
     # outcome wording: pass the full template map (the builders look up allowed/blocked/approved/
     # held/submitted) so the action text is domain-correct for any workflow; fallback inside builder.
     if ct == "counter":
         req = tmpl.get("request") or tmpl.get("submit") or "A new request {ID} arrives {DECO}."
-        phrase = lambda lid, d: fill(req, ID=lid, AMOUNT=amount_for(lid), DECO=(d if isinstance(d, str) else deco_for(lid)))
+        phrase = lambda lid, d: fill(req, ID=lid, AMOUNT=amount_for(lid), SUBMITTER=submitter_for(lid), DECO=(d if isinstance(d, str) else deco_for(lid)))
         return build_counter_scenario(seed, threshold, phrase, decos or [""],
                                       outcomes=tmpl, unit=unit or "assignment", entities=entities, **kw)
     if ct == "rate_limit":
         req = tmpl.get("request") or "A request {ID} arrives for {KEY} {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), DECO=deco_for(rid))
+        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid))
         return build_rate_limit_scenario(seed, threshold, k, phrase,
-                                         outcomes=tmpl, unit=unit or "request", keys=keys, **kw)
+                                         outcomes=tmpl, unit=unit or "request", keys=keys, contacts=contacts, **kw)
     if ct == "trigger":
         from src.data.scenario_builder import build_trigger_scenario
         req = tmpl.get("request") or "An event {ID} for {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), DECO=deco_for(rid))
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid))
         return build_trigger_scenario(seed, threshold, k, phrase,
-                                      outcomes=tmpl, unit=unit or "escalation", keys=keys, **kw)
+                                      outcomes=tmpl, unit=unit or "escalation", keys=keys, contacts=contacts, **kw)
     if ct == "dedup":
         from src.data.scenario_builder import build_dedup_scenario
         req = tmpl.get("request") or "A report {ID} about {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), DECO=deco_for(rid))
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid))
         return build_dedup_scenario(seed, threshold, k, phrase,
-                                    outcomes=tmpl, unit=unit or "report", keys=keys, **kw)
+                                    outcomes=tmpl, unit=unit or "report", keys=keys, contacts=contacts, **kw)
     if ct == "cap":
         sub = tmpl.get("submit") or "{SUBMITTER} submits request {ID} for ${AMOUNT} {DECO}."
         app = tmpl.get("approve") or "{APPROVER} reviews request {ID}."
@@ -460,7 +467,7 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
     """CODE builds the base request sequence + derives expects from the LLM's seed + phrasing."""
     return _run_builder(getattr(gen.constraint_type, "value", gen.constraint_type),
                         gen.seed, gen.threshold, gen.phrasings, gen.decorations, gen.key, gen.unit,
-                        entities=gen.entities, keys=gen.keys)
+                        entities=gen.entities, keys=gen.keys, contacts=gen.key_contacts)
 
 
 def _base_cap_total(base_events) -> int:
@@ -554,7 +561,7 @@ def _seed_person(seed_str: str):
         return None
     for a in (d.get("approvers") or []):
         if isinstance(a, dict) and a.get("name"):
-            return f"{a['name']} ({a.get('email', 'by email')})"
+            return f"{a['name']} — {a.get('title', 'approver')} per the seed ({a.get('email', 'by email')})"
     for r in (d.get("sales_reps") or []):
         if isinstance(r, dict) and r.get("manager"):
             return r["manager"]
@@ -601,7 +608,8 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
             kw["starting_total"] = _base_cap_total(spec.base_events)
         kw["id_offset"] = offset
         return _run_builder(ct, spec.seed, thr, spec.phrasings, spec.decorations,
-                            key_ or spec.key, spec.unit, entities=spec.entities, keys=spec.keys, **kw)
+                            key_ or spec.key, spec.unit, entities=spec.entities, keys=spec.keys,
+                            contacts=spec.key_contacts, **kw)
 
     noun = {"counter": "member", "cap": "rep"}.get(ct, "key")
     rule_noun = {"trigger": "quorum", "dedup": "deduplication"}.get(ct, "limit")
@@ -773,6 +781,7 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     spec.entities = gen.entities
     spec.keys = gen.keys
     spec.irrelevant_key = gen.irrelevant_key
+    spec.key_contacts = gen.key_contacts
     spec.state_constraint = StateConstraint(
         type=gen.constraint_type, threshold=gen.threshold, description=gen.description,
     )
