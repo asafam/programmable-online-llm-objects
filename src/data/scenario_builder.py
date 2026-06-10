@@ -360,11 +360,15 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
             note = (f" The dedup window has expired — more than {WTXT} have passed since the last "
                     f"processed {unit} for {k}." if expired and not flip else "")
             last[k] = t
+            # the exempt in-window repeat is processed BECAUSE of the exemption — the "no recent
+            # occurrence" lead-in would be false for it (one WAS processed delta minutes ago)
+            lead = (f"{k} is exempt from deduplication, so the {unit} is processed despite the "
+                    f"repeat." if is_exempt and delta is not None and delta < W else
+                    f"no {unit} for {k} was processed within the last {WTXT}; dedup is PER key.")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "allowed",
                     f"the {unit} {_ev_ref(e)} IS processed.", ID=_ev_ref(e), KEY=k),
-                reason=(f"no {unit} for {k} was processed within the last {WTXT}; dedup is PER key."
-                        f"{note}{flip}"))
+                reason=f"{lead}{note}{flip}")
         out.append(e)
     return out
 
