@@ -606,10 +606,12 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
     noun = {"counter": "member", "cap": "rep"}.get(ct, "key")
     rule_noun = {"trigger": "quorum", "dedup": "deduplication"}.get(ct, "limit")
     events = []
+    affected_key = None   # the entity the modification targets (exception/contextual)
 
     if mod_type == "exception":                       # one REAL seed entity becomes exempt
         if ct in ("rate_limit", "trigger", "dedup"):
             ex = _second_key(spec.seed, "", spec.keys) or spec.key
+            affected_key = ex
             events = run(old_thr, key_=ex, exempt_key=ex)
         else:
             roster = spec.entities or [r[0] for r in (_seed_reps(spec.seed) or [])]
@@ -669,6 +671,7 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
             run2 = run2[:-roster_n]   # old-rule proof doesn't need the reset tail (base showed it)
         else:
             ctx = other
+            affected_key = ctx
             # SINGLE-KEY runs: the override applies only to ctx — the builders' second-key proof
             # would otherwise simulate a NON-override key under the override threshold (wrong
             # quorum/limit in its reasons)
@@ -717,7 +720,10 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
     if req:
         last_abs = max((_ev_abs_day(e.when) for e in events if e.when), default=_ev_abs_day(mod_when))
         irr_id = {"cap": "Q-9001", "counter": "LD-2026-9001"}.get(ct, "REQ-9001")
-        irr_key = spec.irrelevant_key or other or spec.key
+        # a key the workflow HANDLES that the modification does not target — for removal/
+        # correction/temporal/expansion any tracked key works (fresh state, under every limit)
+        irr_key = next((k for k in (spec.keys or []) if k != affected_key),
+                       spec.key if spec.key != affected_key else (other or spec.key))
         deco = (spec.decorations or [""])[0]
         irr_input = (req.replace("{ID}", irr_id).replace("{KEY}", irr_key)
                         .replace("{AMOUNT}", "500").replace("{DECO}", deco))

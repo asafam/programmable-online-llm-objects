@@ -183,9 +183,9 @@ user_prompt: |
 
   10. `key` — rate_limit/trigger/dedup: the main key (same as keys[0]). Leave empty for cap/counter.
 
-  11. `irrelevant_key` — the REAL seed entity the irrelevant event references (clearly OUTSIDE the
-      invariant): the well-stocked SKU, a category with no limit pressure, a $0 quote's account.
-      Must exist in the seed.
+  11. `irrelevant_key` — DEPRECATED, leave empty (code derives the modification-scope-proof event
+      from the tracked keys directly: a request the workflow handles normally that the modification
+      does not target).
 
   12. SIGNAL → ACTION MAPPING: whenever the workflow INTERPRETS a signal to decide what to do —
       an emoji reaction, a label, a keyword, a form category — the seed MUST define that mapping
