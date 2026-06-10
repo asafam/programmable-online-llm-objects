@@ -130,7 +130,8 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                               outcomes: dict | None = None, unit: str = "reorder",
                               flip_old_limit: int | None = None, keys: list | None = None,
                               flip_old_window: int | None = None,
-                              exempt_key: str | None = None, rule_off: bool = False) -> list:
+                              exempt_key: str | None = None, rule_off: bool = False,
+                              single_key: bool = False) -> list:
     """Per-key rolling-window rate limit (N per key per D days) — DOMAIN-GENERIC (SKUs/categories/
     contacts). Builds BY CONSTRUCTION for the main key: (N-1) accepted inside the window, a
     sequential boundary pair at the last slot (first accepted, next blocked), a post-window reset. It ALSO
@@ -161,6 +162,8 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
     hh = 11 + (0 if gap else N - 1)        # the first fills the last in-window slot, the next is blocked
     n += 1; add(phrase(rid(n), False, key), f"W{week:02d}-{pair_day}T{hh:02d}:30", key)
     n += 1; add(phrase(rid(n), True, key), f"W{week:02d}-{pair_day}T{hh:02d}:35", key)
+    if single_key:
+        key2 = None
     if key2 and exempt_key:
         # SCOPE PROOF for an exemption: the OTHER key runs to its limit and is still blocked —
         # the exemption changes nothing outside its key
@@ -235,7 +238,8 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                            base_day: str = "W01-1", id_offset: int = 0,
                            outcomes: dict | None = None, unit: str = "escalation",
                            keys: list | None = None, flip_old_limit: int | None = None,
-                           exempt_key: str | None = None, rule_off: bool = False) -> list:
+                           exempt_key: str | None = None, rule_off: bool = False,
+                           single_key: bool = False) -> list:
     """Quorum / threshold-trigger — the INVERSE of a rate limit: the Nth related occurrence for a
     key within the rolling window FIRES the gated action (an escalation, a digest, a ticket);
     earlier occurrences only accumulate. After firing, that key's count RESETS. Builds BY
@@ -249,7 +253,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
     D = _parse_window_days(threshold)
     DAYS = f"{D} day" + ("s" if D != 1 else "")
     week, day = int(base_day[1:3]), int(base_day[4:])
-    key2 = _second_key(seed, key, keys)
+    key2 = None if single_key else _second_key(seed, key, keys)
     events: list = []   # (event, key)
 
     def add(text, when, k, cg=None):
@@ -268,6 +272,8 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
     hh = 11 + (0 if gap else N - 1)        # the first reaches the quorum and FIRES; the next lands
     n += 1; add(phrase(rid(n), key), f"W{week:02d}-{pair_day}T{hh:02d}:30", key)     # on the freshly
     n += 1; add(phrase(rid(n), key), f"W{week:02d}-{pair_day}T{hh:02d}:35", key)     # fired state
+    if single_key:
+        key2 = None
     if key2 and exempt_key:
         # SCOPE PROOF for an exemption: the OTHER key reaches its quorum and still FIRES —
         # the exemption changes nothing outside its key
@@ -333,8 +339,8 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                 flip = ""
             # the exempt key's beyond-quorum events are recorded BECAUSE of the exemption — the
             # "below the quorum" lead-in would be false for them (occurrence #c >= N)
-            lead = (f"the quorum rule was retired by the modification, so occurrence #{c} is only "
-                    f"recorded; nothing fires anymore." if rule_off and c >= N else
+            lead = (f"the quorum rule was retired by the modification, so the occurrence is simply "
+                    f"recorded; nothing fires anymore and no quorum is counted." if rule_off else
                     f"{k} is exempt from the quorum, so occurrence #{c} is only recorded; the "
                     f"exemption keeps {k} accumulating without firing."
                     if is_exempt and c >= N else
@@ -352,7 +358,8 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
                          base_day: str = "W01-1", id_offset: int = 0,
                          outcomes: dict | None = None, unit: str = "complaint",
                          keys: list | None = None, flip_old_window_min: int | None = None,
-                         exempt_key: str | None = None, rule_off: bool = False) -> list:
+                         exempt_key: str | None = None, rule_off: bool = False,
+                         single_key: bool = False) -> list:
     """Duplicate suppression in a SHORT rolling window (minute-granular): the first occurrence for
     a key is processed; an identical repeat within W of the last processed one is IGNORED as a
     duplicate; past the window it is processed again as new. Builds BY CONSTRUCTION: processed →
@@ -367,7 +374,7 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
            (f"{W // 60} hour" + ("s" if W // 60 != 1 else "")) if W % 60 == 0 and W < 1440 else \
            f"{W // 1440} day" + ("s" if W // 1440 != 1 else "")
     week, day = int(base_day[1:3]), int(base_day[4:])
-    key2 = _second_key(seed, key, keys) or f"{key}-B"
+    key2 = None if single_key else (_second_key(seed, key, keys) or f"{key}-B")
     events: list = []   # (event, key)
 
     def add(text, mins, k, cg=None):
@@ -380,11 +387,12 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
         else max(1, W // 3)
     add(phrase(rid(1), key), 0, key)                            # processed (first occurrence)
     add(phrase(rid(2), key), gap_in, key)                       # in-window repeat → ignored (or flip)
-    pair_t = gap_in + 2
-    # boundary pair on key2's FIRST contact, sequential minutes apart (no race): the first is
-    # processed (also proving dedup is PER KEY — key's window is active), the repeat is deduped
-    add(phrase(rid(3), key2), pair_t, key2)
-    add(phrase(rid(4), key2), pair_t + 2, key2)
+    if key2:
+        pair_t = gap_in + 2
+        # boundary pair on key2's FIRST contact, sequential minutes apart (no race): the first is
+        # processed (also proving dedup is PER KEY — key's window is active), the repeat is deduped
+        add(phrase(rid(3), key2), pair_t, key2)
+        add(phrase(rid(4), key2), pair_t + 2, key2)
     add(phrase(rid(5), key), gap_in + W + 5, key)               # past the window → processed again
 
     # simulate: per key, the time of the LAST PROCESSED occurrence

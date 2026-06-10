@@ -141,7 +141,10 @@ def _ground_base_events(llm, grounded: GroundedTemplate, base_events: list, seed
 
 def _process_spec(llm, spec: WorkflowSpec, ground_cfg, steps_cfg, ground_be_cfg) -> WorkflowSpec | None:
     # Pass the seed so the grounded steps use the SAME entities/roles/titles as the scenario.
-    grounded = _ground_template(llm, _template_from_spec(spec), ground_cfg, seed=spec.seed)
+    constraint = (f"{spec.state_constraint.threshold} — {spec.state_constraint.description}"
+                  if spec.state_constraint else "")
+    grounded = _ground_template(llm, _template_from_spec(spec), ground_cfg, seed=spec.seed,
+                                constraint=constraint)
     if not grounded:
         return None
     spec.name = grounded.name

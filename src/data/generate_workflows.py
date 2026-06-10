@@ -93,7 +93,8 @@ def _format_objects(graph: ObjectGraph) -> str:
     return "\n".join(lines)
 
 
-def _ground_template(llm, template: dict, prompt_cfg: dict, seed: str = "") -> GroundedTemplate | None:
+def _ground_template(llm, template: dict, prompt_cfg: dict, seed: str = "",
+                     constraint: str = "") -> GroundedTemplate | None:
     """Stage 1a: resolve abstract placeholders into specific concrete values. When a `seed` (the
     state scenario's structured reference data) is supplied, the grounded steps are CONSTRAINED to
     that seed's exact entities/roles/titles — so the workflow description and the seed/scenario
@@ -114,6 +115,16 @@ def _ground_template(llm, template: dict, prompt_cfg: dict, seed: str = "") -> G
             "reps, categories, contacts), the workflow monitors/serves ALL of them equally — do NOT "
             "specialize any step to a single one (not 'monitor #eng-platform' when the seed has three "
             "channels; write 'monitor each configured channel')."
+        )
+    if constraint:
+        prompt += (
+            f"\n\nThe workflow operates under this STANDING RULE: {constraint}\n"
+            "If this rule GATES or REPLACES a per-event step (e.g. the rule consolidates what a step "
+            "sends per event), REWRITE that step so the steps and the rule agree — the steps must "
+            "never promise a per-event action that the rule suppresses ('a reminder email is sent for "
+            "each event' becomes 'the event is recorded against its account; reminder emails are "
+            "governed by the consolidation rule below'). The steps and the rule must read as ONE "
+            "consistent procedure."
         )
     return generate_with_retries(
         llm=llm,

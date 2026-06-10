@@ -412,31 +412,35 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         m = _re.search(r"\d+", idstr or "")
         return decos[(int(m.group()) if m else 0) % len(decos)]
 
+    def amount_for(idstr):
+        m = _re.search(r"\d+", idstr or "")
+        return f"{60 + (int(m.group()) if m else 0) * 35 % 440}"   # deterministic plausible value
+
     # outcome wording: pass the full template map (the builders look up allowed/blocked/approved/
     # held/submitted) so the action text is domain-correct for any workflow; fallback inside builder.
     if ct == "counter":
         req = tmpl.get("request") or tmpl.get("submit") or "A new request {ID} arrives {DECO}."
-        phrase = lambda lid, d: fill(req, ID=lid, DECO=(d if isinstance(d, str) else deco_for(lid)))
+        phrase = lambda lid, d: fill(req, ID=lid, AMOUNT=amount_for(lid), DECO=(d if isinstance(d, str) else deco_for(lid)))
         return build_counter_scenario(seed, threshold, phrase, decos or [""],
                                       outcomes=tmpl, unit=unit or "assignment", entities=entities, **kw)
     if ct == "rate_limit":
         req = tmpl.get("request") or "A request {ID} arrives for {KEY} {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=kk, DECO=deco_for(rid))
+        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), DECO=deco_for(rid))
         return build_rate_limit_scenario(seed, threshold, k, phrase,
                                          outcomes=tmpl, unit=unit or "request", keys=keys, **kw)
     if ct == "trigger":
         from src.data.scenario_builder import build_trigger_scenario
         req = tmpl.get("request") or "An event {ID} for {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, DECO=deco_for(rid))
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), DECO=deco_for(rid))
         return build_trigger_scenario(seed, threshold, k, phrase,
                                       outcomes=tmpl, unit=unit or "escalation", keys=keys, **kw)
     if ct == "dedup":
         from src.data.scenario_builder import build_dedup_scenario
         req = tmpl.get("request") or "A report {ID} about {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, DECO=deco_for(rid))
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), DECO=deco_for(rid))
         return build_dedup_scenario(seed, threshold, k, phrase,
                                     outcomes=tmpl, unit=unit or "report", keys=keys, **kw)
     if ct == "cap":
@@ -636,6 +640,9 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
             kw2["starting_total"] = _base_cap_total(spec.base_events) + _base_cap_total(run1)
         run2 = run(old_thr, key_=spec.key if ct in ("rate_limit", "trigger") else None,
                    day=day2, offset=150, **kw2)
+        if ct == "counter":   # the old-rule proof doesn't need the reset tail again (base showed it)
+            roster_n = min(len(spec.entities or _seed_reps(spec.seed) or []), 3) or 1
+            run2 = run2[:-roster_n]
         for e in run2:
             e.expect.reason = (f"The temporary rule has EXPIRED (it applied only until {expiry_label}) "
                                f"— the original \"{old_thr}\" applies again. " + (e.expect.reason or ""))
@@ -658,12 +665,17 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
                                 spec.key, spec.unit, entities=spec.entities, keys=spec.keys,
                                 base_day=day2, reset_day=_abs_to_day(_ev_abs_day(day2 + "T09:00") + 1),
                                 id_offset=150)
+            roster_n = min(len(spec.entities or _seed_reps(spec.seed) or []), 3) or 1
+            run2 = run2[:-roster_n]   # old-rule proof doesn't need the reset tail (base showed it)
         else:
             ctx = other
-            run1 = run(new_thr, key_=ctx, **flip_kw)
+            # SINGLE-KEY runs: the override applies only to ctx — the builders' second-key proof
+            # would otherwise simulate a NON-override key under the override threshold (wrong
+            # quorum/limit in its reasons)
+            run1 = run(new_thr, key_=ctx, single_key=True, **flip_kw)
             day2 = _abs_to_day(max((_ev_abs_day(e.when) for e in run1 if e.when), default=base_abs)
                                + (window if ct in ("rate_limit", "trigger") else 0) + 1)
-            run2 = run(old_thr, key_=spec.key, day=day2, offset=150)
+            run2 = run(old_thr, key_=spec.key, day=day2, offset=150, single_key=True)
         for e in run2:
             e.expect.reason = (f"{ctx}'s override does NOT apply here — the original \"{old_thr}\" "
                                f"still governs every other {noun}. " + (e.expect.reason or ""))
