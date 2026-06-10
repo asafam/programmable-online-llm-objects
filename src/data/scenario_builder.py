@@ -341,10 +341,12 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
         if delta is not None and delta < W and not is_exempt:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "ignored",
-                    f"{_ev_ref(e)} is IGNORED as a duplicate; the {unit} is not processed again.",
+                    f"{_ev_ref(e)} is recognized as a DUPLICATE and merged into the open {unit} "
+                    f"for {k}; no new {unit} is created.",
                     ID=_ev_ref(e), KEY=k),
                 reason=f"an identical {unit} for {k} was processed only {delta} minute(s) ago — "
-                       f"within the {WTXT} dedup window, so this one is ignored as a duplicate.")
+                       f"within the {WTXT} dedup window, so this one is handled as a duplicate "
+                       f"(merged, not re-processed).")
         else:
             expired = delta is not None and delta >= W
             if is_exempt and delta is not None and delta < W:

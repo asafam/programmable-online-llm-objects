@@ -24,13 +24,16 @@ user_prompt: |
      - "counter": a per-key count within a period is capped, usually round-robin (e.g. leads/rep/day).
      - "rate_limit": at most N for the same key in a rolling window (e.g. reorders/SKU within 7 days).
      - "trigger": the INVERSE — the Nth related occurrence for a key within a rolling window FIRES
-       the gated action (an escalation, a ticket, a digest); earlier occurrences only accumulate,
-       and the count resets after firing (e.g. 3 complaints about the same product in 7 days →
-       escalation). Fits escalation/aggregation/alerting workflows.
+       the gated action (an escalation, a ticket, a digest, an OFFER); earlier occurrences only
+       accumulate, and the count resets after firing. e.g. 3 complaints about the same product in
+       7 days → escalation; or N subscriptions for the same account nearing renewal after first
+       notification → a bundle-discount offer. Fits escalation/aggregation/alerting workflows.
      - "dedup": repeats are SUPPRESSED — the first occurrence for a key is processed; an identical
-       one within a SHORT rolling window (minutes/hours) is ignored as a duplicate; past the window
-       it is processed as new (e.g. the same complaint ignored within a rolling 10 minutes). Fits
-       intake/notification/alerting workflows where repeats are noise.
+       one within a SHORT rolling window (minutes/hours) is recognized as a duplicate; past the
+       window it is processed as new. Use dedup ONLY when suppression is the realistic behavior —
+       and the duplicate must still be handled VISIBLY (merged into the open record, acknowledged),
+       NEVER a silent "do nothing". When repeats should CAUSE something (an escalation, a warning,
+       an offer), use "trigger" instead — a fired action is a stronger scenario than a suppressed one.
 
   2. `threshold` — the numeric rule, e.g. "$50,000 cumulative per quarter", "2 leads per rep per day",
      "2 reorders per SKU within any rolling 7 days"; trigger: "3 complaints about the same product
@@ -88,7 +91,10 @@ user_prompt: |
                       role="fired":    "An escalation ticket IS opened for {KEY} ({ID}) and the owning team is paged."
        - dedup      → role="request":  "An incident report {ID} about {KEY} is submitted {DECO}."
                       role="allowed":  "{ID} IS processed and an incident entry is created for {KEY}."
-                      role="ignored":  "{ID} is recognized as a DUPLICATE of the recent {KEY} report and ignored."
+                      role="ignored":  "{ID} is recognized as a DUPLICATE and MERGED into the open {KEY} incident
+                                        (a note is appended); NO new incident is created."
+                      (the duplicate outcome must be a VISIBLE action — merge/append/acknowledge —
+                       never a bare "ignored, nothing happens")
        - cap        → role="submit":   "Sales rep {SUBMITTER} submits quote {ID} in HubSpot requesting a ${AMOUNT} discount {DECO}."
                       role="approve":  "{APPROVER} responds in Slack to the approval request for quote {ID}."
                       role="submitted":"Quote {ID} is recorded in HubSpot; the system EMAILS the approval request to
@@ -150,6 +156,13 @@ user_prompt: |
   11. `irrelevant_key` — the REAL seed entity the irrelevant event references (clearly OUTSIDE the
       invariant): the well-stocked SKU, a category with no limit pressure, a $0 quote's account.
       Must exist in the seed.
+
+  12. SIGNAL → ACTION MAPPING: whenever the workflow INTERPRETS a signal to decide what to do —
+      an emoji reaction, a label, a keyword, a form category — the seed MUST define that mapping
+      explicitly (e.g. {"reaction_mappings":[{"emoji":":ticket:","action":"create_jira_issue"}]}),
+      because the system can only act deterministically on mappings it can READ. Every request
+      phrasing must use a signal DEFINED in the mapping; the irrelevant event uses an UNMAPPED
+      signal (proving the mapping is consulted, not assumed).
 
   Return only the JSON object (constraint_type, threshold, description, seed, phrasings, unit,
   decorations, entities, keys, key, irrelevant_key). Do NOT write events, timestamps, or

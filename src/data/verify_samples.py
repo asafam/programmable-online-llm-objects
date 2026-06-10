@@ -206,7 +206,12 @@ def verify(path: Path, judge: bool = False, provider=None, model="gpt-5.4") -> i
         for i in jud:
             print(f"   · {i}")
         blocking += bool(det)
-    print(f"\n=== {len(samples) - blocking}/{len(samples)} pass the BLOCKING (deterministic) gate; "
+    from collections import Counter
+    fam = Counter(getattr(s.state_constraint.type, "value", s.state_constraint.type)
+                  for s in samples if s.state_constraint)
+    print(f"\nInvariant families: " + ", ".join(f"{k}={v}" for k, v in fam.most_common())
+          + ("   ⚠ low variety — consider re-running some templates" if len(fam) <= 1 < len(samples) else ""))
+    print(f"=== {len(samples) - blocking}/{len(samples)} pass the BLOCKING (deterministic) gate; "
           f"{blocking} blocked. Judge notes above are advisory. ===")
     return blocking
 
