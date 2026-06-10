@@ -283,11 +283,16 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                         f"records it.")
             else:
                 flip = ""
+            # the exempt key's beyond-quorum events are recorded BECAUSE of the exemption — the
+            # "below the quorum" lead-in would be false for them (occurrence #c >= N)
+            lead = (f"{k} is exempt from the quorum, so occurrence #{c} is only recorded."
+                    if is_exempt and c >= N else
+                    f"only {c} occurrence(s) for {k} within the last {DAYS} — below the quorum "
+                    f"of {N}; counts are PER key.")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "recorded",
                     f"{_ev_ref(e)} is recorded for {k}; NO {unit} fires.", ID=_ev_ref(e), KEY=k),
-                reason=f"only {c} occurrence(s) for {k} within the last {DAYS} — below the quorum "
-                       f"of {N}; counts are PER key.{flip}")
+                reason=f"{lead}{flip}")
         out.append(e)
     return out
 

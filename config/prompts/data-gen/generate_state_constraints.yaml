@@ -19,7 +19,13 @@ user_prompt: |
 
   Return JSON with:
 
-  1. `constraint_type` — pick the one that GENUINELY FITS this workflow (do not default to a limit):
+  1. `constraint_type` — pick the one that GENUINELY FITS this workflow (do not default to a limit).
+     When MORE THAN ONE fits, prefer in this order: trigger > cap/counter/rate_limit > dedup — an
+     invariant whose accumulated state FIRES a visible action makes a stronger scenario than one
+     that merely suppresses. In particular, when the workflow tracks PENDING items that get
+     re-noticed over time (renewals approaching, expiries, overdue tasks), model the ACCUMULATION
+    : several related pending items for the same key within the window → a combined action (a
+     bundle offer, a consolidated escalation, one digest) — that is "trigger", NOT "dedup".
      - "cap": a cumulative total must stay at/below a ceiling (e.g. quarterly approved discount).
      - "counter": a per-key count within a period is capped, usually round-robin (e.g. leads/rep/day).
      - "rate_limit": at most N for the same key in a rolling window (e.g. reorders/SKU within 7 days).
