@@ -193,6 +193,9 @@ class GeneratedScenarioSpec(BaseModel):
     irrelevant_key: str = ""        # DEPRECATED (kept for back-compat)
     key_contacts: dict[str, str] = Field(default_factory=dict)  # key → concrete recipient (email
                                                                 # address) the gated action notifies
+    analysis_field: str = ""   # when a workflow step ANALYZES content (a mock-API capability):
+                               # the result field name, e.g. "sentiment", "priority"
+    analysis_label: str = ""   # the value every scenario event's content reflects, e.g. "negative"
 
 
 class StateProbeScenario(BaseModel):
@@ -791,6 +794,8 @@ class WorkflowSpec(BaseModel):
     keys: list[str] = Field(default_factory=list)            # rate_limit key values (carried for the mod)
     irrelevant_key: str = ""                                 # DEPRECATED (kept for back-compat)
     key_contacts: dict[str, str] = Field(default_factory=dict)  # key → concrete recipient (carried)
+    analysis_field: str = ""                                  # analysis capability result field (carried)
+    analysis_label: str = ""                                  # the classification the events reflect
     steps: list[SpecStep] = Field(default_factory=list)      # external-stimulus steps with observable expects
     base_events: list[SpecEventWithExpect] = Field(default_factory=list)  # state-infused base scenario
     modifications: list[SpecModification] = Field(default_factory=list)

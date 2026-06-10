@@ -752,6 +752,27 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
     return intent, mod_when, events
 
 
+def publish_analysis_results(spec, post_events) -> None:
+    """When the workflow ANALYZES content (sentiment/priority/...), the analysis is a MOCK-API
+    capability — agents wrap domain functionality, they never perform the analysis themselves.
+    Code publishes the per-event analysis results INTO THE SEED (served verbatim by the analysis
+    service's `_data` tool), so the result of every scenario event's analysis is deterministic
+    mock data, exactly like every other read service."""
+    if not spec.analysis_field:
+        return
+    import json as _json
+    try:
+        d = _json.loads(spec.seed)
+    except Exception:
+        return
+    if not isinstance(d, dict):
+        return
+    label = spec.analysis_label or "matching"
+    d["analysis_results"] = {e.id: {spec.analysis_field: label}
+                             for e in list(spec.base_events) + list(post_events) if e.input}
+    spec.seed = _json.dumps(d)
+
+
 def _process_template(llm, template: dict, prompt_template: str) -> tuple[WorkflowSpec, bool]:
     """INFUSE (before grounding): the LLM supplies ONLY realism — the invariant type/threshold,
     the structured seed, phrasing templates, and a decoration pool. CODE then builds the request
@@ -782,6 +803,8 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     spec.keys = gen.keys
     spec.irrelevant_key = gen.irrelevant_key
     spec.key_contacts = gen.key_contacts
+    spec.analysis_field = gen.analysis_field
+    spec.analysis_label = gen.analysis_label
     spec.state_constraint = StateConstraint(
         type=gen.constraint_type, threshold=gen.threshold, description=gen.description,
     )

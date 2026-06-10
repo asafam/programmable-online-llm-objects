@@ -78,6 +78,8 @@ def _process_spec(llm, spec: WorkflowSpec, prompt_tmpl: str, args) -> tuple[Work
             mt = pool[int(hashlib.md5(spec.id.encode()).hexdigest(), 16) % len(pool)]
             used[mt] = used.get(mt, 0) + 1
         intent, mod_when, post_events = build_mod_scenario(spec, mt)
+        from src.data.generate_state_constraints import publish_analysis_results
+        publish_analysis_results(spec, post_events)
         spec.modifications = [SpecModification(id="M001", when=mod_when, intent=intent,
                                                mod_type=ModType(mt), ambiguity=Ambiguity(ambiguity))]
         spec.events = post_events
@@ -180,6 +182,8 @@ def run(args: argparse.Namespace) -> Path:
                         mt = args.mod_type if args.mod_type in valid else random.choice(valid)
                         amb = random.choice(list(AMBIGUITY_DESCRIPTIONS.keys())) if args.ambiguity == "random" else args.ambiguity
                         intent, mod_when, post = build_mod_scenario(spec, mt)
+                        from src.data.generate_state_constraints import publish_analysis_results
+                        publish_analysis_results(spec, post)
                         spec.modifications = [SpecModification(id="M001", when=mod_when, intent=intent,
                                                               mod_type=ModType(mt), ambiguity=Ambiguity(amb))]
                         spec.events = post

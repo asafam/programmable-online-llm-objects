@@ -25,6 +25,13 @@ prompt: |
 
      - **Read services** represent external data APIs (org directories, product catalogs, user directories). They hold NO data in their own state — they retrieve it on demand by calling a tool. The behavior field MUST end with: "When answering queries, call the `{object_id}_data` tool to retrieve data." — replace `{object_id}` with this object's actual slug (using underscores, e.g., `org_directory_data`). Read services MUST reply with the requested data.
 
+       **AI / analysis capabilities are read services too:** when a step says the content is
+       analyzed, classified, summarized, or extracted (sentiment analysis, priority triage,
+       ChatGPT-style extraction), wrap that capability as a READ SERVICE object (e.g.
+       `mention-analysis`, `request-triage-analysis`) with the standard `_data` tool sentence.
+       Business logic objects ASK it and receive the result — an agent must NEVER perform the
+       analysis itself inline: agents wrap domain functionality, not functional roles.
+
        **Important:** Any service that holds persistent data AND must answer lookup queries (e.g., a knowledge base, a Notion database used as a FAQ store, a policy document, a ticket store queried for status) MUST be a read service — NOT a write service. If a business logic object needs to ask a service a question and wait for the answer, that service is a read service with a `_data` tool.
 
      - **Write services** record what they receive and have initially empty state. Their state becomes the audit trail. Entry-point write services (those with `event_sources`) MUST declare the business logic object as a peer — without this peer, incoming events dead-end and the automation never runs.

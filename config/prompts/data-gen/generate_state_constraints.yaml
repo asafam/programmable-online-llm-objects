@@ -153,16 +153,18 @@ user_prompt: |
      OUTCOME phrasings describe what the system then does). The request must also CARRY INLINE all
      per-event content the workflow later reads (the message text, the amount, the category, the
      ask) — per-event content cannot live in the seed.
-     RAW CONTENT, NOT CONCLUSIONS: when a workflow step ANALYZES/classifies the content (sentiment,
-     priority, topic, intent), the request must NOT carry that analysis result pre-computed — it
-     carries the raw content, written so the correct classification is UNAMBIGUOUS to any reader
-     (a scathing headline for negative sentiment, an obviously-urgent outage report for high
-     priority). The OUTCOME then states the classification as the SYSTEM's work ("the system
-     classifies the mention as negative; this is occurrence #..."). An event arriving pre-labeled
-     skips the very step the workflow exists to perform.
-     ANALYSIS CRITERIA IN SEED: when the workflow classifies/analyzes, the seed must DEFINE the
-     criteria it applies — the monitored topics, the priority rules, the category definitions —
-     exactly like a signal→action mapping; the system can only analyze against criteria it can READ.
+     ANALYSIS IS A MOCK-API CAPABILITY: when a workflow step ANALYZES/classifies content
+     (sentiment, priority, topic, intent), that analysis is an EXTERNAL service the system calls —
+     agents wrap domain functionality; they never perform the analysis themselves. The request
+     carries the RAW content (no pre-computed labels — an event arriving pre-labeled skips the
+     analysis step entirely), written so the expected classification is obvious to a reader; the
+     ANALYSIS SERVICE (a mock tool) returns the result, and code publishes each event's result as
+     deterministic mock data the service serves. Declare it via `analysis_field` (e.g.
+     "sentiment") + `analysis_label` (the value all scenario events reflect, e.g. "negative") —
+     leave both empty when no step analyzes. The OUTCOME phrasings reference the service's result
+     ("classified negative by the mention-analysis service; this is occurrence #...").
+     ANALYSIS CRITERIA IN SEED: the seed must also DEFINE what the analysis is applied against —
+     the monitored topics, priority rules, category definitions — like any signal→action mapping.
      The submitting ACTOR is identified: any request a person initiates (a leave request, an
      expense, a quote) must name that person via {SUBMITTER} (filled by code from the seed's
      people) — an anonymous request cannot be routed, attributed, or capped per-person.
