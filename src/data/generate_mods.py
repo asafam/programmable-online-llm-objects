@@ -60,11 +60,23 @@ def _process_spec(llm, spec: WorkflowSpec, prompt_tmpl: str, args) -> tuple[Work
     if spec.state_constraint and spec.base_events:
         from src.data.generate_state_constraints import VALID_MOD_TYPES, build_mod_scenario
         from src.data.schema import SpecModification
-        # mod_type is RANDOM-SAMPLED from the six taxonomy categories (CLI --mod-type overrides);
-        # each maps to a deterministic state-scenario transform in build_mod_scenario.
+        # mod_type comes from the six taxonomy categories (CLI --mod-type overrides). Sampling is
+        # STRATIFIED across the run — pick the least-used valid type so a batch covers the
+        # taxonomy instead of randomly repeating one (an independent draw once gave 3 removals).
         ct = spec.state_constraint.type.value
         valid = VALID_MOD_TYPES.get(ct, ["correction"])
-        mt = mod_types[0] if mod_types[0] in valid else random.choice(valid)
+        if mod_types[0] in valid and args.mod_type not in (None, "mixed"):
+            mt = mod_types[0]
+        else:
+            used = getattr(args, "_mt_used", None)
+            if used is None:
+                used = {}
+                setattr(args, "_mt_used", used)
+            lo = min(used.get(t, 0) for t in valid)
+            pool = [t for t in valid if used.get(t, 0) == lo]
+            import hashlib
+            mt = pool[int(hashlib.md5(spec.id.encode()).hexdigest(), 16) % len(pool)]
+            used[mt] = used.get(mt, 0) + 1
         intent, mod_when, post_events = build_mod_scenario(spec, mt)
         spec.modifications = [SpecModification(id="M001", when=mod_when, intent=intent,
                                                mod_type=ModType(mt), ambiguity=Ambiguity(ambiguity))]
