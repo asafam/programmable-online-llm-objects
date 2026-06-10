@@ -167,6 +167,21 @@ def deterministic_issues(s: Sample) -> list[str]:
     if leaky:
         issues.append(f"object specs use internal vocabulary (custodian/invariant): {leaky[:3]}")
 
+    # analysis capability: the seed's published analysis_results must be SYNCED with the events —
+    # exactly one entry per scenario event, keyed by the final event id (a rebuild that changes
+    # events without republishing desyncs the mock and the scenario silently)
+    if s.seed and '"analysis_results"' in s.seed:
+        try:
+            res = set((json.loads(s.seed).get("analysis_results") or {}).keys())
+            ev_ids = {e.id for e in s.events if e.role in ("base", "post_mod", "irrelevant")}
+            missing, stale = sorted(ev_ids - res), sorted(res - ev_ids)
+            if missing:
+                issues.append(f"analysis_results missing entries for events: {missing[:4]}")
+            if stale:
+                issues.append(f"analysis_results has stale entries for non-events: {stale[:4]}")
+        except Exception:
+            pass
+
     # cap: the approval request is emailed to the manager — approvers must carry email addresses
     if ct == "cap" and s.seed:
         try:
