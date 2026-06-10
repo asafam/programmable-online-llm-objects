@@ -122,6 +122,11 @@ user_prompt: |
      The OUTCOME phrasings MUST describe the workflow's REAL gated action (a reorder, an assignment,
      an approval) — make "blocked"/"held" clearly state the action did NOT happen. Put NO number,
      count, or date in any phrasing — only placeholders + flavor.
+     CONCRETE VALUES ONLY: every detail a phrasing mentions must carry an ACTUAL value — inline in
+     the template or via {DECO} ("$240 for an airport transfer", "submitted 2026-03-14"). NEVER
+     meta-fillers that name a field without its value: "date entered", "description entered",
+     "amount $", "details provided" are all FORBIDDEN. If you don't want to invent a value for a
+     detail, OMIT that detail entirely.
      REQUEST = RAW STIMULUS: the request template must read exactly as the SOURCE system would emit
      it (a webhook payload arriving, an emoji reaction being added, an email landing, a form being
      submitted). NEVER phrase it as the system's own processing — "is detected", "is captured",

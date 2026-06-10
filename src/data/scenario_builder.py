@@ -2,7 +2,7 @@
 Code-generated scenario structure — logically valid BY CONSTRUCTION.
 
 The LLM supplies only realism (the structured seed + phrasing + decorations). This module builds
-the request sequence — counts, timestamps, the concurrent pair placed at the LAST remaining slot,
+the request sequence — counts, timestamps, the boundary pair placed at the LAST remaining slot,
 the period reset — and derives every expect by simulation. One builder per invariant family, so
 the LLM never touches the arithmetic that it gets wrong ~100% of the time.
 """
@@ -72,7 +72,7 @@ def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
     """Round-robin / per-key daily counter — DOMAIN-GENERIC (reps/channels/agents). Builds,
     BY CONSTRUCTION:
       - (cap*R - 1) requests in round-robin order (all assigned) → leaves exactly ONE slot open,
-      - a concurrent pair at that last slot (same `when`) → one assigned, one held (the race),
+      - a boundary pair at that last slot (sequential, minutes apart) → first assigned, next held,
       - a next-day reset (assigned again, daily counter cleared).
     `entities` (preferred) names the rotation members in order; else parsed generically from the
     seed. `phrase(req_id, decoration)` returns the NL input text. Returns [] if no rotation found."""
@@ -89,9 +89,10 @@ def build_counter_scenario(seed: str, threshold: str, phrase, decorations: list,
     for k in range(1, nfill + 1):
         events.append(_ev(len(events) + 1, phrase(lead(k), deco(k)), _when(base_day, idx)))
         idx += 1
-    pw = _when(base_day, idx)          # the two simultaneous arrivals compete for the last slot
-    events.append(_ev(len(events) + 1, phrase(lead(nfill + 1), deco(nfill + 1)), pw, "cg_limit"))
-    events.append(_ev(len(events) + 1, phrase(lead(nfill + 2), deco(nfill + 2)), pw, "cg_limit"))
+    # boundary pair, one AFTER the other (minutes apart) — deterministic order, no race:
+    # the first takes the last open slot, the next one finds every slot taken
+    events.append(_ev(len(events) + 1, phrase(lead(nfill + 1), deco(nfill + 1)), _when(base_day, idx)))
+    events.append(_ev(len(events) + 1, phrase(lead(nfill + 2), deco(nfill + 2)), _when(base_day, idx + 1)))
     for j, k in enumerate(range(nfill + 3, nfill + 3 + min(len(reps), 3))):
         events.append(_ev(len(events) + 1, phrase(lead(k), deco(k)), _when(reset_day, j)))
 
@@ -132,7 +133,7 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                               exempt_key: str | None = None) -> list:
     """Per-key rolling-window rate limit (N per key per D days) — DOMAIN-GENERIC (SKUs/categories/
     contacts). Builds BY CONSTRUCTION for the main key: (N-1) accepted inside the window, a
-    concurrent pair at the last slot (one accepted, one blocked), a post-window reset. It ALSO
+    sequential boundary pair at the last slot (first accepted, next blocked), a post-window reset. It ALSO
     fires one request for a SECOND key while the main key is at its limit — allowed, proving the
     limit is PER-KEY, not global. `keys` (preferred) lists the limit-tracked key values.
     Mod-dimension flips: `flip_old_window` marks events still in-window under the OLD window length
@@ -156,10 +157,10 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
     for i in range(N - 1):                          # (N-1) accepted for the main key, in-window
         n += 1
         add(phrase(rid(n), False, key), f"W{week:02d}-{day + i * gap}T{9 + (0 if gap else i):02d}:00", key)
-    pair_day = day + (N - 1) * gap                   # concurrent pair at the last in-window slot
-    pair_t = f"T{11 + (0 if gap else N - 1):02d}:30"
-    n += 1; add(phrase(rid(n), False, key), f"W{week:02d}-{pair_day}{pair_t}", key, "cg_limit")
-    n += 1; add(phrase(rid(n), True, key), f"W{week:02d}-{pair_day}{pair_t}", key, "cg_limit")
+    pair_day = day + (N - 1) * gap         # boundary pair: sequential, minutes apart (no race) —
+    hh = 11 + (0 if gap else N - 1)        # the first fills the last in-window slot, the next is blocked
+    n += 1; add(phrase(rid(n), False, key), f"W{week:02d}-{pair_day}T{hh:02d}:30", key)
+    n += 1; add(phrase(rid(n), True, key), f"W{week:02d}-{pair_day}T{hh:02d}:35", key)
     if key2:                                         # a SECOND key, same window → ALLOWED (per-key)
         n += 1; add(phrase(rid(n), False, key2), f"W{week:02d}-{pair_day}T13:00", key2)
     reset_abs = (week - 1) * 7 + pair_day + D + 1    # main-key post-window reset
@@ -223,8 +224,8 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
     key within the rolling window FIRES the gated action (an escalation, a digest, a ticket);
     earlier occurrences only accumulate. After firing, that key's count RESETS. Builds BY
     CONSTRUCTION: (N-1) accumulating events for the main key, one mid-stream event for a SECOND
-    key (counts are per-key), a CONCURRENT PAIR at the quorum boundary (exactly ONE of the two is
-    the Nth and fires; the other lands on the fresh post-fire count), and one post-window event.
+    key (counts are per-key), a sequential boundary pair at the quorum (the first is the Nth and
+    FIRES; the next is CONSOLIDATED into the open fired unit), and one post-window event.
     Mod flips: `flip_old_limit` (quorum changed) marks fires/records that flip vs the old quorum;
     `exempt_key` never fires (its quorum-reaching event is the FLIP).
     `phrase(req_id, key)` returns the raw-stimulus input text."""
@@ -247,22 +248,36 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
         if i == 0 and key2:                          # a SECOND key mid-stream → counts are PER KEY
             n += 1
             add(phrase(rid(n), key2), f"W{week:02d}-{day + i * gap}T{10 + (0 if gap else i):02d}:00", key2)
-    pair_day = day + (N - 1) * gap                   # the pair races at the quorum boundary
-    pair_t = f"T{11 + (0 if gap else N - 1):02d}:30"
-    n += 1; add(phrase(rid(n), key), f"W{week:02d}-{pair_day}{pair_t}", key, "cg_limit")
-    n += 1; add(phrase(rid(n), key), f"W{week:02d}-{pair_day}{pair_t}", key, "cg_limit")
+    pair_day = day + (N - 1) * gap         # boundary pair: sequential, minutes apart (no race) —
+    hh = 11 + (0 if gap else N - 1)        # the first reaches the quorum and FIRES; the next lands
+    n += 1; add(phrase(rid(n), key), f"W{week:02d}-{pair_day}T{hh:02d}:30", key)     # on the freshly
+    n += 1; add(phrase(rid(n), key), f"W{week:02d}-{pair_day}T{hh:02d}:35", key)     # fired state
     post_abs = (week - 1) * 7 + pair_day + D + 1     # past the window → fresh accumulation
     n += 1; add(phrase(rid(n), key), f"W{(post_abs - 1) // 7 + 1:02d}-{(post_abs - 1) % 7 + 1}T09:00", key)
 
-    # simulate the quorum PER KEY: accumulate in-window; the Nth fires and resets the key
+    # simulate the quorum PER KEY: accumulate in-window; the Nth fires; while the fired unit's
+    # window is still open, further occurrences are CONSOLIDATED into it (visible merge), and a
+    # fresh accumulation starts only past the window
     acc: dict[str, list[int]] = {}
+    fired_at: dict[str, int] = {}
     out = []
     for e, k in events:
         d = _abs_day(e.when)
         c = sum(1 for ad in acc.get(k, []) if d - ad < D) + 1   # incl. this occurrence
         is_exempt = exempt_key is not None and k == exempt_key
+        if k in fired_at and d - fired_at[k] < D and not is_exempt:
+            ago = d - fired_at[k]
+            e.expect = EventExpect(
+                action=_fill_outcome(outcomes, "consolidated",
+                    f"{_ev_ref(e)} is CONSOLIDATED into the open {unit} for {k}; no new {unit} fires.",
+                    ID=_ev_ref(e), KEY=k),
+                reason=f"a {unit} for {k} fired {ago} day(s) ago and its {DAYS} window is still "
+                       f"open — this occurrence is added to it rather than starting a new count.")
+            out.append(e)
+            continue
         if c >= N and not is_exempt:
             acc[k] = []                                          # fired → reset the key's count
+            fired_at[k] = d
             flip = (f" THIS IS THE FLIP: under the original quorum of {flip_old_limit} this is only "
                     f"occurrence #{c} and would NOT have fired yet; the modification (quorum {N}) "
                     f"fires it." if flip_old_limit and c < flip_old_limit else "")
@@ -330,10 +345,10 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
     add(phrase(rid(1), key), 0, key)                            # processed (first occurrence)
     add(phrase(rid(2), key), gap_in, key)                       # in-window repeat → ignored (or flip)
     pair_t = gap_in + 2
-    # the pair is key2's FIRST contact → a true race (one processed, one deduplicated); the
-    # processed one also proves dedup is PER KEY (key's window is still active at this moment)
-    add(phrase(rid(3), key2), pair_t, key2, "cg_limit")
-    add(phrase(rid(4), key2), pair_t, key2, "cg_limit")
+    # boundary pair on key2's FIRST contact, sequential minutes apart (no race): the first is
+    # processed (also proving dedup is PER KEY — key's window is active), the repeat is deduped
+    add(phrase(rid(3), key2), pair_t, key2)
+    add(phrase(rid(4), key2), pair_t + 2, key2)
     add(phrase(rid(5), key), gap_in + W + 5, key)               # past the window → processed again
 
     # simulate: per key, the time of the LAST PROCESSED occurrence
@@ -415,13 +430,18 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
                    f"for {rep}); the submission itself is always recorded and is not the gated action.")
         events.append(e)
 
-    # approvals: the routed MANAGER decides; cap-gated. pair share one `when` (the race).
+    # approvals: the routed MANAGER decides; cap-gated. Boundary approvals are SEQUENTIAL,
+    # minutes apart (no same-instant race — outcomes stay deterministic per event).
     total = starting_total
     approve_events = []
+    pair_seen = 0
     for j, (qid, amt, is_pair, rep, mgr) in enumerate(quotes):
-        when = f"W{week:02d}-{day}T13:00" if is_pair else f"W{week:02d}-{day}T{10 + j:02d}:30"
-        cg = "cg_limit" if is_pair else None
-        e = _ev(len(events) + len(approve_events) + 1, approve_phrase(qid, mgr), when, cg)
+        if is_pair:
+            when = f"W{week:02d}-{day}T13:{pair_seen * 5:02d}"
+            pair_seen += 1
+        else:
+            when = f"W{week:02d}-{day}T{10 + j:02d}:30"
+        e = _ev(len(events) + len(approve_events) + 1, approve_phrase(qid, mgr), when)
         approve_events.append((e, qid, amt, mgr))
 
     ordered = sorted(approve_events, key=lambda x: (x[0].when, x[0].id))

@@ -37,6 +37,14 @@ prompt: |
 
      Being a custodian is a **categorical decision**: set `is_custodian: true` on that one object (and only that object), and begin its `role` with "Single-writer owner of ".
 
+     VOCABULARY: "custodian" is OUR internal category word — it must NEVER appear inside any
+     object's `role` or `behavior` text (nor "invariant" or "state constraint"). Every behavior
+     must read as a self-contained domain instruction that names its collaborators BY OBJECT ID:
+     write "ask `account-renewal-window` whether this is the third approaching renewal", never
+     "ask the custodian" / "when the custodian replies". The single-writer is identified by the
+     `is_custodian` FIELD; the prose names the object explicitly so any reader knows exactly whom
+     to message.
+
      A Custodian has **NO peers**. It decides from its own state in a **single message** and **replies** with the decision — it never sends an outbound message and never `ask`s anyone mid-decision (that is what guarantees the decision is atomic and the running total can't be lost). Requesters declare the Custodian as *their* peer; the Custodian declares none. Persistence and any downstream side-effects are driven by the **requester** after it gets the reply, not by the Custodian. (Any `peers` you put on a custodian are ignored.)
 
      A Custodian's `behavior` describes that single-message decision: read the current entry → (lazily reset/age it if its window or period expired) → check against the cap → maintain the accumulator in its own state and reply. Use **reserve → confirm / release** when a fallible/slow step follows the check at the *requester* (reserve holds the amount against the cap; the requester later asks for `confirm` on success or `release` on failure), or a single **admit + commit** when nothing fallible follows (e.g. round-robin assignment). For time-bounded counts, prefer a **lazy** window reset (drop/zero expired entries on touch).

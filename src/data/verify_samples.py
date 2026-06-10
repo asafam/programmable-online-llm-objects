@@ -142,6 +142,31 @@ def deterministic_issues(s: Sample) -> list[str]:
     if processed:
         issues.append(f"events phrased as system processing, not raw stimulus: {processed[:4]}")
 
+    # events must be GROUNDED — a detail named without its actual value ("date entered",
+    # "amount $") leaves the scenario unverifiable
+    vague = [e.id for e in s.events if e.role in ("base", "post_mod")
+             and (re.search(r"\b(date|description|amount|name|details?|category|value|fields?)\s+"
+                            r"(entered|provided|specified|filled|given|included)\b", e.input, re.I)
+                  or re.search(r"\$(?!\s?\d)", e.input))]
+    if vague:
+        issues.append(f"ungrounded event text (field named without an actual value): {vague[:4]}")
+
+    # two events at the SAME instant are a race — outcomes per event id are not promised; the
+    # boundary must be sequential (one after the other, minutes apart)
+    from collections import Counter as _C
+    times = _C(e.when for e in s.events if e.when and e.role in ("base", "post_mod"))
+    same = [t for t, n in times.items() if n > 1]
+    if same:
+        issues.append(f"events share the same instant (race — outcomes not promised per id): {same[:3]}")
+
+    # object specs are SELF-CONTAINED domain instructions — internal framework vocabulary
+    # ("custodian", "invariant") means the spec relies on terms the system was never given
+    leaky = [o.object_id for o in s.objects
+             if re.search(r"\bcustodian\b|\binvariant\b|\bstate constraint\b",
+                          f"{o.role or ''} {o.behavior or ''}", re.I)]
+    if leaky:
+        issues.append(f"object specs use internal vocabulary (custodian/invariant): {leaky[:3]}")
+
     # cap: the approval request is emailed to the manager — approvers must carry email addresses
     if ct == "cap" and s.seed:
         try:
