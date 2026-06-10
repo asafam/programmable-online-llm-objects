@@ -161,7 +161,13 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
     hh = 11 + (0 if gap else N - 1)        # the first fills the last in-window slot, the next is blocked
     n += 1; add(phrase(rid(n), False, key), f"W{week:02d}-{pair_day}T{hh:02d}:30", key)
     n += 1; add(phrase(rid(n), True, key), f"W{week:02d}-{pair_day}T{hh:02d}:35", key)
-    if key2:                                         # a SECOND key, same window → ALLOWED (per-key)
+    if key2 and exempt_key:
+        # SCOPE PROOF for an exemption: the OTHER key runs to its limit and is still blocked —
+        # the exemption changes nothing outside its key
+        for j in range(N + 1):
+            n += 1
+            add(phrase(rid(n), j >= N, key2), f"W{week:02d}-{pair_day}T{13 + j // 12:02d}:{(j * 5) % 60:02d}", key2)
+    elif key2:                                       # a SECOND key, same window → ALLOWED (per-key)
         n += 1; add(phrase(rid(n), False, key2), f"W{week:02d}-{pair_day}T13:00", key2)
     reset_abs = (week - 1) * 7 + pair_day + D + 1    # main-key post-window reset
     n += 1; add(phrase(rid(n), False, key), f"W{(reset_abs - 1) // 7 + 1:02d}-{(reset_abs - 1) % 7 + 1}T09:00", key)
@@ -248,13 +254,19 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
     for i in range(N - 1):                           # (N-1) accumulating events for the main key
         n += 1
         add(phrase(rid(n), key), f"W{week:02d}-{day + i * gap}T{9 + (0 if gap else i):02d}:00", key)
-        if i == 0 and key2:                          # a SECOND key mid-stream → counts are PER KEY
+        if i == 0 and key2 and not exempt_key:       # a SECOND key mid-stream → counts are PER KEY
             n += 1
             add(phrase(rid(n), key2), f"W{week:02d}-{day + i * gap}T{10 + (0 if gap else i):02d}:00", key2)
     pair_day = day + (N - 1) * gap         # boundary pair: sequential, minutes apart (no race) —
     hh = 11 + (0 if gap else N - 1)        # the first reaches the quorum and FIRES; the next lands
     n += 1; add(phrase(rid(n), key), f"W{week:02d}-{pair_day}T{hh:02d}:30", key)     # on the freshly
     n += 1; add(phrase(rid(n), key), f"W{week:02d}-{pair_day}T{hh:02d}:35", key)     # fired state
+    if key2 and exempt_key:
+        # SCOPE PROOF for an exemption: the OTHER key reaches its quorum and still FIRES —
+        # the exemption changes nothing outside its key
+        for j in range(N):
+            n += 1
+            add(phrase(rid(n), key2), f"W{week:02d}-{pair_day}T{13 + j // 12:02d}:{(j * 5) % 60:02d}", key2)
     post_abs = (week - 1) * 7 + pair_day + D + 1     # past the window → fresh accumulation
     n += 1; add(phrase(rid(n), key), f"W{(post_abs - 1) // 7 + 1:02d}-{(post_abs - 1) % 7 + 1}T09:00", key)
 

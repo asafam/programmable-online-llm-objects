@@ -62,8 +62,13 @@ def _process_spec(llm, spec: WorkflowSpec, prompt_tmpl: str, args) -> tuple[Work
         from src.data.schema import SpecModification
         mt = mod_types[0]
         # the modification DIMENSION (limit/window/exempt) is picked per template — stable,
-        # automatic variety, no flag
-        intent, mod_when, post_events = build_mod_scenario(spec, mt, mod_dim=pick_mod_dim(spec))
+        # automatic variety, no flag. An exemption IS the taxonomy's "exception" type (an
+        # entity-specific override) — label it as such, whatever direction the CLI asked for.
+        dim = pick_mod_dim(spec)
+        if dim == "exempt":
+            mt = "exception"
+        intent, mod_when, post_events = build_mod_scenario(spec, mt if dim != "exempt" else "expansion",
+                                                           mod_dim=dim)
         spec.modifications = [SpecModification(id="M001", when=mod_when, intent=intent,
                                                mod_type=ModType(mt), ambiguity=Ambiguity(ambiguity))]
         spec.events = post_events
@@ -164,7 +169,11 @@ def run(args: argparse.Namespace) -> Path:
                         from src.data.schema import SpecModification
                         mt = args.mod_type if args.mod_type not in (None, "mixed") else "expansion"
                         amb = random.choice(list(AMBIGUITY_DESCRIPTIONS.keys())) if args.ambiguity == "random" else args.ambiguity
-                        intent, mod_when, post = build_mod_scenario(spec, mt, mod_dim=pick_mod_dim(spec))
+                        dim = pick_mod_dim(spec)
+                        if dim == "exempt":
+                            mt = "exception"
+                        intent, mod_when, post = build_mod_scenario(spec, mt if dim != "exempt" else "expansion",
+                                                                    mod_dim=dim)
                         spec.modifications = [SpecModification(id="M001", when=mod_when, intent=intent,
                                                               mod_type=ModType(mt), ambiguity=Ambiguity(amb))]
                         spec.events = post

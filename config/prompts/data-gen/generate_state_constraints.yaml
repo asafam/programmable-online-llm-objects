@@ -122,6 +122,14 @@ user_prompt: |
      The OUTCOME phrasings MUST describe the workflow's REAL gated action (a reorder, an assignment,
      an approval) — make "blocked"/"held" clearly state the action did NOT happen. Put NO number,
      count, or date in any phrasing — only placeholders + flavor.
+     OUTCOMES ARE EXPLICIT AND OBSERVABLE: every outcome names the concrete CHANNEL and RECIPIENT
+     ("a consolidated escalation email IS sent to the finance team's inbox", not "finance is
+     notified" / "the team is escalated"). An accumulate/recorded/not-yet outcome must say BOTH
+     what observably happens AND what does NOT ("the notice is appended to the pending list in the
+     tracking sheet; NO email is sent yet" — never just "added to pending notices", which leaves
+     the reader guessing whether an email went out). Use the SAME action wording in the
+     description, the threshold, and the outcomes — if the rule says "a consolidated escalation
+     email to finance", the fired outcome says exactly that, not a paraphrase.
      CONCRETE VALUES ONLY: every detail a phrasing mentions must carry an ACTUAL value — inline in
      the template or via {DECO} ("$240 for an airport transfer", "submitted 2026-03-14"). NEVER
      meta-fillers that name a field without its value: "date entered", "description entered",
