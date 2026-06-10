@@ -768,8 +768,12 @@ def publish_analysis_results(spec, post_events) -> None:
     if not isinstance(d, dict):
         return
     label = spec.analysis_label or "matching"
-    d["analysis_results"] = {e.id: {spec.analysis_field: label}
-                             for e in list(spec.base_events) + list(post_events) if e.input}
+    # key by the FINAL sample ids: bind renames base events POSITIONALLY to SC###; the post-mod
+    # PM###/IRR### ids pass through binding unchanged
+    res = {f"SC{i:03d}": {spec.analysis_field: label}
+           for i, e in enumerate(spec.base_events, 1) if e.input}
+    res.update({e.id: {spec.analysis_field: label} for e in post_events if e.input})
+    d["analysis_results"] = res
     spec.seed = _json.dumps(d)
 
 
