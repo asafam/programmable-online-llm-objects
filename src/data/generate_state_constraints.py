@@ -393,6 +393,12 @@ def _first_key(seed_str: str):
     return None
 
 
+def _seed_people(seed: str, entities=None) -> list:
+    """Named people for {SUBMITTER} in code-inserted events (same pool the closures use)."""
+    return [r[0] for r in (_seed_reps(seed, entities) or [])] or \
+           [r for r, _m in (_seed_sales_reps(seed) or [])] or ["an employee"]
+
+
 def _fill_free(t: str, **vals) -> str:
     """Placeholder fill for the code-inserted events (IRR/neutral/branch/follow-up) — same
     normalization as the builder closures (unknown placeholders stripped, no quote artifacts)."""
@@ -532,7 +538,10 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
         req = tmpl.get("request")
         if req:
             k = gen.key or (gen.keys[0] if gen.keys else "")
-            txt = _fill_free(req, ID="REQ-0050", KEY=k, DECO=gen.irrelevant_deco,
+            ppl = _seed_people(gen.seed, gen.entities)
+            has_kc = "{KEY_CONTENT}" in req
+            txt = _fill_free(req, ID="REQ-0050", KEY=k, SUBMITTER=ppl[0],
+                             DECO=("" if has_kc else gen.irrelevant_deco),
                              KEY_CONTENT=gen.irrelevant_deco, AMOUNT="75")
             first_when = events[0].when or "W01-1T09:00"
             neutral = SpecEventWithExpect(
@@ -555,7 +564,10 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
             kb = gen.key or (gen.keys[0] if gen.keys else "")
             first_when = events[0].when or "W01-1T09:00"
             for bi, bd in enumerate(gen.branch_demos, 1):
-                txtb = _fill_free(reqb, ID=f"REQ-007{bi}", KEY=kb, DECO=bd.content,
+                pplb = _seed_people(gen.seed, gen.entities)
+                has_kcb = "{KEY_CONTENT}" in reqb
+                txtb = _fill_free(reqb, ID=f"REQ-007{bi}", KEY=kb, SUBMITTER=pplb[bi % len(pplb)],
+                                  DECO=("" if has_kcb else bd.content),
                                   KEY_CONTENT=bd.content, AMOUNT="85")
                 events.insert(1 + bi, SpecEventWithExpect(
                     id=f"E07{bi}", call_type="send_event", source="__external__", input=txtb,
@@ -908,8 +920,11 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
         deco = spec.irrelevant_deco or (
             f"with a routine, clearly neutral mention of {irr_key} (no qualifying terms)"
             if spec.analysis_field else (spec.decorations or [""])[0])
-        irr_input = _fill_free(req, ID=irr_id, KEY=irr_key, AMOUNT="500", DECO=deco,
-                               KEY_CONTENT=deco)
+        ppl_irr = _seed_people(spec.seed, spec.entities)
+        has_kc_irr = "{KEY_CONTENT}" in req
+        irr_input = _fill_free(req, ID=irr_id, KEY=irr_key, AMOUNT="500",
+                               SUBMITTER=ppl_irr[-1],
+                               DECO=("" if has_kc_irr else deco), KEY_CONTENT=deco)
         if spec.analysis_field:
             ok_act = (f"{irr_id} is analyzed against the seeded {spec.analysis_field} rules — its "
                       f"text matches no '{spec.analysis_label or 'counting'}' term, so it is "
