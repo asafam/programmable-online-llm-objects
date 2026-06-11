@@ -394,7 +394,8 @@ def _first_key(seed_str: str):
 
 
 def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
-                 entities=None, keys=None, contacts=None, cap_scope="shared", **kw) -> list:
+                 entities=None, keys=None, contacts=None, cap_scope="shared",
+                 person_caps=None, qty_noun="", **kw) -> list:
     """Construct the phrase closures from the LLM's phrasing templates + decorations, then call
     the family builder. Shared by the base scenario AND the modification scenario.
     `entities` (counter) / `keys` (rate_limit) are the LLM-named domain values — the builders use
@@ -465,16 +466,68 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         approve_phrase = lambda qid, mgr: fill(app, ID=qid, APPROVER=mgr)
         return build_cap_scenario(seed, threshold, submit_phrase, approve_phrase, reps,
                                   outcomes=tmpl, unit=unit or "approval",
-                                  per_person=(cap_scope == "per_person"), **kw)
+                                  per_person=(cap_scope == "per_person"),
+                                  person_caps=kw.pop("person_caps", None) or person_caps,
+                                  qty_noun=qty_noun, **kw)
     return []
 
 
 def _build_scenario(gen: GeneratedScenarioSpec) -> list:
-    """CODE builds the base request sequence + derives expects from the LLM's seed + phrasing."""
-    return _run_builder(getattr(gen.constraint_type, "value", gen.constraint_type),
-                        gen.seed, gen.threshold, gen.phrasings, gen.decorations, gen.key, gen.unit,
-                        entities=gen.entities, keys=gen.keys, contacts=gen.key_contacts,
-                        cap_scope=gen.cap_scope)
+    """CODE builds the base request sequence + derives expects from the LLM's seed + phrasing.
+    For ANALYSIS workflows, a NEUTRAL event is woven in mid-stream — its content matches no rule
+    term, the analysis classifies it 'neutral', and it does NOT count (the filter is visible in
+    the base scenario, so not everything carries the counting label)."""
+    events = _run_builder(getattr(gen.constraint_type, "value", gen.constraint_type),
+                          gen.seed, gen.threshold, gen.phrasings, gen.decorations, gen.key, gen.unit,
+                          entities=gen.entities, keys=gen.keys, contacts=gen.key_contacts,
+                          cap_scope=gen.cap_scope, person_caps=gen.person_caps, qty_noun=gen.qty_noun)
+    if events and gen.analysis_field and gen.irrelevant_deco:
+        tmpl = {p.role: p.template for p in gen.phrasings}
+        req = tmpl.get("request")
+        if req:
+            k = gen.key or (gen.keys[0] if gen.keys else "")
+            txt = (req.replace("{ID}", "REQ-0050").replace("{KEY}", k)
+                      .replace("{DECO}", gen.irrelevant_deco).replace("{AMOUNT}", "75"))
+            txt = _re.sub(r"\{[A-Z_]+\}", "", txt).strip()
+            first_when = events[0].when or "W01-1T09:00"
+            neutral = SpecEventWithExpect(
+                id="E050", call_type="send_event", source="__external__", input=txt,
+                when=first_when[:-2] + "31", role="base",
+                expect=EventExpect(
+                    action=f"REQ-0050 is analyzed against the seeded {gen.analysis_field} rules — "
+                           f"its text matches no '{gen.analysis_label or 'counting'}' term, so it "
+                           f"is classified 'neutral' and does NOT count; normal handling proceeds.",
+                    reason=f"the analysis is rules-based on the text; without a "
+                           f"'{gen.analysis_label or 'counting'}' term this occurrence never enters "
+                           f"the count — the rule only accumulates matching items."))
+            events.insert(1, neutral)
+    # FOLLOW-UP interaction (role="followup" phrasing): when the steps say the notified party
+    # acts back (the assigned owner updates status from Slack), that interaction is a real event —
+    # placed right after the first FIRED outcome, recorded against the open item (no new item)
+    tmpl2 = {p.role: p.template for p in gen.phrasings}
+    fu = tmpl2.get("followup")
+    if events and fu:
+        fired_idx = next((i for i, e in enumerate(events)
+                          if e.expect and ("quorum of" in (e.expect.reason or "")
+                                           and "is reached" in (e.expect.reason or ""))), None)
+        if fired_idx is not None:
+            k = gen.key or (gen.keys[0] if gen.keys else "")
+            contact = (gen.key_contacts or {}).get(k) or "the assigned owner"
+            txt = (fu.replace("{ID}", "REQ-0060").replace("{KEY}", k).replace("{CONTACT}", contact))
+            txt = _re.sub(r"\{[A-Z_]+\}", "", txt).strip()
+            when = events[fired_idx].when or "W01-1T12:00"
+            hh = int(when.split("T")[1][:2]) + 1
+            fup = SpecEventWithExpect(
+                id="E060", call_type="send_event", source="__external__", input=txt,
+                when=f"{when.split('T')[0]}T{hh:02d}:00", role="base",
+                expect=EventExpect(
+                    action=f"the status update from {contact} is recorded against the open "
+                           f"{gen.unit or 'item'} for {k}; NO new {gen.unit or 'item'} is created.",
+                    reason=f"this is the notified owner acting on the already-created item — the "
+                           f"workflow records the update against it; it is not a new request and "
+                           f"does not enter any count."))
+            events.insert(fired_idx + 1, fup)
+    return events
 
 
 def _base_cap_total(base_events, person: str | None = None) -> int:
@@ -632,7 +685,8 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
         kw["id_offset"] = offset
         return _run_builder(ct, spec.seed, thr, spec.phrasings, spec.decorations,
                             key_ or spec.key, spec.unit, entities=spec.entities, keys=spec.keys,
-                            contacts=spec.key_contacts, cap_scope=spec.cap_scope, **kw)
+                            contacts=spec.key_contacts, cap_scope=spec.cap_scope,
+                            person_caps=spec.person_caps, qty_noun=spec.qty_noun, **kw)
 
     noun = {"counter": "member", "cap": "rep"}.get(ct, "key")
     rule_noun = {"trigger": "quorum", "dedup": "deduplication"}.get(ct, "limit")
@@ -848,6 +902,8 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     spec.analysis_terms = gen.analysis_terms
     spec.irrelevant_deco = gen.irrelevant_deco
     spec.cap_scope = gen.cap_scope
+    spec.person_caps = gen.person_caps
+    spec.qty_noun = gen.qty_noun
     spec.state_constraint = StateConstraint(
         type=gen.constraint_type, threshold=gen.threshold, description=gen.description,
     )

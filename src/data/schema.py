@@ -201,6 +201,9 @@ class GeneratedScenarioSpec(BaseModel):
     irrelevant_deco: str = ""  # content for the irrelevant event — must contain NO analysis term
                                # (the analysis filters it out, e.g. a clearly positive mention)
     cap_scope: str = "shared"  # cap only: "shared" pool vs "per_person" budget
+    person_caps: dict[str, int] = Field(default_factory=dict)  # per_person caps that DIFFER per
+                               # person (each employee's own seeded balance): {"Ava Martinez": 18}
+    qty_noun: str = ""         # non-monetary cap quantity noun ("vacation days") for reasons
 
 
 class StateProbeScenario(BaseModel):
@@ -804,6 +807,8 @@ class WorkflowSpec(BaseModel):
     analysis_terms: list[str] = Field(default_factory=list)   # rules-based terms (carried)
     irrelevant_deco: str = ""                                  # term-free irrelevant content (carried)
     cap_scope: str = "shared"                                 # cap scope (carried)
+    person_caps: dict[str, int] = Field(default_factory=dict)  # per-person caps (carried)
+    qty_noun: str = ""                                         # quantity noun (carried)
     steps: list[SpecStep] = Field(default_factory=list)      # external-stimulus steps with observable expects
     base_events: list[SpecEventWithExpect] = Field(default_factory=list)  # state-infused base scenario
     modifications: list[SpecModification] = Field(default_factory=list)

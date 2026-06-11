@@ -176,7 +176,9 @@ def deterministic_issues(s: Sample) -> list[str]:
                      for t in (r.get("value_when_text_contains") or [])]
             if terms:
                 untermed = [e.id for e in s.events if e.role in ("base", "post_mod")
-                            and not any(t in e.input.lower() for t in terms)]
+                            and not any(t in e.input.lower() for t in terms)
+                            and "neutral" not in ((e.expect.action if e.expect else "") or "").lower()
+                            and "recorded against the open" not in ((e.expect.action if e.expect else "") or "")]
                 if untermed:
                     issues.append(f"analysis events whose text matches NO rule term: {untermed[:4]}")
                 bad_irr = [e.id for e in s.events if e.role == "irrelevant"

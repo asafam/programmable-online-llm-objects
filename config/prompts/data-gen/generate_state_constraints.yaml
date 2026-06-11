@@ -117,6 +117,11 @@ user_prompt: |
         is the quote-approval-policy object's job; the "submitted" EXPECT VERIFIES the email went to the
         right manager). {SUBMITTER}=rep, {MANAGER}=that rep's manager, {ENTITY}=the manager who decides
         — all filled by code from the seed's sales_reps.)
+     role="followup" (OPTIONAL): when a step says the notified party acts BACK (the assigned
+     owner updates status from Slack), provide the phrasing for that inbound interaction —
+     "{CONTACT} replies in {KEY}'s support channel updating ticket status to in-progress" — and
+     code inserts it as a real event right after the first fired outcome, recorded against the
+     open item.
      (No special "irrelevant" phrasing is needed: code derives the scope-proof event from the
      normal request phrasing — a request the workflow handles normally whose outcome is IDENTICAL
      before and after the modification. `irrelevant_key` below names the entity it uses.)
@@ -230,12 +235,16 @@ user_prompt: |
   13. `cap_scope` — cap ONLY: "shared" (one pool for everyone — a team budget) or "per_person"
       (each person has their OWN running budget — leave days, expense allowances). Pick what the
       workflow's rule actually means; the simulation and the reasons follow it.
+      With per_person, when each person's limit DIFFERS (their own seeded balance), provide
+      `person_caps` — {"Ava Martinez": 18, "Ethan Brooks": 12} — matching the seed EXACTLY; the
+      reasons then cite "their configured balance of 18 vacation days". Also provide `qty_noun`
+      for non-monetary caps ("vacation days") — reasons must never say "units".
 
-  14. `key_contacts` — REQUIRED whenever the gated action notifies someone about a key: a map from
-      each tracked key to the CONCRETE recipient (an email address from the seed), e.g.
-      {"Northwind": "renewals@northwind.example"}. Outcome phrasings then use {CONTACT} so every
-      expect names WHICH address the email/notification went to: "A reminder email IS sent to
-      {CONTACT} for {KEY}". The recipients must exist in the seed.
+  14. `key_contacts` — REQUIRED whenever the gated action notifies someone/somewhere about a key:
+      a map from each tracked key to the CONCRETE recipient — an email address OR a Slack channel
+      OR a named owner, from the seed: {"Northwind": "renewals@northwind.example"} or
+      {"vpn-access": "#netops-support (Priya Nair)"}. Outcome phrasings then use {CONTACT} so
+      every expect names WHERE the notification went. The recipients must exist in the seed.
 
   12. SIGNAL → ACTION MAPPING: whenever the workflow INTERPRETS a signal to decide what to do —
       an emoji reaction, a label, a keyword, a form category — the seed MUST define that mapping
