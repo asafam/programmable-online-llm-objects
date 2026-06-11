@@ -432,8 +432,8 @@ def _prefix_classification(events, field: str, label: str) -> None:
             continue
         r = e.expect.reason
         blob = f"{e.expect.action} {r}"
-        if ("quorum" in r or "limit" in r or "window" in r) and "classif" not in blob.lower() \
-                and "neutral" not in blob.lower():
+        if ("quorum" in r or "limit" in r or "window" in r) \
+                and f"'{lab.lower()}'" not in blob.lower() and "neutral" not in blob.lower():
             e.expect.action = (f"The {field} rules classify this content as '{lab}'. "
                                + e.expect.action)
 
@@ -988,6 +988,23 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
                   "trigger": f"{irr_id} is recorded for {irr_key} (occurrence #1 — far below the quorum); the normal per-event handling proceeds.",
                   "dedup": f"the report {irr_id} IS processed for {irr_key} (no recent duplicate).",
                   "rate_limit": f"the {spec.unit or 'request'} for {irr_key} ({irr_id}) is well within the limit and IS performed."}[ct]
+        if spec.branch_demos:
+            bd0 = spec.branch_demos[0]
+            ppl_b = _seed_people(spec.seed, spec.entities)
+            has_kc_b = "{KEY_CONTENT}" in req
+            irr2 = _fill_free(req, ID="REQ-9002", KEY=irr_key, AMOUNT="60",
+                              SUBMITTER=ppl_b[0] if ppl_b else "an employee",
+                              DECO=("" if has_kc_b else bd0.content), KEY_CONTENT=bd0.content)
+            events.append(SpecEventWithExpect(
+                id="IRR002", call_type="send_event", source="__external__", input=irr2,
+                when=_abs_to_day(last_abs + 2) + "T10:00", role="irrelevant",
+                after_mod_ids=["M001"],
+                expect=EventExpect(
+                    action=bd0.action + " — exactly as before the modification.",
+                    reason="regression probe: this non-counting path is outside the modification's "
+                           "scope, so its behavior must be IDENTICAL to the base scenario; any "
+                           "deviation means the modification broke an unrelated part of the "
+                           "system. [scoped by key: non-counting branch]")))
         events.append(SpecEventWithExpect(
             id="IRR001", call_type="send_event", source="__external__", input=irr_input,
             when=_abs_to_day(last_abs + 2) + "T09:00", role="irrelevant", after_mod_ids=["M001"],
