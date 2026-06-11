@@ -132,6 +132,13 @@ class AnthropicChatLLM(AbstractLLM):
         }
 
         response = self.client.messages.create(**kwargs)
+        try:
+            from src.data.costs import tracker
+            u = getattr(response, "usage", None)
+            if u:
+                tracker.record(self.model, u.input_tokens, u.output_tokens)
+        except Exception:
+            pass
 
         # Extract text content from response
         content = ""
@@ -154,6 +161,13 @@ class AnthropicChatLLM(AbstractLLM):
         if system_content:
             kwargs["system"] = system_content
         response = self.client.messages.create(**kwargs)
+        try:
+            from src.data.costs import tracker
+            u = getattr(response, "usage", None)
+            if u:
+                tracker.record(self.model, u.input_tokens, u.output_tokens)
+        except Exception:
+            pass
         content = ""
         for block in response.content:
             if hasattr(block, "text"):

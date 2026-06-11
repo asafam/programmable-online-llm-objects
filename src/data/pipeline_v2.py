@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.data import generate_spec, generate_state_constraints, generate_mods, bind_spec
+from src.data.costs import tracker
 from src.data.utils import infer_provider
 
 
@@ -201,14 +202,17 @@ def run(args: argparse.Namespace) -> Path:
 
     # ── Phase 1a: INFUSE state FIRST (pre-grounding, from the raw template) ───
     print("\n" + "=" * 60 + "\nPHASE 1a: INFUSE STATE (pre-grounding)\n" + "=" * 60)
+    tracker.stage = "infuse"
     generate_state_constraints.run(_common(args, input=args.input, output=infused_path))
 
     # ── Phase 1b: GROUND (steps + the infused base scenario together) ─────────
     print("\n" + "=" * 60 + "\nPHASE 1b: GROUND (steps + base scenario)\n" + "=" * 60)
+    tracker.stage = "ground"
     generate_spec.run(_common(args, input=infused_path, output=spec_path))
 
     # ── Phase 1c: modifications ──────────────────────────────────────────────
     print("\n" + "=" * 60 + "\nPHASE 1c: MODIFICATIONS\n" + "=" * 60)
+    tracker.stage = "mods"
     generate_mods.run(_common(
         args, input=spec_path, output=mods_path,
         mod_type=args.mod_type, mods_per_scenario=args.mods_per_scenario,
@@ -221,6 +225,7 @@ def run(args: argparse.Namespace) -> Path:
 
     # ── Phase 2: derive graph + bind → unified ───────────────────────────────
     print("\n" + "=" * 60 + "\nPHASE 2: DERIVE GRAPH + BIND → UNIFIED\n" + "=" * 60)
+    tracker.stage = "bind"
     # run_tag versions the sample id ({template}__{run_tag}) so each run uploads as new,
     # re-annotatable samples (the Firestore upload freezes existing ids).
     bind_spec.run(_common(args, input=mods_path, output=unified_path, run_tag=td.name))
@@ -232,11 +237,14 @@ def run(args: argparse.Namespace) -> Path:
     # always; the LLM-judge for fidelity when --verify-judge). Refuse to upload a flagged batch.
     print("\n--- Pre-release verification ---")
     from src.data.verify_samples import verify
+    tracker.stage = "verify-judge"
     flagged = verify(unified_path, judge=getattr(args, "verify_judge", False),
                      provider=args.provider, model=args.model)
 
     print(f"\nDone. Unified (eval-compatible) output: {unified_path}")
     print(f"Artifacts: {infused_path.name}, {spec_path.name}, {mods_path.name}, {unified_path.name}")
+    tracker.print_summary()
+    tracker.write(td / "run-costs.json")
 
     if args.upload:
         if flagged:

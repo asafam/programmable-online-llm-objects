@@ -88,6 +88,13 @@ class OpenAIChatLLM(AbstractLLM):
             kwargs["seed"] = self.seed
 
         response = self.client.chat.completions.create(**kwargs)
+        try:
+            from src.data.costs import tracker
+            u = getattr(response, "usage", None)
+            if u:
+                tracker.record(self.model, u.prompt_tokens, u.completion_tokens)
+        except Exception:
+            pass
         content = response.choices[0].message.content or "{}"
 
         parsed = json.loads(content)
@@ -103,4 +110,11 @@ class OpenAIChatLLM(AbstractLLM):
         if self.seed is not None:
             kwargs["seed"] = self.seed
         response = self.client.chat.completions.create(**kwargs)
+        try:
+            from src.data.costs import tracker
+            u = getattr(response, "usage", None)
+            if u:
+                tracker.record(self.model, u.prompt_tokens, u.completion_tokens)
+        except Exception:
+            pass
         return response.choices[0].message.content or ""
