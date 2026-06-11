@@ -279,118 +279,106 @@ of this program; they are not designed before it.
 
 ---
 
-## Object map — one day that touches the entire set
+## Object map — split by the stage each event passes through
 
-A single composite business day routed through **every** state-owning object in
-*The histories the store keeps*, plus the policy/process objects that read and
-mutate them. The spine is one **completed** order (which alone touches ~21
-objects); a return and a midnight close reach the remainder; the Black-Friday
-rewrite is the dashed runtime broadcast.
+Same full object set as before, but rendered as the separate cascades each event
+triggers, so no single diagram sprawls. Layout is left-to-right (`LR`) so every
+fan-out stacks **vertically** instead of spreading wide. Blue = histories
+(state); the rest are policy/process; dashed = the runtime rewrite.
+
+### Stages at a glance
 
 ```mermaid
-flowchart TB
-  %% ── External stimuli ───────────────────────────────
-  subgraph EVENTS["External events"]
-    EV1["Order placed: last Black Tee,<br/>40 percent promo, part wallet part card"]
-    EV2["Return arrives: Trail Boot"]
-    EV3["Midnight tick"]
-    MOD["User: Black Friday rewrite"]
-  end
-
-  %% ── Decision / policy / process objects ────────────
-  subgraph LOGIC["Decision & policy objects"]
-    ORD["Order / Checkout"]
-    RISK["Risk Evaluator"]
-    RESTOCK["Restock Policy"]
-    PAYMT["Payments"]
-    FULFIL["Fulfillment"]
-    RET["Returns Intake"]
-    REPORT["Reporting / EOD Close"]
-  end
-
-  %% ── State-owning objects = the histories ───────────
-  subgraph STATE["State-owning objects — the histories"]
-    CAT["Catalog (product facts)"]
-    INV["Inventory (per-product stock)"]
-    SELL["Sell-through (7-day window)"]
-    PRICE["Pricing"]
-    PROMO["Promotions"]
-    BUDGET["Promo Budget (weekly cap)"]
-    LOY["Loyalty (lifetime spend, tier)"]
-    RR["Return Record (per customer)"]
-    WAL["Wallet (store credit)"]
-    STAND["Payment Standing (flags)"]
-    TREAS["Treasury (cash ledger)"]
-    CARR["Carriers (daily capacity)"]
-    PROC["Procurement (open POs)"]
-    TAX["Tax (accruals)"]
-    SUPPORT["Support (open cases)"]
-  end
-
-  %% ── Downstream / partners ──────────────────────────
-  subgraph DOWN["Downstream"]
-    NOTIF["Notifications"]
-    SUP["Suppliers"]
-  end
-
-  %% ── Order cascade (the spine) ──────────────────────
-  EV1 --> ORD
-  ORD -->|"look up item facts"| CAT
-  ORD -->|"reserve unit"| INV
-  INV -->|"on-hand at reorder point"| RESTOCK
-  ORD -->|"get current price"| PRICE
-  ORD -->|"apply active discount"| PROMO
-  ORD -->|"reserve discount vs cap"| BUDGET
-  ORD -->|"assess risk"| RISK
-  RISK -->|"read return rate"| RR
-  RISK -->|"read standing"| STAND
-  ORD -->|"redeem credit"| WAL
-  ORD -->|"charge remainder"| PAYMT
-  PAYMT -->|"verify card standing"| STAND
-  ORD -->|"record inflow"| TREAS
-  ORD -->|"recompute tier on complete"| LOY
-  ORD -->|"accrue sales tax"| TAX
-  ORD -->|"ship completed order"| FULFIL
-  FULFIL -->|"reserve express slot"| CARR
-  FULFIL -->|"no slot: open case"| SUPPORT
-  ORD -->|"confirm, shipped, tier change"| NOTIF
-
-  %% ── Restock cascade ────────────────────────────────
-  RESTOCK -->|"read 7-day sales"| SELL
-  RESTOCK -->|"reorder: create PO"| PROC
-  PROC -->|"request supplier payment"| TREAS
-  PROC -->|"place order"| SUP
-
-  %% ── Return cascade ─────────────────────────────────
-  EV2 --> RET
-  RET -->|"refund to card"| PAYMT
-  RET -->|"cash out"| TREAS
-  RET -->|"restore unit"| INV
-  RET -->|"update return record"| RR
-  RET -->|"reverse accrual"| TAX
-  RET -->|"refund notice"| NOTIF
-
-  %% ── End-of-day close ───────────────────────────────
-  EV3 --> REPORT
-  REPORT -->|"discounts vs budget"| BUDGET
-  REPORT -->|"reconcile cash"| TREAS
-  REPORT -->|"list stockouts"| INV
-  REPORT -->|"reset daily capacity"| CARR
-  REPORT -->|"roll 7-day windows"| SELL
-
-  %% ── Runtime rewrite (programmable-online) ──────────
-  MOD -.->|"triple weekly cap"| BUDGET
-  MOD -.->|"clearance restockable"| RESTOCK
-  MOD -.->|"express for all tiers"| FULFIL
-  MOD -.->|"suspend holds under 200"| RISK
-
-  classDef ev fill:#fff5d6,stroke:#caa23a,color:#333;
-  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
-  class EV1,EV2,EV3,MOD ev;
-  class CAT,INV,SELL,PRICE,PROMO,BUDGET,LOY,RR,WAL,STAND,TREAS,CARR,PROC,TAX,SUPPORT st;
+flowchart LR
+  EV1["Order placed"] --> S1["1 - Order / checkout"]
+  S1 -. "last unit at reorder point" .-> S2["2 - Restock & procurement"]
+  EV2["Return arrives"] --> S3["3 - Return"]
+  EV3["Midnight"] --> S4["4 - End-of-day close"]
+  MOD["Black Friday rewrite"] -. broadcast .-> S5["5 - Runtime rewrite"]
 ```
 
-**Reading it:** blue nodes are the histories (one per bullet above), green nodes
-are the policy/process objects that read and mutate them; solid edges are the
-normal-flow NL messages, the dashed edges are the single runtime `modify`
-broadcast rewriting four objects' rules while their state runs on.
+### 1 - Order / checkout cascade
+
+```mermaid
+flowchart LR
+  EV1["Order placed"] --> ORD["Order / Checkout"]
+  ORD -->|"look up"| CAT["Catalog"]
+  ORD -->|"reserve"| INV["Inventory"]
+  ORD -->|"price"| PRICE["Pricing"]
+  ORD -->|"discount"| PROMO["Promotions"]
+  ORD -->|"reserve vs cap"| BUDGET["Promo Budget"]
+  ORD -->|"assess"| RISK["Risk Evaluator"]
+  RISK -->|"returns"| RR["Return Record"]
+  RISK -->|"standing"| STAND["Payment Standing"]
+  ORD -->|"redeem"| WAL["Wallet"]
+  ORD -->|"charge"| PAYMT["Payments"]
+  PAYMT -->|"verify"| STAND
+  ORD -->|"inflow"| TREAS["Treasury"]
+  ORD -->|"tier"| LOY["Loyalty"]
+  ORD -->|"accrue"| TAX["Tax"]
+  ORD -->|"ship"| FULFIL["Fulfillment"]
+  FULFIL -->|"slot"| CARR["Carriers"]
+  FULFIL -->|"no slot: case"| SUPPORT["Support"]
+  ORD -->|"notify"| NOTIF["Notifications"]
+  INV -. "at reorder point" .-> RESTOCK["Restock - stage 2"]
+  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
+  class CAT,INV,PRICE,PROMO,BUDGET,RR,STAND,WAL,TREAS,LOY,TAX,CARR,SUPPORT st;
+```
+
+### 2 - Restock & procurement
+
+```mermaid
+flowchart LR
+  RESTOCK["Restock Policy"] -->|"read 7-day sales"| SELL["Sell-through"]
+  RESTOCK -->|"create PO"| PROC["Procurement"]
+  PROC -->|"request payment"| TREAS["Treasury"]
+  PROC -->|"place order"| SUP["Suppliers"]
+  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
+  class SELL,PROC,TREAS st;
+```
+
+### 3 - Return cascade
+
+```mermaid
+flowchart LR
+  EV2["Return arrives"] --> RET["Returns Intake"]
+  RET -->|"refund"| PAYMT["Payments"]
+  RET -->|"cash out"| TREAS["Treasury"]
+  RET -->|"restore unit"| INV["Inventory"]
+  RET -->|"update"| RR["Return Record"]
+  RET -->|"reverse"| TAX["Tax"]
+  RET -->|"notice"| NOTIF["Notifications"]
+  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
+  class TREAS,INV,RR,TAX st;
+```
+
+### 4 - End-of-day close
+
+```mermaid
+flowchart LR
+  EV3["Midnight"] --> REPORT["Reporting / Close"]
+  REPORT -->|"discounts vs budget"| BUDGET["Promo Budget"]
+  REPORT -->|"reconcile"| TREAS["Treasury"]
+  REPORT -->|"stockouts"| INV["Inventory"]
+  REPORT -->|"reset capacity"| CARR["Carriers"]
+  REPORT -->|"roll windows"| SELL["Sell-through"]
+  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
+  class BUDGET,TREAS,INV,CARR,SELL st;
+```
+
+### 5 - Runtime rewrite (programmable-online)
+
+```mermaid
+flowchart LR
+  MOD["Black Friday rewrite"] -.->|"triple cap"| BUDGET["Promo Budget"]
+  MOD -.->|"clearance restockable"| RESTOCK["Restock Policy"]
+  MOD -.->|"express for all"| FULFIL["Fulfillment"]
+  MOD -.->|"suspend holds under 200"| RISK["Risk Evaluator"]
+  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
+  class BUDGET st;
+```
+
+Across the five stages the same ~24 objects recur; every history (blue) is
+touched at least once, and `Treasury`, `Inventory`, and `Sell-through` recur
+across stages — which is exactly why they are single shared owners, not per-event
+copies.
