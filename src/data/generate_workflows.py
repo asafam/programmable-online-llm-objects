@@ -120,6 +120,12 @@ def _ground_template(llm, template: dict, prompt_cfg: dict, seed: str = "",
             "specialist/owner per the seed is assigned (or notified by name) and owns the follow-up. "
             "A notification into a channel with nobody behind it is an unfinished procedure."
         )
+    prompt += (
+        "\n\nDROP AUXILIARY STEPS: keep only the steps the automation itself performs in this "
+        "workflow's run — REMOVE meta/auxiliary template steps that no scenario event exercises "
+        "(ad-hoc query chatbots, generic error-handling/administrator alerts, marketing flourishes). "
+        "They are not part of the procedure under test."
+    )
     if constraint:
         prompt += (
             f"\n\nThe workflow operates under this STANDING RULE: {constraint}\n"

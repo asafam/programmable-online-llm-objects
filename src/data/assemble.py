@@ -53,8 +53,15 @@ def _rebuild_one(spec, tc: dict) -> dict:
         if t["tool_name"].endswith("_data"):
             t["response_template"] = spec.seed
     entry = next(e["recipient"] for e in tc["events"] if e["role"] == "base")
-    tc["events"] = ([dict(e.model_dump(), recipient=entry) for e in spec.base_events]
-                    + [dict(e.model_dump(), recipient=entry) for e in post])
+    # mirror bind: base events are renamed SC### in (when, id) order — builder/insert ids
+    # (E001/E050/E07x) must never reach the released sample
+    base_sorted = sorted(spec.base_events, key=lambda e: (e.when or "", e.id))
+    base = []
+    for i, e in enumerate(base_sorted, 1):
+        d = dict(e.model_dump(), recipient=entry)
+        d["id"] = f"SC{i:03d}"
+        base.append(d)
+    tc["events"] = base + [dict(e.model_dump(), recipient=entry) for e in post]
     if tc.get("modifications"):
         tc["modifications"] = [{**tc["modifications"][0], "intent": intent, "when": mod_when}]
     return tc

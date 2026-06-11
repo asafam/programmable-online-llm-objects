@@ -415,8 +415,11 @@ def _prefix_classification(events, field: str, label: str) -> None:
         if not e.expect or not e.expect.reason:
             continue
         r = e.expect.reason
-        if ("quorum" in r or "limit" in r or "window" in r) and "classif" not in r and "neutral" not in r:
-            e.expect.reason = f"the seeded {field} rules classify this content as '{lab}'; " + r
+        blob = f"{e.expect.action} {r}"
+        if ("quorum" in r or "limit" in r or "window" in r) and "classif" not in blob.lower() \
+                and "neutral" not in blob.lower():
+            e.expect.action = (f"The {field} rules classify this content as '{lab}'. "
+                               + e.expect.action)
 
 
 def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
@@ -474,21 +477,24 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
     if ct == "rate_limit":
         req = tmpl.get("request") or "A request {ID} arrives for {KEY} {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk), KEY_CONTENT=deco_for(rid, kk))
+        has_kc = "{KEY_CONTENT}" in req   # then {DECO} is plain venue flavor, NOT the same text
+        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=(deco_for(rid, None) if has_kc else deco_for(rid, kk)), KEY_CONTENT=deco_for(rid, kk))
         return build_rate_limit_scenario(seed, threshold, k, phrase,
                                          outcomes=tmpl, unit=unit or "request", keys=keys, contacts=contacts, **kw)
     if ct == "trigger":
         from src.data.scenario_builder import build_trigger_scenario
         req = tmpl.get("request") or "An event {ID} for {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk), KEY_CONTENT=deco_for(rid, kk))
+        has_kc = "{KEY_CONTENT}" in req
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=(deco_for(rid, None) if has_kc else deco_for(rid, kk)), KEY_CONTENT=deco_for(rid, kk))
         return build_trigger_scenario(seed, threshold, k, phrase,
                                       outcomes=tmpl, unit=unit or "escalation", keys=keys, contacts=contacts, **kw)
     if ct == "dedup":
         from src.data.scenario_builder import build_dedup_scenario
         req = tmpl.get("request") or "A report {ID} about {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk), KEY_CONTENT=deco_for(rid, kk))
+        has_kc = "{KEY_CONTENT}" in req
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=(deco_for(rid, None) if has_kc else deco_for(rid, kk)), KEY_CONTENT=deco_for(rid, kk))
         return build_dedup_scenario(seed, threshold, k, phrase,
                                     outcomes=tmpl, unit=unit or "report", keys=keys, contacts=contacts, **kw)
     if ct == "cap":
@@ -581,7 +587,11 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
                 when=f"{when.split('T')[0]}T{hh:02d}:00", role="base",
                 expect=EventExpect(
                     action=f"the status update from {contact} is recorded against the open "
-                           f"{gen.unit or 'item'} for {k}; NO new {gen.unit or 'item'} is created.",
+                           f"{gen.unit or 'item'} for {k}; NO new {gen.unit or 'item'} is created."
+                           + (" The resolution is appended to the knowledge base for future "
+                              "reference, per the workflow." if "knowledge" in
+                              (gen.seed + " ".join(q.template for q in gen.phrasings)).lower()
+                              else ""),
                     reason=f"this is the notified owner acting on the already-created item — the "
                            f"workflow records the update against it; it is not a new request and "
                            f"does not enter any count."))
@@ -1001,6 +1011,9 @@ def _validate_gen(r: GeneratedScenarioSpec) -> bool:
         for k in (r.keys or []):
             if not r.key_contents.get(k):
                 p.append(f"key_contents is missing content fragments for key {k!r}")
+    if r.analysis_field and not r.branch_demos:
+        p.append("analysis workflows must DEMONSTRATE at least one non-counting path via "
+                 "branch_demos (an instant fix, a positive mention) — provide >=1")
     if (r.analysis_terms or r.analysis_values) and r.branch_demos:
         all_terms = {v.lower() for ts in ([r.analysis_terms] + list((r.analysis_values or {}).values()))
                      for v in ts}

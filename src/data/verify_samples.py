@@ -69,6 +69,12 @@ def deterministic_issues(s: Sample) -> list[str]:
         if not post:
             issues.append("modification not exercised (no post_mod events)")
 
+    # auxiliary meta-steps that no event exercises ("steps 7 and 8 are irrelevant")
+    meta = [i + 1 for i, st in enumerate(s.steps)
+            if re.search(r"error handling|chatbot to search|natural language questions", st or "", re.I)]
+    if meta:
+        issues.append(f"auxiliary meta-steps present (error-handling/ad-hoc search): steps {meta}")
+
     # near-duplicate steps (grounding echo: "steps 5 & 6 are the same")
     norm = [re.sub(r"[^a-z0-9 ]", "", (st or "").lower()).strip() for st in s.steps]
     for i in range(len(norm) - 1):
