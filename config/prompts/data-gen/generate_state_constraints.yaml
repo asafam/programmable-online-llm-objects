@@ -210,7 +210,9 @@ user_prompt: |
      explicit expected outcome with the channel/recipient/tool named ("the mention is classified
      positive and posted to #brand-wins; it does NOT enter the negative count" / "the KB lookup
      returns the KB-077 instant fix, which is sent as a DM; NO ticket is created")}. A stated
-     path with no event is an untested promise.
+     path with no event is an untested promise. Branch ACTIONS name only systems/entities that
+     exist in the seed or the workflow (the Airtable base the seed defines — never a "Zapier
+     Table" the workflow doesn't have), and their channels/recipients are concrete.
      The submitting ACTOR is identified: any request a person initiates (a leave request, an
      expense, a support request) must name that person via {SUBMITTER} (filled by code from the
      seed's people) — an anonymous "an employee" cannot be routed, attributed, or capped. When

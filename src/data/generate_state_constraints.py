@@ -394,7 +394,16 @@ def _first_key(seed_str: str):
 
 
 def _seed_people(seed: str, entities=None) -> list:
-    """Named people for {SUBMITTER} in code-inserted events (same pool the closures use)."""
+    """Named people for {SUBMITTER} in code-inserted events — person-marked lists only."""
+    import json as _json
+    try:
+        d = _json.loads(seed)
+        for v in (d.values() if isinstance(d, dict) else []):
+            if isinstance(v, list) and v and all(isinstance(x, dict) and x.get("name")
+                                                 and (x.get("email") or x.get("slack_id")) for x in v):
+                return [x["name"] for x in v]
+    except Exception:
+        pass
     return [r[0] for r in (_seed_reps(seed, entities) or [])] or \
            [r for r, _m in (_seed_sales_reps(seed) or [])] or ["an employee"]
 
@@ -407,6 +416,7 @@ def _fill_free(t: str, **vals) -> str:
         x = x.replace("{" + k + "}", str(v))
     x = _re.sub(r"\{[A-Z_]+\}", "", x)
     x = x.replace('""', "")
+    x = _re.sub(r"\s+([.,;:!?])", r"\1", x)      # stripped placeholders leave " ." artifacts
     return _re.sub(r"\s{2,}", " ", x).strip()
 
 
@@ -466,8 +476,24 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         m = _re.search(r"\d+", idstr or "")
         return f"{60 + (int(m.group()) if m else 0) * 35 % 440}"   # deterministic plausible value
 
-    _people = [r[0] for r in (_seed_reps(seed, entities) or [])] or \
-              [r for r, _m in (_seed_sales_reps(seed) or [])] or ["an employee"]
+    # PEOPLE only: lists whose members carry person markers (email/slack_id) — the generic
+    # roster scan once grabbed a topics list ("Password Reset submits /support"); key names
+    # are excluded outright
+    import json as _json
+    _people = []
+    try:
+        _sd = _json.loads(seed)
+        for v in (_sd.values() if isinstance(_sd, dict) else []):
+            if isinstance(v, list) and v and all(isinstance(x, dict) and x.get("name")
+                                                 and (x.get("email") or x.get("slack_id")) for x in v):
+                _people = [x["name"] for x in v]
+                break
+    except Exception:
+        pass
+    if not _people:
+        _people = [r[0] for r in (_seed_reps(seed, entities) or [])] or \
+                  [r for r, _m in (_seed_sales_reps(seed) or [])] or ["an employee"]
+    _people = [nm for nm in _people if nm not in (keys or [])] or ["an employee"]
 
     def submitter_for(idstr):
         m = _re.search(r"\d+", idstr or "")
@@ -591,7 +617,9 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
         if fired_idx is not None:
             k = gen.key or (gen.keys[0] if gen.keys else "")
             contact = (gen.key_contacts or {}).get(k) or "the assigned owner"
-            txt = _fill_free(fu, ID="REQ-0060", KEY=k, CONTACT=contact)
+            m_ref = _re.search(r"\b(?:REQ|Q|LD)[-\d]+\b", events[fired_idx].input or "")
+            fired_id = m_ref.group(0) if m_ref else "the open item"
+            txt = _fill_free(fu, ID=fired_id, KEY=k, CONTACT=contact)
             when = events[fired_idx].when or "W01-1T12:00"
             hh = int(when.split("T")[1][:2]) + 1
             fup = SpecEventWithExpect(
@@ -599,8 +627,9 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
                 when=f"{when.split('T')[0]}T{hh:02d}:00", role="base",
                 expect=EventExpect(
                     action=f"the status update from {contact} is recorded against the open "
-                           f"{gen.unit or 'item'} for {k}, and the submitting user is notified of "
-                           f"the change in Slack; NO new {gen.unit or 'item'} is created."
+                           f"{gen.unit or 'item'} created for {fired_id} ({k}), and the submitting "
+                           f"user is notified of the change in Slack; NO new "
+                           f"{gen.unit or 'item'} is created."
                            + (" The resolution is appended to the knowledge base for future "
                               "reference, per the workflow." if "knowledge" in
                               (gen.seed + " ".join(q.template for q in gen.phrasings)).lower()
@@ -923,6 +952,9 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
             if spec.analysis_field else (spec.decorations or [""])[0])
         ppl_irr = _seed_people(spec.seed, spec.entities)
         has_kc_irr = "{KEY_CONTENT}" in req
+        if spec.key_contents:
+            # the stated key MUST match the content: use the unaffected key's own fragment
+            deco = (spec.key_contents.get(irr_key) or [deco])[-1]
         irr_input = _fill_free(req, ID=irr_id, KEY=irr_key, AMOUNT="500",
                                SUBMITTER=ppl_irr[-1],
                                DECO=("" if has_kc_irr else deco), KEY_CONTENT=deco)
@@ -1011,6 +1043,21 @@ def _validate_gen(r: GeneratedScenarioSpec) -> bool:
                              f"embed one of: {', '.join(r.analysis_terms)}")
         if not r.irrelevant_deco.strip():
             p.append("irrelevant_deco is required (term-free content the analysis filters out)")
+        POSITIVE_NEWS = ("partnership", "award", "launch", "opening", "expansion", "milestone",
+                         "record growth", "celebrat", "praise", "wins")
+        if r.analysis_values and r.irrelevant_deco:
+            hits = [w for w in POSITIVE_NEWS if w in r.irrelevant_deco.lower()]
+            if hits:
+                p.append(f"irrelevant_deco reads as POSITIVE business news ({hits}) — a human "
+                         f"annotator will classify it positive, contradicting 'neutral'; use "
+                         f"mundane administrative content (a maintenance schedule, a directory "
+                         f"listing, a routine filing)")
+        for bd in (r.branch_demos or []):
+            if "neutral" in bd.action.lower():
+                hits = [w for w in POSITIVE_NEWS if w in bd.content.lower()]
+                if hits:
+                    p.append(f"branch demo claimed neutral but its content reads positive "
+                             f"({hits}): {bd.content!r} — use mundane administrative content")
         else:
             for t in r.analysis_terms:
                 if t.lower() in r.irrelevant_deco.lower():
