@@ -296,6 +296,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
         is_exempt = (exempt_key is not None and k == exempt_key) or rule_off
         if k in fired_at and d - fired_at[k] < D and not is_exempt:
             ago = d - fired_at[k]
+            ago_txt = "earlier today" if ago == 0 else ("1 day ago" if ago == 1 else f"{ago} days ago")
             # artifact-neutral wording: a sent email cannot be amended — post-fire occurrences are
             # LOGGED AGAINST the already-issued unit. An LLM 'consolidated' phrasing (allowed only
             # for MUTABLE artifacts like tickets/docs) overrides the action wording.
@@ -304,7 +305,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                     f"{_ev_ref(e)} is logged against the {unit} already issued for {k}; "
                     f"NO new {unit} fires.",
                     ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k) or "the configured recipient"),
-                reason=f"a {unit} for {k} was already issued {ago} day(s) ago; until its {DAYS} "
+                reason=f"a {unit} for {k} was already issued {ago_txt}; until its {DAYS} "
                        f"window clears, further occurrences are only logged against that record — "
                        f"no new {unit} is started.")
             out.append(e)

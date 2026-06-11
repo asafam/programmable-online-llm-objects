@@ -954,9 +954,23 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
             if spec.analysis_field else (spec.decorations or [""])[0])
         ppl_irr = _seed_people(spec.seed, spec.entities)
         has_kc_irr = "{KEY_CONTENT}" in req
+        # the (submitter, content) pair must not duplicate an existing event verbatim
         if spec.key_contents:
-            # the stated key MUST match the content: use the unaffected key's own fragment
-            deco = (spec.key_contents.get(irr_key) or [deco])[-1]
+            frs0 = spec.key_contents.get(irr_key) or []
+            used_blob0 = " ".join(e.input or "" for e in list(spec.base_events) + list(events))
+            cand = min(frs0, key=lambda fr: used_blob0.count(fr)) if frs0 else None
+            if cand:
+                paired = {e.input.split(" submits")[0] for e in list(spec.base_events) + list(events)
+                          if cand in (e.input or "") and " submits" in (e.input or "")}
+                free = [nm for nm in ppl_irr if nm not in paired]
+                if free:
+                    ppl_irr = free
+        if spec.key_contents:
+            # the stated key MUST match the content — and prefer the fragment LEAST used by the
+            # other events, so the IRR doesn't verbatim-duplicate an existing request
+            frs = spec.key_contents.get(irr_key) or [deco]
+            used_blob = " ".join(e.input or "" for e in list(spec.base_events) + list(events))
+            deco = min(frs, key=lambda fr: used_blob.count(fr))
         irr_input = _fill_free(req, ID=irr_id, KEY=irr_key, AMOUNT="500",
                                SUBMITTER=ppl_irr[-1],
                                DECO=("" if has_kc_irr else deco), KEY_CONTENT=deco)
