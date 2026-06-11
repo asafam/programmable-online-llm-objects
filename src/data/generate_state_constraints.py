@@ -393,9 +393,25 @@ def _first_key(seed_str: str):
     return None
 
 
+def _prefix_classification(events, field: str, label: str) -> None:
+    """Analysis workflows: every COUNTING event's expect states the classification explicitly
+    ("the expect field does not mention that this is a Negative sentiment"). Neutral/branch/
+    follow-up inserts narrate their own classification already."""
+    if not field:
+        return
+    lab = label or "matching"
+    for e in events:
+        if not e.expect or not e.expect.reason:
+            continue
+        r = e.expect.reason
+        if ("quorum" in r or "limit" in r or "window" in r) and "classif" not in r and "neutral" not in r:
+            e.expect.reason = f"the seeded {field} rules classify this content as '{lab}'; " + r
+
+
 def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
                  entities=None, keys=None, contacts=None, cap_scope="shared",
-                 person_caps=None, qty_noun="", key_contents=None, **kw) -> list:
+                 person_caps=None, qty_noun="", key_contents=None,
+                 analysis_field="", analysis_label="", **kw) -> list:
     """Construct the phrase closures from the LLM's phrasing templates + decorations, then call
     the family builder. Shared by the base scenario AND the modification scenario.
     `entities` (counter) / `keys` (rate_limit) are the LLM-named domain values — the builders use
@@ -416,7 +432,7 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         # key-implying content (topic classification): the event text carries content that the
         # system must CLASSIFY into the key — the pool is per-key, and {KEY} never appears
         if kk is not None and key_contents and key_contents.get(kk):
-            pool = key_contents[kk]
+            pool = [fr.strip().strip(chr(34)).strip() for fr in key_contents[kk]]
         elif not decos:
             return ""
         else:
@@ -491,6 +507,7 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
                           entities=gen.entities, keys=gen.keys, contacts=gen.key_contacts,
                           cap_scope=gen.cap_scope, person_caps=gen.person_caps, qty_noun=gen.qty_noun,
                         key_contents=gen.key_contents)
+    _prefix_classification(events, gen.analysis_field, gen.analysis_label)
     if events and gen.analysis_field and gen.irrelevant_deco:
         tmpl = {p.role: p.template for p in gen.phrasings}
         req = tmpl.get("request")
@@ -731,11 +748,13 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
                  if spec.cap_scope == "per_person" else None)
             kw["starting_total"] = _base_cap_total(spec.base_events, person=p)
         kw["id_offset"] = offset
-        return _run_builder(ct, spec.seed, thr, spec.phrasings, spec.decorations,
+        evs = _run_builder(ct, spec.seed, thr, spec.phrasings, spec.decorations,
                             key_ or spec.key, spec.unit, entities=spec.entities, keys=spec.keys,
                             contacts=spec.key_contacts, cap_scope=spec.cap_scope,
                             person_caps=spec.person_caps, qty_noun=spec.qty_noun,
                             key_contents=spec.key_contents, **kw)
+        _prefix_classification(evs, spec.analysis_field, spec.analysis_label)
+        return evs
 
     noun = {"counter": "member", "cap": "rep"}.get(ct, "key")
     rule_noun = {"trigger": "quorum", "dedup": "deduplication"}.get(ct, "limit")
@@ -845,9 +864,8 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
                     "extra notification; the notification is the observable change." if first else
                     " The extra notification is new behavior added by the modification.")
                 first = False
-        intent = (f"Starting now, ADD a notification step: whenever the {rule_noun} produces its "
-                  f"gated outcome ({old_thr}), ALSO send a notification to {target}. "
-                  f"Everything else stays unchanged.")
+        intent = (f"Starting now, also notify {target} whenever the rule \"{old_thr}\" "
+                  f"gates a request. Nothing else changes.")
 
     for i, e in enumerate(events, 1):
         e.id = f"PM{i:03d}"
@@ -982,6 +1000,28 @@ def _validate_gen(r: GeneratedScenarioSpec) -> bool:
                 p.append(f"branch demo {bd.content!r} matches no declared value's terms — every "
                          f"classification value the workflow acts on needs terms in "
                          f"analysis_values, and the demo content must contain one")
+    # person-initiated workflows: the seed names people → the request must identify the actor
+    import json as _json
+    try:
+        _sd = _json.loads(r.seed) if r.seed else {}
+    except Exception:
+        _sd = {}
+    has_people = any(isinstance(v, list) and v and all(
+        isinstance(x, dict) and x.get("name") and (x.get("email") or x.get("slack_id"))
+        for x in v) for v in (_sd.values() if isinstance(_sd, dict) else []))
+    req_t = next((q.template for q in r.phrasings if q.role in ("request", "submit")), "")
+    if has_people and req_t and "{SUBMITTER}" not in req_t:
+        p.append("the seed names people (with email/slack_id) — the request template must "
+                 "identify the actor via {SUBMITTER} (anonymous 'an employee submits' is rejected)")
+    # a lookup-gated workflow narrates the lookup in its outcomes
+    if "knowledge" in (r.seed or "").lower() or any("knowledge" in (q.template or "").lower()
+                                                    for q in r.phrasings):
+        outs = " ".join(q.template for q in r.phrasings
+                        if q.role in ("recorded", "fired", "allowed", "blocked"))
+        if outs and "kb" not in outs.lower() and "knowledge" not in outs.lower():
+            p.append("the workflow consults a knowledge base before acting — the outcome "
+                     "phrasings (recorded/fired/allowed/blocked) must narrate the lookup result "
+                     "('the KB lookup returns no instant fix, so ...') and the action taken")
     if not p:
         try:
             if not _build_scenario(r):

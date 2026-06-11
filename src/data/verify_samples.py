@@ -153,6 +153,12 @@ def deterministic_issues(s: Sample) -> list[str]:
     if processed:
         issues.append(f"events phrased as system processing, not raw stimulus: {processed[:4]}")
 
+    # quote hygiene: an empty "" pair or an odd number of double quotes means broken enclosure
+    badq = [e.id for e in s.events if e.role in ("base", "post_mod", "irrelevant")
+            and ('""' in e.input or e.input.count('"') % 2 == 1)]
+    if badq:
+        issues.append(f"broken double-quoting in event text (empty pair or unbalanced): {badq[:4]}")
+
     # events must be GROUNDED — a detail named without its actual value ("date entered",
     # "amount $") leaves the scenario unverifiable
     vague = [e.id for e in s.events if e.role in ("base", "post_mod")
