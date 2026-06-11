@@ -393,6 +393,17 @@ def _first_key(seed_str: str):
     return None
 
 
+def _fill_free(t: str, **vals) -> str:
+    """Placeholder fill for the code-inserted events (IRR/neutral/branch/follow-up) — same
+    normalization as the builder closures (unknown placeholders stripped, no quote artifacts)."""
+    x = t or ""
+    for k, v in vals.items():
+        x = x.replace("{" + k + "}", str(v))
+    x = _re.sub(r"\{[A-Z_]+\}", "", x)
+    x = x.replace('""', "")
+    return _re.sub(r"\s{2,}", " ", x).strip()
+
+
 def _prefix_classification(events, field: str, label: str) -> None:
     """Analysis workflows: every COUNTING event's expect states the classification explicitly
     ("the expect field does not mention that this is a Negative sentiment"). Neutral/branch/
@@ -426,7 +437,9 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         s = t or ""
         for k, v in vals.items():
             s = s.replace("{" + k + "}", str(v))
-        return _re.sub(r"\{[A-Z_]+\}", "", s).strip()
+        s = _re.sub(r"\{[A-Z_]+\}", "", s)
+        s = s.replace('""', "")              # empty-quote artifacts from stripped placeholders
+        return _re.sub(r"\s{2,}", " ", s).strip()
 
     def deco_for(idstr, kk=None):
         # key-implying content (topic classification): the event text carries content that the
@@ -461,21 +474,21 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
     if ct == "rate_limit":
         req = tmpl.get("request") or "A request {ID} arrives for {KEY} {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk))
+        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk), KEY_CONTENT=deco_for(rid, kk))
         return build_rate_limit_scenario(seed, threshold, k, phrase,
                                          outcomes=tmpl, unit=unit or "request", keys=keys, contacts=contacts, **kw)
     if ct == "trigger":
         from src.data.scenario_builder import build_trigger_scenario
         req = tmpl.get("request") or "An event {ID} for {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk))
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk), KEY_CONTENT=deco_for(rid, kk))
         return build_trigger_scenario(seed, threshold, k, phrase,
                                       outcomes=tmpl, unit=unit or "escalation", keys=keys, contacts=contacts, **kw)
     if ct == "dedup":
         from src.data.scenario_builder import build_dedup_scenario
         req = tmpl.get("request") or "A report {ID} about {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk))
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk), KEY_CONTENT=deco_for(rid, kk))
         return build_dedup_scenario(seed, threshold, k, phrase,
                                     outcomes=tmpl, unit=unit or "report", keys=keys, contacts=contacts, **kw)
     if ct == "cap":
@@ -513,9 +526,8 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
         req = tmpl.get("request")
         if req:
             k = gen.key or (gen.keys[0] if gen.keys else "")
-            txt = (req.replace("{ID}", "REQ-0050").replace("{KEY}", k)
-                      .replace("{DECO}", gen.irrelevant_deco).replace("{AMOUNT}", "75"))
-            txt = _re.sub(r"\{[A-Z_]+\}", "", txt).strip()
+            txt = _fill_free(req, ID="REQ-0050", KEY=k, DECO=gen.irrelevant_deco,
+                             KEY_CONTENT=gen.irrelevant_deco, AMOUNT="75")
             first_when = events[0].when or "W01-1T09:00"
             neutral = SpecEventWithExpect(
                 id="E050", call_type="send_event", source="__external__", input=txt,
@@ -537,9 +549,8 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
             kb = gen.key or (gen.keys[0] if gen.keys else "")
             first_when = events[0].when or "W01-1T09:00"
             for bi, bd in enumerate(gen.branch_demos, 1):
-                txtb = (reqb.replace("{ID}", f"REQ-007{bi}").replace("{KEY}", kb)
-                            .replace("{DECO}", bd.content).replace("{AMOUNT}", "85"))
-                txtb = _re.sub(r"\{[A-Z_]+\}", "", txtb).strip()
+                txtb = _fill_free(reqb, ID=f"REQ-007{bi}", KEY=kb, DECO=bd.content,
+                                  KEY_CONTENT=bd.content, AMOUNT="85")
                 events.insert(1 + bi, SpecEventWithExpect(
                     id=f"E07{bi}", call_type="send_event", source="__external__", input=txtb,
                     when=first_when[:-2] + f"{32 + bi * 3:02d}", role="base",
@@ -562,8 +573,7 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
         if fired_idx is not None:
             k = gen.key or (gen.keys[0] if gen.keys else "")
             contact = (gen.key_contacts or {}).get(k) or "the assigned owner"
-            txt = (fu.replace("{ID}", "REQ-0060").replace("{KEY}", k).replace("{CONTACT}", contact))
-            txt = _re.sub(r"\{[A-Z_]+\}", "", txt).strip()
+            txt = _fill_free(fu, ID="REQ-0060", KEY=k, CONTACT=contact)
             when = events[fired_idx].when or "W01-1T12:00"
             hh = int(when.split("T")[1][:2]) + 1
             fup = SpecEventWithExpect(
@@ -888,9 +898,8 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
         deco = spec.irrelevant_deco or (
             f"with a routine, clearly neutral mention of {irr_key} (no qualifying terms)"
             if spec.analysis_field else (spec.decorations or [""])[0])
-        irr_input = (req.replace("{ID}", irr_id).replace("{KEY}", irr_key)
-                        .replace("{AMOUNT}", "500").replace("{DECO}", deco))
-        irr_input = _re.sub(r"\{[A-Z_]+\}", "", irr_input).strip()
+        irr_input = _fill_free(req, ID=irr_id, KEY=irr_key, AMOUNT="500", DECO=deco,
+                               KEY_CONTENT=deco)
         if spec.analysis_field:
             ok_act = (f"{irr_id} is analyzed against the seeded {spec.analysis_field} rules — its "
                       f"text matches no '{spec.analysis_label or 'counting'}' term, so it is "
@@ -1000,6 +1009,12 @@ def _validate_gen(r: GeneratedScenarioSpec) -> bool:
                 p.append(f"branch demo {bd.content!r} matches no declared value's terms — every "
                          f"classification value the workflow acts on needs terms in "
                          f"analysis_values, and the demo content must contain one")
+    _known_ph = {"ID","KEY","AMOUNT","SUBMITTER","DECO","CONTACT","ENTITY","APPROVER","MANAGER","SUBMITTER_EMAIL","APPROVER_EMAIL","KEY_CONTENT"}
+    for q in r.phrasings:
+        for ph in _re.findall(r"\{([A-Z_]+)\}", q.template or ""):
+            if ph not in _known_ph:
+                p.append(f"template role={q.role!r} uses UNDEFINED placeholder {{{ph}}} — code "
+                         f"fills only: {', '.join(sorted(_known_ph))}")
     # person-initiated workflows: the seed names people → the request must identify the actor
     import json as _json
     try:

@@ -100,8 +100,13 @@ def deterministic_issues(s: Sample) -> list[str]:
         # DOMAIN-GENERIC: prefer the declared limit-tracked keys (SKUs/categories/contacts);
         # the SKU-code regex is only a legacy fallback for samples that predate `keys`.
         def keys_in(events):
+            def blob(e):
+                x = e.input
+                if e.expect:
+                    x += f" {e.expect.action} {e.expect.reason or ''}"
+                return x
             if s.keys:
-                return {k for k in s.keys if any(k in e.input for e in events)}
+                return {k for k in s.keys if any(k in blob(e) for e in events)}
             return _skus(events)
         bkeys = keys_in(base)
         if len(bkeys) < 2:
