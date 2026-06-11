@@ -484,7 +484,7 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         req = tmpl.get("request") or "A request {ID} arrives for {KEY} {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
         has_kc = "{KEY_CONTENT}" in req   # then {DECO} is plain venue flavor, NOT the same text
-        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=(deco_for(rid, None) if has_kc else deco_for(rid, kk)), KEY_CONTENT=deco_for(rid, kk))
+        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=("" if has_kc else deco_for(rid, kk)), KEY_CONTENT=deco_for(rid, kk))
         return build_rate_limit_scenario(seed, threshold, k, phrase,
                                          outcomes=tmpl, unit=unit or "request", keys=keys, contacts=contacts, **kw)
     if ct == "trigger":
@@ -492,7 +492,7 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         req = tmpl.get("request") or "An event {ID} for {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
         has_kc = "{KEY_CONTENT}" in req
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=(deco_for(rid, None) if has_kc else deco_for(rid, kk)), KEY_CONTENT=deco_for(rid, kk))
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=("" if has_kc else deco_for(rid, kk)), KEY_CONTENT=deco_for(rid, kk))
         return build_trigger_scenario(seed, threshold, k, phrase,
                                       outcomes=tmpl, unit=unit or "escalation", keys=keys, contacts=contacts, **kw)
     if ct == "dedup":
@@ -500,7 +500,7 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         req = tmpl.get("request") or "A report {ID} about {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
         has_kc = "{KEY_CONTENT}" in req
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=(deco_for(rid, None) if has_kc else deco_for(rid, kk)), KEY_CONTENT=deco_for(rid, kk))
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=("" if has_kc else deco_for(rid, kk)), KEY_CONTENT=deco_for(rid, kk))
         return build_dedup_scenario(seed, threshold, k, phrase,
                                     outcomes=tmpl, unit=unit or "report", keys=keys, contacts=contacts, **kw)
     if ct == "cap":
@@ -533,7 +533,7 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
                           cap_scope=gen.cap_scope, person_caps=gen.person_caps, qty_noun=gen.qty_noun,
                         key_contents=gen.key_contents)
     _prefix_classification(events, gen.analysis_field, gen.analysis_label)
-    if events and gen.analysis_field and gen.irrelevant_deco:
+    if events and gen.analysis_field and gen.irrelevant_deco and not gen.analysis_values:
         tmpl = {p.role: p.template for p in gen.phrasings}
         req = tmpl.get("request")
         if req:
@@ -599,7 +599,8 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
                 when=f"{when.split('T')[0]}T{hh:02d}:00", role="base",
                 expect=EventExpect(
                     action=f"the status update from {contact} is recorded against the open "
-                           f"{gen.unit or 'item'} for {k}; NO new {gen.unit or 'item'} is created."
+                           f"{gen.unit or 'item'} for {k}, and the submitting user is notified of "
+                           f"the change in Slack; NO new {gen.unit or 'item'} is created."
                            + (" The resolution is appended to the knowledge base for future "
                               "reference, per the workflow." if "knowledge" in
                               (gen.seed + " ".join(q.template for q in gen.phrasings)).lower()
@@ -925,11 +926,13 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
         irr_input = _fill_free(req, ID=irr_id, KEY=irr_key, AMOUNT="500",
                                SUBMITTER=ppl_irr[-1],
                                DECO=("" if has_kc_irr else deco), KEY_CONTENT=deco)
+        tmplx = {p.role: p.template for p in spec.phrasings}
         if spec.analysis_field:
-            ok_act = (f"{irr_id} is analyzed against the seeded {spec.analysis_field} rules — its "
-                      f"text matches no '{spec.analysis_label or 'counting'}' term, so it is "
-                      f"classified 'neutral', does NOT count toward the rule, and normal handling "
-                      f"proceeds.")
+            base_out = _fill_outcome(tmplx, "recorded",
+                f"{irr_id} is recorded and handled per its classification.",
+                ID=irr_id, KEY=irr_key, CONTACT=(spec.key_contacts or {}).get(irr_key, ""))
+            ok_act = (f"{irr_id} is analyzed against the seeded {spec.analysis_field} rules and "
+                      f"handled accordingly: {base_out}")
         else:
             ok_act = {"counter": f"{irr_id} IS assigned to the next available member in rotation and posted normally.",
                   "cap": f"{irr_id} is recorded and routed for approval exactly as before.",
@@ -1065,6 +1068,26 @@ def _validate_gen(r: GeneratedScenarioSpec) -> bool:
             p.append("the workflow consults a knowledge base before acting — the outcome "
                      "phrasings (recorded/fired/allowed/blocked) must narrate the lookup result "
                      "('the KB lookup returns no instant fix, so ...') and the action taken")
+    tmpl_map = {q.role: (q.template or "") for q in r.phrasings}
+    fired_channels = set(_re.findall(r"#[\w-]+", tmpl_map.get("fired", "")))
+    for role in ("recorded", "allowed"):
+        leak = fired_channels & set(_re.findall(r"#[\w-]+", tmpl_map.get(role, "")))
+        if leak:
+            p.append(f"the {role!r} outcome posts to {sorted(leak)} — that channel belongs to the "
+                     f"FIRED consolidated action only; below-quorum outcomes must not use it")
+    knowledge_gated = "knowledge" in (r.seed or "").lower() or any(
+        "knowledge" in t.lower() or "kb" in t.lower() for t in tmpl_map.values())
+    if knowledge_gated:
+        for role in ("recorded", "fired"):
+            t = tmpl_map.get(role, "")
+            if t and "kb" not in t.lower() and "knowledge" not in t.lower():
+                p.append(f"the {role!r} outcome must narrate the knowledge-base lookup result "
+                         f"('the KB lookup returns no instant fix, so ...')")
+        if r.branch_demos and not any(
+                "kb" in bd.action.lower() or "knowledge" in bd.action.lower()
+                for bd in r.branch_demos):
+            p.append("at least one branch demo must be RESOLVED THROUGH the knowledge base "
+                     "(its action names the KB article and states no ticket is created)")
     if not p:
         try:
             if not _build_scenario(r):
