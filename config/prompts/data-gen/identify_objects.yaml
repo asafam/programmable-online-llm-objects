@@ -32,6 +32,10 @@ prompt: |
        Business logic objects ASK it and receive the result — an agent must NEVER perform the
        analysis itself inline: agents wrap domain functionality, not functional roles.
 
+       A knowledge base that the workflow also UPDATES (resolved tickets append new solutions)
+       is a read service for lookups AND must own a write tool for the append (e.g.
+       `add_kb_solution`), listed in its `skills` — otherwise the update step is unrealizable.
+
        **Important:** Any service that holds persistent data AND must answer lookup queries (e.g., a knowledge base, a Notion database used as a FAQ store, a policy document, a ticket store queried for status) MUST be a read service — NOT a write service. If a business logic object needs to ask a service a question and wait for the answer, that service is a read service with a `_data` tool.
 
      - **Write services** record what they receive and have initially empty state. Their state becomes the audit trail. Entry-point write services (those with `event_sources`) MUST declare the business logic object as a peer — without this peer, incoming events dead-end and the automation never runs.

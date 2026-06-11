@@ -462,8 +462,11 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         reps = _seed_sales_reps(seed)
         if not reps:                              # no chain in the seed → fall back to bare approvers
             reps = [("an account executive", a) for a in (_seed_approvers(seed) or ["the approver"])]
-        submit_phrase = lambda qid, amt, rep: fill(sub, ID=qid, AMOUNT=f"{amt:,}", SUBMITTER=rep, DECO=deco_for(qid))
-        approve_phrase = lambda qid, mgr: fill(app, ID=qid, APPROVER=mgr)
+        submit_phrase = lambda qid, amt, rep: fill(
+            sub, ID=qid, AMOUNT=f"{amt:,}", SUBMITTER=rep, SUBMITTER_EMAIL=_seed_email(seed, rep),
+            DECO=deco_for(qid))
+        approve_phrase = lambda qid, mgr: fill(app, ID=qid, APPROVER=mgr,
+                                               APPROVER_EMAIL=_seed_email(seed, mgr))
         return build_cap_scenario(seed, threshold, submit_phrase, approve_phrase, reps,
                                   outcomes=tmpl, unit=unit or "approval",
                                   per_person=(cap_scope == "per_person"),
@@ -501,6 +504,25 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
                            f"'{gen.analysis_label or 'counting'}' term this occurrence never enters "
                            f"the count — the rule only accumulates matching items."))
             events.insert(1, neutral)
+    # BRANCH DEMONSTRATIONS: one event per DISTINCT handling path the steps describe (a positive
+    # mention posts to #brand-wins; a known topic gets the instant KB fix) — none enters the count
+    if events and gen.branch_demos:
+        tmplb = {p.role: p.template for p in gen.phrasings}
+        reqb = tmplb.get("request") or tmplb.get("submit")
+        if reqb:
+            kb = gen.key or (gen.keys[0] if gen.keys else "")
+            first_when = events[0].when or "W01-1T09:00"
+            for bi, bd in enumerate(gen.branch_demos, 1):
+                txtb = (reqb.replace("{ID}", f"REQ-007{bi}").replace("{KEY}", kb)
+                            .replace("{DECO}", bd.content).replace("{AMOUNT}", "85"))
+                txtb = _re.sub(r"\{[A-Z_]+\}", "", txtb).strip()
+                events.insert(1 + bi, SpecEventWithExpect(
+                    id=f"E07{bi}", call_type="send_event", source="__external__", input=txtb,
+                    when=first_when[:-2] + f"{32 + bi * 3:02d}", role="base",
+                    expect=EventExpect(
+                        action=bd.action,
+                        reason=bd.reason or "this content matches a DIFFERENT handling path stated "
+                               "in the steps; it is handled there and never enters the gated count.")))
     # FOLLOW-UP interaction (role="followup" phrasing): when the steps say the notified party
     # acts back (the assigned owner updates status from Slack), that interaction is a real event —
     # placed right after the first FIRED outcome, recorded against the open item (no new item)
@@ -531,21 +553,20 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
 
 
 def _base_cap_total(base_events, person: str | None = None) -> int:
-    """Sum the approved amounts in the base cap scenario (the running total it ended at) —
-    UNIT-AWARE ($12,000 or "12 vacation days"). `person` restricts to one submitter's events
-    (per-person caps track separate budgets)."""
+    """The running total the base cap scenario ended at, parsed from the CODE-AUTHORED reasons
+    ("keeps ... running approved total at X") — never from the LLM-worded actions, whose verbs
+    vary ("approves" missing once made a carried total silently 0). `person` restricts to one
+    submitter's events (per-person caps track separate budgets)."""
     total = 0
     for e in base_events:
-        if not e.expect:
+        if not e.expect or not e.expect.reason:
             continue
-        a = e.expect.action or ""
-        blob = f"{a} {e.expect.reason or ''}"
-        if person and person not in blob:
+        r = e.expect.reason
+        if person and person not in r:
             continue
-        if "approves" in a and "BUT" not in a and "held" not in a.lower():
-            m = _re.search(r"\$([\d,]+)", a) or _re.search(r"\(([\d,]+)\s", a)
-            if m:
-                total += int(m.group(1).replace(",", ""))
+        m = _re.search(r"running approved total at \$?([\d,]+)", r)
+        if m:
+            total = max(total, int(m.group(1).replace(",", "")))
     return total
 
 
@@ -617,6 +638,21 @@ def _looser_threshold(ct: str, old_thr: str, old_limit: int):
     return _re.sub(r"\d[\d,]*", str(old_limit + 1), old_thr, count=1), {"flip_old_limit": old_limit}
 
 
+def _seed_email(seed_str: str, name: str) -> str:
+    """The seed email address for a named person — scanned across ALL people lists."""
+    import json as _json
+    try:
+        d = _json.loads(seed_str)
+    except Exception:
+        return ""
+    for v in (d.values() if isinstance(d, dict) else []):
+        if isinstance(v, list):
+            for p in v:
+                if isinstance(p, dict) and p.get("name") == name and p.get("email"):
+                    return p["email"]
+    return ""
+
+
 def _seed_person(seed_str: str):
     """A REAL person/owner from the seed for expansion's extra notification (approver > manager)."""
     import json as _json
@@ -681,7 +717,9 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
         if ct == "counter" and "reset_day" not in kw:
             kw["reset_day"] = _abs_to_day(_ev_abs_day(kw["base_day"] + "T09:00") + 1)
         if ct == "cap" and "starting_total" not in kw:
-            kw["starting_total"] = _base_cap_total(spec.base_events)
+            p = ((_seed_sales_reps(spec.seed) or [("",)])[0][0]
+                 if spec.cap_scope == "per_person" else None)
+            kw["starting_total"] = _base_cap_total(spec.base_events, person=p)
         kw["id_offset"] = offset
         return _run_builder(ct, spec.seed, thr, spec.phrasings, spec.decorations,
                             key_ or spec.key, spec.unit, entities=spec.entities, keys=spec.keys,
@@ -887,7 +925,7 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
         # entities or a parseable roster; rate_limit needs a key). Retrying here is what catches a
         # seed shape the code can't drive, instead of emitting a spec with 0 base events.
         validator=lambda r: bool(r.threshold) and _valid_seed(r.seed) and bool(r.phrasings)
-        and not (_re.search(r"\b(negative|positive|sentiment|urgent|high[- ]priority|spam|toxic)\b",
+        and not (_re.search(r"\b(negative|positive|sentiment|spam|toxic)\b",
                             f"{r.threshold} {r.description}", _re.I)
                  and not (r.analysis_field and r.analysis_terms and r.irrelevant_deco.strip()))
         and not (r.analysis_terms and (not r.irrelevant_deco.strip() or any(
@@ -912,6 +950,7 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     spec.analysis_label = gen.analysis_label
     spec.analysis_terms = gen.analysis_terms
     spec.irrelevant_deco = gen.irrelevant_deco
+    spec.branch_demos = gen.branch_demos
     spec.cap_scope = gen.cap_scope
     spec.person_caps = gen.person_caps
     spec.qty_noun = gen.qty_noun

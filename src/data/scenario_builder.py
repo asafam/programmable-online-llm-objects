@@ -11,7 +11,8 @@ from __future__ import annotations
 import re
 
 from src.data.schema import EventExpect, SpecEventWithExpect
-from src.data.generate_state_constraints import _fill_outcome, _parse_limit, _seed_reps, simulate_rotation
+from src.data.generate_state_constraints import (_fill_outcome, _parse_limit, _seed_reps,
+    simulate_rotation, _seed_email as _seed_email_sb)
 
 
 def _abs_day(when: str) -> int:
@@ -497,7 +498,8 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
         e.expect = EventExpect(
             action=_fill_outcome(outcomes, "submitted",
                 f"{qid} is recorded; the system routes the approval request to {rep}'s manager, {mgr}.",
-                ID=qid, SUBMITTER=rep, MANAGER=mgr),
+                ID=qid, SUBMITTER=rep, MANAGER=mgr,
+                SUBMITTER_EMAIL=_seed_email_sb(seed, rep), MANAGER_EMAIL=_seed_email_sb(seed, mgr)),
             reason=f"the system's routing policy sends each request to the submitter's manager ({mgr} "
                    f"for {rep}); the submission itself is always recorded and is not the gated action.")
         events.append(e)
@@ -534,7 +536,9 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "approved",
                     f"{mgr} approves {qid} ({F(amt)}); the {unit} is recorded.",
-                    ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}"),
+                    ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}",
+                    SUBMITTER=rep, SUBMITTER_EMAIL=_seed_email_sb(seed, rep),
+                    MANAGER_EMAIL=_seed_email_sb(seed, mgr)),
                 reason=f"the {unit} of {F(amt)} keeps {whose} running approved total at {F(total)}, "
                        f"within {cap_phrase}{per_note}.{flip}")
         else:
@@ -542,7 +546,9 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
                 action=_fill_outcome(outcomes, "held",
                     f"{mgr} acts on {qid}, BUT the system holds it for exception handling — the {unit} cannot "
                     f"take effect because it would breach the cap, so none is recorded.",
-                    ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}"),
+                    ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}",
+                    SUBMITTER=rep, SUBMITTER_EMAIL=_seed_email_sb(seed, rep),
+                    MANAGER_EMAIL=_seed_email_sb(seed, mgr)),
                 reason=f"the {unit} of {F(amt)} would push {whose} running total from {F(total)} to "
                        f"{F(total + amt)}, over {cap_phrase}, so the system intercepts it and "
                        f"routes it to exception handling{per_note}.")

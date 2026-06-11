@@ -118,10 +118,15 @@ user_prompt: |
         right manager). {SUBMITTER}=rep, {MANAGER}=that rep's manager, {ENTITY}=the manager who decides
         — all filled by code from the seed's sales_reps.)
      role="followup" (OPTIONAL): when a step says the notified party acts BACK (the assigned
-     owner updates status from Slack), provide the phrasing for that inbound interaction —
-     "{CONTACT} replies in {KEY}'s support channel updating ticket status to in-progress" — and
-     code inserts it as a real event right after the first fired outcome, recorded against the
-     open item.
+     owner updates status from Slack), provide the phrasing for that inbound interaction — and
+     prefer the FULL lifecycle: the follow-up RESOLVES the item ("{CONTACT} replies in {KEY}'s
+     support channel marking the ticket RESOLVED with the fix notes"), and the outcome states the
+     downstream effects the steps promise (the resolution is appended to the knowledge base via
+     its write tool). An item that is opened but never resolved leaves the KB-update step
+     untested.
+     NOTIFICATION EMAILS ARE GROUNDED: when steps say a person is emailed (the submitter, their
+     manager), the outcome names the ADDRESS via {SUBMITTER_EMAIL}/{MANAGER_EMAIL} (code fills
+     them from the seed) — so every notified person must carry an email in the seed.
      (No special "irrelevant" phrasing is needed: code derives the scope-proof event from the
      normal request phrasing — a request the workflow handles normally whose outcome is IDENTICAL
      before and after the modification. `irrelevant_key` below names the entity it uses.)
@@ -186,6 +191,16 @@ user_prompt: |
      seeded rules to the text. Leave all empty when no step analyzes.
      ANALYSIS CRITERIA IN SEED: the seed must also DEFINE what the analysis is applied against —
      the monitored topics, priority rules, category definitions — like any signal→action mapping.
+     analysis_field must be the EXACT classification the steps perform (topic, priority,
+     sentiment) — NEVER import a foreign concept (no "sentiment" in a helpdesk that classifies
+     topics; no "priority" in a brand monitor that classifies sentiment).
+     BRANCH COVERAGE — `branch_demos`: every DISTINCT handling path the steps describe gets ONE
+     demonstrating event: {"content": the per-event text matching that path ("the new dashboard
+     wins praise from reviewers" / "printer setup question — known fix KB-077"), "action": the
+     explicit expected outcome with the channel/recipient/tool named ("the mention is classified
+     positive and posted to #brand-wins; it does NOT enter the negative count" / "the KB lookup
+     returns the KB-077 instant fix, which is sent as a DM; NO ticket is created")}. A stated
+     path with no event is an untested promise.
      The submitting ACTOR is identified: any request a person initiates (a leave request, an
      expense, a support request) must name that person via {SUBMITTER} (filled by code from the
      seed's people) — an anonymous "an employee" cannot be routed, attributed, or capped. When

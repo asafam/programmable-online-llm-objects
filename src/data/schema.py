@@ -167,6 +167,15 @@ class RolePhrasing(BaseModel):
     template: str
 
 
+class BranchDemo(BaseModel):
+    """One demonstration of a DISTINCT handling path the steps describe (a positive mention →
+    #brand-wins post; a known-topic request → instant KB fix). `content` is the event's
+    per-event text; `action` the explicit expected outcome (channel/recipient/tool named)."""
+    content: str
+    action: str
+    reason: str = ""
+
+
 class SampleVerdict(BaseModel):
     """LLM-judge output for the pre-upload verifier."""
     passed: bool
@@ -200,6 +209,8 @@ class GeneratedScenarioSpec(BaseModel):
                                # the analysis is RULES-BASED on content ("lawsuit" → negative)
     irrelevant_deco: str = ""  # content for the irrelevant event — must contain NO analysis term
                                # (the analysis filters it out, e.g. a clearly positive mention)
+    branch_demos: list["BranchDemo"] = Field(default_factory=list)  # one event per DISTINCT
+                               # handling path the steps describe (non-counting branches)
     cap_scope: str = "shared"  # cap only: "shared" pool vs "per_person" budget
     person_caps: dict[str, int] = Field(default_factory=dict)  # per_person caps that DIFFER per
                                # person (each employee's own seeded balance): {"Ava Martinez": 18}
@@ -806,6 +817,7 @@ class WorkflowSpec(BaseModel):
     analysis_label: str = ""                                  # the classification the events reflect
     analysis_terms: list[str] = Field(default_factory=list)   # rules-based terms (carried)
     irrelevant_deco: str = ""                                  # term-free irrelevant content (carried)
+    branch_demos: list["BranchDemo"] = Field(default_factory=list)  # branch demonstrations (carried)
     cap_scope: str = "shared"                                 # cap scope (carried)
     person_caps: dict[str, int] = Field(default_factory=dict)  # per-person caps (carried)
     qty_noun: str = ""                                         # quantity noun (carried)

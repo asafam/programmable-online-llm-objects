@@ -69,6 +69,12 @@ def deterministic_issues(s: Sample) -> list[str]:
         if not post:
             issues.append("modification not exercised (no post_mod events)")
 
+    # near-duplicate steps (grounding echo: "steps 5 & 6 are the same")
+    norm = [re.sub(r"[^a-z0-9 ]", "", (st or "").lower()).strip() for st in s.steps]
+    for i in range(len(norm) - 1):
+        a, b = set(norm[i].split()), set(norm[i + 1].split())
+        if a and b and len(a & b) / max(len(a), len(b)) > 0.9:
+            issues.append(f"steps {i + 1} and {i + 2} are near-duplicates")
     if any("state constraint" in (st or "").lower() for st in s.steps):
         issues.append("a step literally says 'State constraint'")
     if pre:
@@ -182,7 +188,8 @@ def deterministic_issues(s: Sample) -> list[str]:
                 untermed = [e.id for e in s.events if e.role in ("base", "post_mod")
                             and not any(t in e.input.lower() for t in terms)
                             and "neutral" not in ((e.expect.action if e.expect else "") or "").lower()
-                            and "recorded against the open" not in ((e.expect.action if e.expect else "") or "")]
+                            and "recorded against the open" not in ((e.expect.action if e.expect else "") or "")
+                            and "DIFFERENT handling path" not in ((e.expect.reason if e.expect else "") or "")]
                 if untermed:
                     issues.append(f"analysis events whose text matches NO rule term: {untermed[:4]}")
                 bad_irr = [e.id for e in s.events if e.role == "irrelevant"
