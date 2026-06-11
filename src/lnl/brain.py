@@ -1621,7 +1621,7 @@ class AzureBrain(LLMBrain):
 
         t0 = time.time()
         try:
-            resp = self._client.chat.completions.create(**kwargs)
+            resp = self._create_with_filter_retry(kwargs, object_id)
         except Exception as e:
             self._raise_if_content_filter(e, object_id)
             raise
@@ -1664,7 +1664,7 @@ class AzureBrain(LLMBrain):
 
         t0 = time.time()
         try:
-            resp = self._client.chat.completions.create(**kwargs)
+            resp = self._create_with_filter_retry(kwargs, object_id)
         except Exception as e:
             self._raise_if_content_filter(e, object_id)
             raise
@@ -1844,6 +1844,29 @@ class AzureBrain(LLMBrain):
             )
         raw = _safe_json_loads(choice.message.content or "{}")
         return raw, metrics
+
+    def _create_with_filter_retry(self, kwargs: dict, object_id: str | None):
+        """Azure's content filter / reasoning invalid_prompt 400s are PROBABILISTIC — the same
+        prompt usually passes on retry. Retry up to 3 times with backoff before treating the
+        flag as real."""
+        import time as _time
+        last = None
+        for attempt in range(4):
+            try:
+                return self._client.chat.completions.create(**kwargs)
+            except Exception as e:
+                body = getattr(e, "body", None) or {}
+                err = (body.get("error") or {}) if isinstance(body, dict) else {}
+                msg = (err.get("message") or "").lower()
+                flagged = err.get("code") in ("content_filter", "invalid_prompt") \
+                    or "flagged" in msg or "invalid prompt" in msg
+                if not flagged or attempt == 3:
+                    raise
+                last = e
+                logger.warning("Content filter flagged %s (attempt %d/4) — retrying",
+                               object_id, attempt + 1)
+                _time.sleep(2 ** attempt)
+        raise last  # unreachable
 
     @staticmethod
     def _raise_if_content_filter(exc: Exception, object_id: str | None) -> None:
