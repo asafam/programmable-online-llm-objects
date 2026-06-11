@@ -167,7 +167,26 @@ def deterministic_issues(s: Sample) -> list[str]:
     if leaky:
         issues.append(f"object specs use internal vocabulary (custodian/invariant): {leaky[:3]}")
 
-    # analysis capability: the seed's published analysis_results must be SYNCED with the events —
+    # analysis capability, RULES-BASED: every counting event's TEXT must contain a rule term
+    # (the analysis maps content → value), and the irrelevant event's text must contain none
+    if s.seed and '"analysis_rules"' in s.seed:
+        try:
+            rules = json.loads(s.seed).get("analysis_rules") or {}
+            terms = [t.lower() for r in rules.values()
+                     for t in (r.get("value_when_text_contains") or [])]
+            if terms:
+                untermed = [e.id for e in s.events if e.role in ("base", "post_mod")
+                            and not any(t in e.input.lower() for t in terms)]
+                if untermed:
+                    issues.append(f"analysis events whose text matches NO rule term: {untermed[:4]}")
+                bad_irr = [e.id for e in s.events if e.role == "irrelevant"
+                           and any(t in e.input.lower() for t in terms)]
+                if bad_irr:
+                    issues.append(f"irrelevant event text matches a counting rule term: {bad_irr}")
+        except Exception:
+            pass
+
+    # legacy analysis capability (id-keyed map): entries must be SYNCED with the events —
     # exactly one entry per scenario event, keyed by the final event id (a rebuild that changes
     # events without republishing desyncs the mock and the scenario silently)
     if s.seed and '"analysis_results"' in s.seed:

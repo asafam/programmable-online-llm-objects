@@ -445,16 +445,30 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
     return out
 
 
+def _qty_noun(threshold: str) -> str:
+    """The quantity noun for non-monetary caps ("15 vacation days per ..." → "vacation days")."""
+    m = re.search(r"\d[\d,]*\s+([a-z][a-z -]*?)(?:\s+per\b|\s+within\b|\s+across\b|,|\.|$)",
+                  threshold or "", re.I)
+    return (m.group(1).strip() if m else "units")
+
+
 def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
                        submitters: list, base_day: str = "W01-1", starting_total: int = 0, id_offset: int = 0,
                        outcomes: dict | None = None, unit: str = "approval",
-                       flip_old_limit: int | None = None) -> list:
-    """Cumulative cap with an approver chain. `submitters` is [(rep, manager)]. Each quote: the
+                       flip_old_limit: int | None = None, per_person: bool = False) -> list:
+    """Cumulative cap with an approver chain. `submitters` is [(rep, manager)]. Each request: the
     REP submits (the event is just the stimulus — it does NOT choose the approver); the submission
-    EXPECT verifies the SYSTEM (quote-approval-policy) routed the request to the rep's MANAGER via
-    email; then that manager's decision is the gated action (cap). Amounts are built so the running
-    total approaches the cap from `starting_total` with a boundary pair, and an over-cap one held."""
+    EXPECT verifies the SYSTEM routed the request to the rep's MANAGER; the manager's decision is
+    the gated action. Amounts approach the cap with a sequential boundary pair, one over-cap held.
+    UNIT-AWARE: "$" amounts only when the threshold is monetary; otherwise the threshold's own
+    quantity noun ("vacation days"). `per_person=True` keeps a SEPARATE running total per
+    submitter (per-person budgets): person A gets the boundary treatment; person B's mid-stream
+    request proceeds under B's OWN total — proving the cap is per person, not shared."""
     cap = _parse_limit(threshold)
+    money = "$" in (threshold or "")
+    noun = _qty_noun(threshold) if not money else ""
+    F = (lambda v: f"${v:,}") if money else (lambda v: f"{v:,} {noun}")
+    scope = "their" if per_person else "the"
     subm = submitters or [("an account executive", "the approver")]
     budget = max(4, cap - starting_total)
     a = max(1, budget // 4)
@@ -468,8 +482,13 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
     quotes = []                            # (qid, amount, is_pair, rep, manager)
     for i, amt in enumerate(amounts):
         qid = f"Q-{1001 + id_offset + i}"
-        rep, mgr = subm[i % len(subm)]
+        # per-person: the boundary person (A) submits everything; B's scope-proof comes after
+        rep, mgr = subm[0] if per_person else subm[i % len(subm)]
         quotes.append((qid, amt, i >= 2, rep, mgr))
+    if per_person and len(subm) > 1:
+        repB, mgrB = subm[1]
+        quotes.insert(2, (f"Q-{1001 + id_offset + 4}", a, False, repB, mgrB))
+    for i, (qid, amt, is_pair, rep, mgr) in enumerate(quotes):
         e = _ev(len(events) + 1, submit_phrase(qid, amt, rep), f"W{week:02d}-{day}T{9 + i:02d}:00")
         # The submission expect VERIFIES the system routed the approval to the rep's MANAGER.
         e.expect = EventExpect(
@@ -482,7 +501,7 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
 
     # approvals: the routed MANAGER decides; cap-gated. Boundary approvals are SEQUENTIAL,
     # minutes apart (no same-instant race — outcomes stay deterministic per event).
-    total = starting_total
+    totals: dict = {}
     approve_events = []
     pair_seen = 0
     for j, (qid, amt, is_pair, rep, mgr) in enumerate(quotes):
@@ -492,28 +511,35 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
         else:
             when = f"W{week:02d}-{day}T{10 + j:02d}:30"
         e = _ev(len(events) + len(approve_events) + 1, approve_phrase(qid, mgr), when)
-        approve_events.append((e, qid, amt, mgr))
+        approve_events.append((e, qid, amt, rep, mgr))
 
     ordered = sorted(approve_events, key=lambda x: (x[0].when, x[0].id))
-    for e, qid, amt, mgr in ordered:
+    for e, qid, amt, rep, mgr in ordered:
+        key = rep if per_person else "__shared__"
+        total = totals.get(key, starting_total if (not per_person or rep == subm[0][0]) else 0)
+        whose = f"{rep}'s" if per_person else "the"
+        per_note = f"; {unit} totals are PER PERSON — {rep}'s own budget, unaffected by anyone else's"             if per_person else ""
         if total + amt <= cap:
+            totals[key] = total + amt
             total += amt
-            flip = (f" THIS IS THE FLIP: this approval brings the running total to ${total:,}, above the "
-                    f"original ${flip_old_limit:,} cap which would have HELD it, but the modification "
-                    f"(${cap:,}) ALLOWS it." if flip_old_limit and total > flip_old_limit else "")
+            flip = (f" THIS IS THE FLIP: this approval brings {whose} running total to {F(total)}, above "
+                    f"the original {F(flip_old_limit)} cap which would have HELD it, but the modification "
+                    f"({F(cap)}) ALLOWS it." if flip_old_limit and total > flip_old_limit else "")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "approved",
-                    f"{mgr} approves {qid} (${amt:,}); the {unit} is recorded.",
+                    f"{mgr} approves {qid} ({F(amt)}); the {unit} is recorded.",
                     ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}"),
-                reason=f"the {unit} of ${amt:,} keeps the running approved total at ${total:,}, within the ${cap:,} cap.{flip}")
+                reason=f"the {unit} of {F(amt)} keeps {whose} running approved total at {F(total)}, "
+                       f"within {scope} {F(cap)} cap{per_note}.{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "held",
                     f"{mgr} acts on {qid}, BUT the system holds it for exception handling — the {unit} cannot "
                     f"take effect because it would breach the cap, so none is recorded.",
                     ID=qid, ENTITY=mgr, AMOUNT=f"{amt:,}"),
-                reason=f"the {unit} of ${amt:,} would push the running total from ${total:,} to ${total + amt:,}, "
-                       f"over the ${cap:,} cap, so the system intercepts it and routes it to exception handling.")
+                reason=f"the {unit} of {F(amt)} would push {whose} running total from {F(total)} to "
+                       f"{F(total + amt)}, over {scope} {F(cap)} cap, so the system intercepts it and "
+                       f"routes it to exception handling{per_note}.")
     return events + [e for e, *_ in approve_events]
 
 

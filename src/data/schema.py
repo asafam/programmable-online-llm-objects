@@ -195,7 +195,12 @@ class GeneratedScenarioSpec(BaseModel):
                                                                 # address) the gated action notifies
     analysis_field: str = ""   # when a workflow step ANALYZES content (a mock-API capability):
                                # the result field name, e.g. "sentiment", "priority"
-    analysis_label: str = ""   # the value every scenario event's content reflects, e.g. "negative"
+    analysis_label: str = ""   # the value the counting events' content reflects, e.g. "negative"
+    analysis_terms: list[str] = Field(default_factory=list)  # text terms that imply the label —
+                               # the analysis is RULES-BASED on content ("lawsuit" → negative)
+    irrelevant_deco: str = ""  # content for the irrelevant event — must contain NO analysis term
+                               # (the analysis filters it out, e.g. a clearly positive mention)
+    cap_scope: str = "shared"  # cap only: "shared" pool vs "per_person" budget
 
 
 class StateProbeScenario(BaseModel):
@@ -796,6 +801,9 @@ class WorkflowSpec(BaseModel):
     key_contacts: dict[str, str] = Field(default_factory=dict)  # key → concrete recipient (carried)
     analysis_field: str = ""                                  # analysis capability result field (carried)
     analysis_label: str = ""                                  # the classification the events reflect
+    analysis_terms: list[str] = Field(default_factory=list)   # rules-based terms (carried)
+    irrelevant_deco: str = ""                                  # term-free irrelevant content (carried)
+    cap_scope: str = "shared"                                 # cap scope (carried)
     steps: list[SpecStep] = Field(default_factory=list)      # external-stimulus steps with observable expects
     base_events: list[SpecEventWithExpect] = Field(default_factory=list)  # state-infused base scenario
     modifications: list[SpecModification] = Field(default_factory=list)

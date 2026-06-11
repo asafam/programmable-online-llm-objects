@@ -394,7 +394,7 @@ def _first_key(seed_str: str):
 
 
 def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
-                 entities=None, keys=None, contacts=None, **kw) -> list:
+                 entities=None, keys=None, contacts=None, cap_scope="shared", **kw) -> list:
     """Construct the phrase closures from the LLM's phrasing templates + decorations, then call
     the family builder. Shared by the base scenario AND the modification scenario.
     `entities` (counter) / `keys` (rate_limit) are the LLM-named domain values — the builders use
@@ -464,7 +464,8 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
         submit_phrase = lambda qid, amt, rep: fill(sub, ID=qid, AMOUNT=f"{amt:,}", SUBMITTER=rep, DECO=deco_for(qid))
         approve_phrase = lambda qid, mgr: fill(app, ID=qid, APPROVER=mgr)
         return build_cap_scenario(seed, threshold, submit_phrase, approve_phrase, reps,
-                                  outcomes=tmpl, unit=unit or "approval", **kw)
+                                  outcomes=tmpl, unit=unit or "approval",
+                                  per_person=(cap_scope == "per_person"), **kw)
     return []
 
 
@@ -472,18 +473,24 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
     """CODE builds the base request sequence + derives expects from the LLM's seed + phrasing."""
     return _run_builder(getattr(gen.constraint_type, "value", gen.constraint_type),
                         gen.seed, gen.threshold, gen.phrasings, gen.decorations, gen.key, gen.unit,
-                        entities=gen.entities, keys=gen.keys, contacts=gen.key_contacts)
+                        entities=gen.entities, keys=gen.keys, contacts=gen.key_contacts,
+                        cap_scope=gen.cap_scope)
 
 
-def _base_cap_total(base_events) -> int:
-    """Sum the approved discount amounts in the base cap scenario (the running total it ended at)."""
+def _base_cap_total(base_events, person: str | None = None) -> int:
+    """Sum the approved amounts in the base cap scenario (the running total it ended at) —
+    UNIT-AWARE ($12,000 or "12 vacation days"). `person` restricts to one submitter's events
+    (per-person caps track separate budgets)."""
     total = 0
     for e in base_events:
         if not e.expect:
             continue
         a = e.expect.action or ""
+        blob = f"{a} {e.expect.reason or ''}"
+        if person and person not in blob:
+            continue
         if "approves" in a and "BUT" not in a and "held" not in a.lower():
-            m = _re.search(r"\$([\d,]+)", a)
+            m = _re.search(r"\$([\d,]+)", a) or _re.search(r"\(([\d,]+)\s", a)
             if m:
                 total += int(m.group(1).replace(",", ""))
     return total
@@ -594,6 +601,13 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
     old_limit = _parse_limit(old_thr)
     if mod_type not in VALID_MOD_TYPES.get(ct, []):
         mod_type = "correction"
+    # contextual/exception require a SECOND DISTINCT key (the override/exempt key vs. one still
+    # under the original rule) — with a single tracked key the two runs would silently collapse
+    # onto the same key and contradict each other (observed: both quorums applied to one account)
+    from src.data.scenario_builder import _second_key as _sk
+    if (mod_type in ("contextual", "exception") and ct in ("rate_limit", "trigger", "dedup")
+            and (_sk(spec.seed, spec.key, spec.keys) or spec.key) == spec.key):
+        mod_type = "correction"
 
     latest = max((_ev_abs_day(e.when) for e in spec.base_events if e.when), default=7)
     mod_abs = latest + 1                                     # mod fires after the whole base scenario
@@ -614,7 +628,7 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
         kw["id_offset"] = offset
         return _run_builder(ct, spec.seed, thr, spec.phrasings, spec.decorations,
                             key_ or spec.key, spec.unit, entities=spec.entities, keys=spec.keys,
-                            contacts=spec.key_contacts, **kw)
+                            contacts=spec.key_contacts, cap_scope=spec.cap_scope, **kw)
 
     noun = {"counter": "member", "cap": "rep"}.get(ct, "key")
     rule_noun = {"trigger": "quorum", "dedup": "deduplication"}.get(ct, "limit")
@@ -737,11 +751,17 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
         # correction/temporal/expansion any tracked key works (fresh state, under every limit)
         irr_key = next((k for k in (spec.keys or []) if k != affected_key),
                        spec.key if spec.key != affected_key else (other or spec.key))
-        deco = (spec.decorations or [""])[0]
+        deco = spec.irrelevant_deco or (spec.decorations or [""])[0]
         irr_input = (req.replace("{ID}", irr_id).replace("{KEY}", irr_key)
                         .replace("{AMOUNT}", "500").replace("{DECO}", deco))
         irr_input = _re.sub(r"\{[A-Z_]+\}", "", irr_input).strip()
-        ok_act = {"counter": f"{irr_id} IS assigned to the next available member in rotation and posted normally.",
+        if spec.analysis_field:
+            ok_act = (f"{irr_id} is analyzed against the seeded {spec.analysis_field} rules — its "
+                      f"text matches no '{spec.analysis_label or 'counting'}' term, so it is "
+                      f"classified 'neutral', does NOT count toward the rule, and normal handling "
+                      f"proceeds.")
+        else:
+            ok_act = {"counter": f"{irr_id} IS assigned to the next available member in rotation and posted normally.",
                   "cap": f"{irr_id} is recorded and routed for approval exactly as before.",
                   "trigger": f"{irr_id} is recorded for {irr_key} (occurrence #1 — far below the quorum); the normal per-event handling proceeds.",
                   "dedup": f"the report {irr_id} IS processed for {irr_key} (no recent duplicate).",
@@ -773,12 +793,13 @@ def publish_analysis_results(spec, post_events) -> None:
     if not isinstance(d, dict):
         return
     label = spec.analysis_label or "matching"
-    # key by the FINAL sample ids: bind renames base events POSITIONALLY to SC###; the post-mod
-    # PM###/IRR### ids pass through binding unchanged
-    res = {f"SC{i:03d}": {spec.analysis_field: label}
-           for i, e in enumerate(spec.base_events, 1) if e.input}
-    res.update({e.id: {spec.analysis_field: label} for e in post_events if e.input})
-    d["analysis_results"] = res
+    # RULES-BASED: the analysis maps TEXT CONTENT to the result (a term in the text implies the
+    # label), not event ids — the analysis service applies these rules to whatever text it is given
+    d["analysis_rules"] = {spec.analysis_field: {
+        "value_when_text_contains": list(spec.analysis_terms) or [label],
+        "otherwise": "neutral",
+    }}
+    d.pop("analysis_results", None)
     spec.seed = _json.dumps(d)
 
 
@@ -814,6 +835,9 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     spec.key_contacts = gen.key_contacts
     spec.analysis_field = gen.analysis_field
     spec.analysis_label = gen.analysis_label
+    spec.analysis_terms = gen.analysis_terms
+    spec.irrelevant_deco = gen.irrelevant_deco
+    spec.cap_scope = gen.cap_scope
     spec.state_constraint = StateConstraint(
         type=gen.constraint_type, threshold=gen.threshold, description=gen.description,
     )

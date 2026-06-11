@@ -36,6 +36,12 @@ prompt: |
 
      - **Write services** record what they receive and have initially empty state. Their state becomes the audit trail. Entry-point write services (those with `event_sources`) MUST declare the business logic object as a peer — without this peer, incoming events dead-end and the automation never runs.
 
+       TOOL BINDING IS EXPLICIT: every write service lists its write-tool names in its `skills`
+       (e.g. `finance-email` → skills: ["send_email"]; `jira-issue-writes` → skills:
+       ["create_jira_issue", "update_jira_issue"]) — so the object↔tool association is visible
+       and the binding stage wires the call. A write service with no skill listed looks like it
+       cannot act.
+
        WRITE COVERAGE: EVERY state change the steps or the standing rule prescribe — append an
        item to a list, mark a row Pending, update a record's status, log against an open ticket —
        must be OWNED by a write service whose `behavior` names that exact action (e.g. "when asked

@@ -137,6 +137,10 @@ user_prompt: |
      action while its window is open. Provide it ONLY if the fired artifact is MUTABLE (a ticket,
      a doc, a list that can be amended); NEVER claim to amend a SENT email. If omitted, code words
      these as "logged against the already-issued {unit}".
+     OUTCOMES NARRATE THE DECISION PATH: when the steps gate the action on a prior CHECK (a
+     knowledge-base lookup, an eligibility check, a duplicate scan), the outcome states that
+     check's result as part of the flow ("the knowledge-base lookup returns no instant fix, so a
+     ClickUp ticket IS created") — an outcome that skips a stated step violates the procedure.
      OUTCOMES ARE EXPLICIT AND OBSERVABLE: every outcome names the concrete CHANNEL and RECIPIENT
      ("a consolidated escalation email IS sent to the finance team's inbox", not "finance is
      notified" / "the team is escalated"). An accumulate/recorded/not-yet outcome must say BOTH
@@ -162,11 +166,16 @@ user_prompt: |
      agents wrap domain functionality; they never perform the analysis themselves. The request
      carries the RAW content (no pre-computed labels — an event arriving pre-labeled skips the
      analysis step entirely), written so the expected classification is obvious to a reader; the
-     ANALYSIS SERVICE (a mock tool) returns the result, and code publishes each event's result as
-     deterministic mock data the service serves. Declare it via `analysis_field` (e.g.
-     "sentiment") + `analysis_label` (the value all scenario events reflect, e.g. "negative") —
-     leave both empty when no step analyzes. The OUTCOME phrasings reference the service's result
-     ("classified negative by the mention-analysis service; this is occurrence #...").
+     ANALYSIS SERVICE (a mock tool) returns the result by applying RULES-BASED criteria to the
+     TEXT it is given (a term in the text implies the value) — never an event-id lookup. Declare:
+     `analysis_field` (e.g. "sentiment"), `analysis_label` (the value counting events reflect,
+     e.g. "negative"), and `analysis_terms` — 3-6 short, distinctive terms that imply the label
+     ("lawsuit", "outage", "refund refused"). EVERY counting event's content must contain at
+     least one term (put them in the decorations/request content); `irrelevant_deco` provides one
+     clearly NON-matching content (a positive mention, no terms) for the event the analysis
+     filters out — so not everything in the scenario is the same sentiment. Code publishes the
+     rules as seed.analysis_rules; the analysis service's behavior must SAY it applies those
+     seeded rules to the text. Leave all empty when no step analyzes.
      ANALYSIS CRITERIA IN SEED: the seed must also DEFINE what the analysis is applied against —
      the monitored topics, priority rules, category definitions — like any signal→action mapping.
      The submitting ACTOR is identified: any request a person initiates (a leave request, an
@@ -212,7 +221,11 @@ user_prompt: |
       from the tracked keys directly: a request the workflow handles normally that the modification
       does not target).
 
-  13. `key_contacts` — REQUIRED whenever the gated action notifies someone about a key: a map from
+  13. `cap_scope` — cap ONLY: "shared" (one pool for everyone — a team budget) or "per_person"
+      (each person has their OWN running budget — leave days, expense allowances). Pick what the
+      workflow's rule actually means; the simulation and the reasons follow it.
+
+  14. `key_contacts` — REQUIRED whenever the gated action notifies someone about a key: a map from
       each tracked key to the CONCRETE recipient (an email address from the seed), e.g.
       {"Northwind": "renewals@northwind.example"}. Outcome phrasings then use {CONTACT} so every
       expect names WHICH address the email/notification went to: "A reminder email IS sent to
