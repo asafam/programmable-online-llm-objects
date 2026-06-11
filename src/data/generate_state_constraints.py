@@ -924,56 +924,63 @@ def publish_analysis_results(spec, post_events) -> None:
 
 
 def _validate_gen(r: GeneratedScenarioSpec) -> bool:
-    """Infuse-response validation with SPECIFIC failure messages (fed back on retry)."""
+    """Infuse-response validation. Collects EVERY violation into ONE combined message — the
+    retry prompt then carries the full punch list (one-at-a-time feedback made retries
+    whack-a-mole: fix the reported issue, regress another)."""
+    p: list[str] = []
     if not r.threshold:
         raise ValueError("threshold is empty")
     if not _valid_seed(r.seed):
-        raise ValueError("seed is not a non-empty JSON object")
+        p.append("seed is not a non-empty JSON object")
     if not r.phrasings:
-        raise ValueError("phrasings are missing")
+        p.append("phrasings are missing")
     classifies = _re.search(r"\b(negative|positive|sentiment|spam|toxic)\b",
                             f"{r.threshold} {r.description}", _re.I)
     if classifies and not (r.analysis_field and r.analysis_terms and r.irrelevant_deco.strip()):
-        raise ValueError(
-            "this rule CLASSIFIES content, so analysis_field, analysis_terms (3-6 terms) and a "
-            "non-empty term-free irrelevant_deco are REQUIRED")
+        p.append("this rule CLASSIFIES content, so analysis_field, analysis_terms (3-6 terms) "
+                 "and a non-empty term-free irrelevant_deco are ALL required")
     if r.analysis_terms:
         for d in (r.decorations or []):
             if not any(t.lower() in d.lower() for t in r.analysis_terms):
-                raise ValueError(
-                    f"decoration {d!r} contains NO analysis term — every decoration must embed "
-                    f"one of: {', '.join(r.analysis_terms)}")
+                p.append(f"decoration {d!r} contains NO analysis term — every decoration must "
+                         f"embed one of: {', '.join(r.analysis_terms)}")
         if not r.irrelevant_deco.strip():
-            raise ValueError("irrelevant_deco is required (term-free content the analysis filters out)")
+            p.append("irrelevant_deco is required (term-free content the analysis filters out)")
+        else:
+            for t in r.analysis_terms:
+                if t.lower() in r.irrelevant_deco.lower():
+                    p.append(f"irrelevant_deco contains the analysis term {t!r} — it must match NONE")
         for t in r.analysis_terms:
-            if t.lower() in r.irrelevant_deco.lower():
-                raise ValueError(f"irrelevant_deco contains the analysis term {t!r} — it must match NONE")
             for k in (r.keys or []):
                 if t.lower() in k.lower():
-                    raise ValueError(
-                        f"key {k!r} embeds the analysis term {t!r} — keys are entity names; the "
-                        f"term belongs in event text, not the key")
+                    p.append(f"key {k!r} embeds the analysis term {t!r} — keys are entity names; "
+                             f"the term belongs in event text, not the key")
     if r.key_contents:
-        req_t = next((p.template for p in r.phrasings if p.role in ("request", "submit")), "")
+        req_t = next((q.template for q in r.phrasings if q.role in ("request", "submit")), "")
         if "{KEY}" in req_t:
-            raise ValueError(
-                "key_contents is declared (the system must CLASSIFY content into the key), but the "
-                "request template still contains {KEY} — remove it; the content implies the key")
+            p.append("key_contents is declared (the system must CLASSIFY content into the key), "
+                     "but the request template still contains {KEY} — remove it; the content "
+                     "implies the key")
         for k in (r.keys or []):
             if not r.key_contents.get(k):
-                raise ValueError(f"key_contents is missing content fragments for key {k!r}")
+                p.append(f"key_contents is missing content fragments for key {k!r}")
     if (r.analysis_terms or r.analysis_values) and r.branch_demos:
         all_terms = {v.lower() for ts in ([r.analysis_terms] + list((r.analysis_values or {}).values()))
                      for v in ts}
         for bd in r.branch_demos:
             if all_terms and not any(t in bd.content.lower() for t in all_terms):
-                raise ValueError(
-                    f"branch demo {bd.content!r} matches no declared value's terms — every "
-                    f"classification value the workflow acts on needs terms in analysis_values, "
-                    f"and the demo content must contain one")
-    if not _build_scenario(r):
-        raise ValueError("the scenario builder produced no events from this response "
-                         "(check seed shape: counter needs entities/roster, key families need keys)")
+                p.append(f"branch demo {bd.content!r} matches no declared value's terms — every "
+                         f"classification value the workflow acts on needs terms in "
+                         f"analysis_values, and the demo content must contain one")
+    if not p:
+        try:
+            if not _build_scenario(r):
+                p.append("the scenario builder produced no events from this response (check seed "
+                         "shape: counter needs entities/roster, key families need keys)")
+        except Exception as ex:
+            p.append(f"the scenario builder crashed: {ex}")
+    if p:
+        raise ValueError("FIX ALL of the following in ONE response: " + " | ".join(p))
     return True
 
 
@@ -990,6 +997,7 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
         # Validator raises SPECIFIC messages — generate_with_retries feeds them back into the
         # retry prompt, so the model can self-correct (a bare "Validation failed" cannot converge).
         validator=_validate_gen,
+        max_retries=6,
     )
     if gen is None:
         return spec, False
