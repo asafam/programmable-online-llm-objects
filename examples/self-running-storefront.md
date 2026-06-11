@@ -276,3 +276,121 @@ ledger** (a treasury floor that gates restocks), loyalty tiers (an aggregate tha
 procurement/suppliers, tax, notifications, support, and end-of-day reporting —
 each owning a distinct history and a slice of the rule book. The objects fall out
 of this program; they are not designed before it.
+
+---
+
+## Object map — one day that touches the entire set
+
+A single composite business day routed through **every** state-owning object in
+*The histories the store keeps*, plus the policy/process objects that read and
+mutate them. The spine is one **completed** order (which alone touches ~21
+objects); a return and a midnight close reach the remainder; the Black-Friday
+rewrite is the dashed runtime broadcast.
+
+```mermaid
+flowchart TB
+  %% ── External stimuli ───────────────────────────────
+  subgraph EVENTS["External events"]
+    EV1["Order placed: last Black Tee,<br/>40 percent promo, part wallet part card"]
+    EV2["Return arrives: Trail Boot"]
+    EV3["Midnight tick"]
+    MOD["User: Black Friday rewrite"]
+  end
+
+  %% ── Decision / policy / process objects ────────────
+  subgraph LOGIC["Decision & policy objects"]
+    ORD["Order / Checkout"]
+    RISK["Risk Evaluator"]
+    RESTOCK["Restock Policy"]
+    PAYMT["Payments"]
+    FULFIL["Fulfillment"]
+    RET["Returns Intake"]
+    REPORT["Reporting / EOD Close"]
+  end
+
+  %% ── State-owning objects = the histories ───────────
+  subgraph STATE["State-owning objects — the histories"]
+    CAT["Catalog (product facts)"]
+    INV["Inventory (per-product stock)"]
+    SELL["Sell-through (7-day window)"]
+    PRICE["Pricing"]
+    PROMO["Promotions"]
+    BUDGET["Promo Budget (weekly cap)"]
+    LOY["Loyalty (lifetime spend, tier)"]
+    RR["Return Record (per customer)"]
+    WAL["Wallet (store credit)"]
+    STAND["Payment Standing (flags)"]
+    TREAS["Treasury (cash ledger)"]
+    CARR["Carriers (daily capacity)"]
+    PROC["Procurement (open POs)"]
+    TAX["Tax (accruals)"]
+    SUPPORT["Support (open cases)"]
+  end
+
+  %% ── Downstream / partners ──────────────────────────
+  subgraph DOWN["Downstream"]
+    NOTIF["Notifications"]
+    SUP["Suppliers"]
+  end
+
+  %% ── Order cascade (the spine) ──────────────────────
+  EV1 --> ORD
+  ORD -->|"look up item facts"| CAT
+  ORD -->|"reserve unit"| INV
+  INV -->|"on-hand at reorder point"| RESTOCK
+  ORD -->|"get current price"| PRICE
+  ORD -->|"apply active discount"| PROMO
+  ORD -->|"reserve discount vs cap"| BUDGET
+  ORD -->|"assess risk"| RISK
+  RISK -->|"read return rate"| RR
+  RISK -->|"read standing"| STAND
+  ORD -->|"redeem credit"| WAL
+  ORD -->|"charge remainder"| PAYMT
+  PAYMT -->|"verify card standing"| STAND
+  ORD -->|"record inflow"| TREAS
+  ORD -->|"recompute tier on complete"| LOY
+  ORD -->|"accrue sales tax"| TAX
+  ORD -->|"ship completed order"| FULFIL
+  FULFIL -->|"reserve express slot"| CARR
+  FULFIL -->|"no slot: open case"| SUPPORT
+  ORD -->|"confirm, shipped, tier change"| NOTIF
+
+  %% ── Restock cascade ────────────────────────────────
+  RESTOCK -->|"read 7-day sales"| SELL
+  RESTOCK -->|"reorder: create PO"| PROC
+  PROC -->|"request supplier payment"| TREAS
+  PROC -->|"place order"| SUP
+
+  %% ── Return cascade ─────────────────────────────────
+  EV2 --> RET
+  RET -->|"refund to card"| PAYMT
+  RET -->|"cash out"| TREAS
+  RET -->|"restore unit"| INV
+  RET -->|"update return record"| RR
+  RET -->|"reverse accrual"| TAX
+  RET -->|"refund notice"| NOTIF
+
+  %% ── End-of-day close ───────────────────────────────
+  EV3 --> REPORT
+  REPORT -->|"discounts vs budget"| BUDGET
+  REPORT -->|"reconcile cash"| TREAS
+  REPORT -->|"list stockouts"| INV
+  REPORT -->|"reset daily capacity"| CARR
+  REPORT -->|"roll 7-day windows"| SELL
+
+  %% ── Runtime rewrite (programmable-online) ──────────
+  MOD -.->|"triple weekly cap"| BUDGET
+  MOD -.->|"clearance restockable"| RESTOCK
+  MOD -.->|"express for all tiers"| FULFIL
+  MOD -.->|"suspend holds under 200"| RISK
+
+  classDef ev fill:#fff5d6,stroke:#caa23a,color:#333;
+  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
+  class EV1,EV2,EV3,MOD ev;
+  class CAT,INV,SELL,PRICE,PROMO,BUDGET,LOY,RR,WAL,STAND,TREAS,CARR,PROC,TAX,SUPPORT st;
+```
+
+**Reading it:** blue nodes are the histories (one per bullet above), green nodes
+are the policy/process objects that read and mutate them; solid edges are the
+normal-flow NL messages, the dashed edges are the single runtime `modify`
+broadcast rewriting four objects' rules while their state runs on.
