@@ -910,6 +910,42 @@ def publish_analysis_results(spec, post_events) -> None:
     spec.seed = _json.dumps(d)
 
 
+def _validate_gen(r: GeneratedScenarioSpec) -> bool:
+    """Infuse-response validation with SPECIFIC failure messages (fed back on retry)."""
+    if not r.threshold:
+        raise ValueError("threshold is empty")
+    if not _valid_seed(r.seed):
+        raise ValueError("seed is not a non-empty JSON object")
+    if not r.phrasings:
+        raise ValueError("phrasings are missing")
+    classifies = _re.search(r"\b(negative|positive|sentiment|spam|toxic)\b",
+                            f"{r.threshold} {r.description}", _re.I)
+    if classifies and not (r.analysis_field and r.analysis_terms and r.irrelevant_deco.strip()):
+        raise ValueError(
+            "this rule CLASSIFIES content, so analysis_field, analysis_terms (3-6 terms) and a "
+            "non-empty term-free irrelevant_deco are REQUIRED")
+    if r.analysis_terms:
+        for d in (r.decorations or []):
+            if not any(t.lower() in d.lower() for t in r.analysis_terms):
+                raise ValueError(
+                    f"decoration {d!r} contains NO analysis term — every decoration must embed "
+                    f"one of: {', '.join(r.analysis_terms)}")
+        if not r.irrelevant_deco.strip():
+            raise ValueError("irrelevant_deco is required (term-free content the analysis filters out)")
+        for t in r.analysis_terms:
+            if t.lower() in r.irrelevant_deco.lower():
+                raise ValueError(f"irrelevant_deco contains the analysis term {t!r} — it must match NONE")
+            for k in (r.keys or []):
+                if t.lower() in k.lower():
+                    raise ValueError(
+                        f"key {k!r} embeds the analysis term {t!r} — keys are entity names; the "
+                        f"term belongs in event text, not the key")
+    if not _build_scenario(r):
+        raise ValueError("the scenario builder produced no events from this response "
+                         "(check seed shape: counter needs entities/roster, key families need keys)")
+    return True
+
+
 def _process_template(llm, template: dict, prompt_template: str) -> tuple[WorkflowSpec, bool]:
     """INFUSE (before grounding): the LLM supplies ONLY realism — the invariant type/threshold,
     the structured seed, phrasing templates, and a decoration pool. CODE then builds the request
@@ -920,18 +956,9 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     gen = generate_with_retries(
         llm=llm, prompt=prompt, response_model=GeneratedScenarioSpec,
         item_id=template["id"],
-        # The LLM only needs to give a valid type/threshold, a JSON seed, and phrasing.
-        # The builder must be able to BUILD from the response (counter needs a rotation it can see —
-        # entities or a parseable roster; rate_limit needs a key). Retrying here is what catches a
-        # seed shape the code can't drive, instead of emitting a spec with 0 base events.
-        validator=lambda r: bool(r.threshold) and _valid_seed(r.seed) and bool(r.phrasings)
-        and not (_re.search(r"\b(negative|positive|sentiment|spam|toxic)\b",
-                            f"{r.threshold} {r.description}", _re.I)
-                 and not (r.analysis_field and r.analysis_terms and r.irrelevant_deco.strip()))
-        and not (r.analysis_terms and (not r.irrelevant_deco.strip() or any(
-            t.lower() in (k.lower() + " " + r.irrelevant_deco.lower())
-            for t in r.analysis_terms for k in (r.keys or [""]))))
-        and bool(_build_scenario(r)),
+        # Validator raises SPECIFIC messages — generate_with_retries feeds them back into the
+        # retry prompt, so the model can self-correct (a bare "Validation failed" cannot converge).
+        validator=_validate_gen,
     )
     if gen is None:
         return spec, False
