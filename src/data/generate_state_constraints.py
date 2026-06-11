@@ -521,8 +521,11 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
                     when=first_when[:-2] + f"{32 + bi * 3:02d}", role="base",
                     expect=EventExpect(
                         action=bd.action,
-                        reason=bd.reason or "this content matches a DIFFERENT handling path stated "
-                               "in the steps; it is handled there and never enters the gated count.")))
+                        # ALWAYS carry the canonical marker — the verifier's term-check exemption
+                        # keys on it, and an LLM-provided reason must not lose it
+                        reason=((bd.reason.rstrip(". ") + ". ") if bd.reason else "") +
+                               "This content matches a DIFFERENT handling path stated in the "
+                               "steps; it never enters the gated count.")))
     # FOLLOW-UP interaction (role="followup" phrasing): when the steps say the notified party
     # acts back (the assigned owner updates status from Slack), that interaction is a real event —
     # placed right after the first FIRED outcome, recorded against the open item (no new item)
