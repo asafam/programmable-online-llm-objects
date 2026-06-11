@@ -609,6 +609,10 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
             and (_sk(spec.seed, spec.key, spec.keys) or spec.key) == spec.key):
         mod_type = "correction"
 
+    # normalize the main key (an empty spec.key would make every key_= fallback collapse onto
+    # keys[0] — the root cause of two contextual runs landing on the same account)
+    if not spec.key and spec.keys:
+        spec.key = spec.keys[0]
     latest = max((_ev_abs_day(e.when) for e in spec.base_events if e.when), default=7)
     mod_abs = latest + 1                                     # mod fires after the whole base scenario
     mod_when = _abs_to_day(mod_abs) + "T10:30"
@@ -827,7 +831,7 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     spec.seed = gen.seed
     spec.phrasings = gen.phrasings
     spec.decorations = gen.decorations
-    spec.key = gen.key
+    spec.key = gen.key or (gen.keys[0] if gen.keys else "")
     spec.unit = gen.unit
     spec.entities = gen.entities
     spec.keys = gen.keys
