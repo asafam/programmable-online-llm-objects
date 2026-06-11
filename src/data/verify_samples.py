@@ -52,6 +52,10 @@ def deterministic_issues(s: Sample) -> list[str]:
     pre = [e for e in s.events if e.role == "pre_mod"]
     ct = getattr(sc.type, "value", sc.type) if sc else None
 
+    if not sc or not base:
+        # a state-scenario sample without an invariant (or with no base events) is a hollow
+        # fall-through from a failed infuse — it must never ship silently
+        issues.append("no state constraint / no base events (infuse failed; sample is hollow)")
     if sc:
         texts = [f"{e.expect.action} {e.expect.reason or ''}" for e in base if e.expect]
         issues += coherence_issues(texts, ct)

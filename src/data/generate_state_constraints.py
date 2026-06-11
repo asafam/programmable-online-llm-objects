@@ -702,8 +702,16 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
             roster = spec.entities or [r[0] for r in (_seed_reps(spec.seed) or [])]
             ex = roster[0] if roster else "the first member"
             events = run(old_thr, exempt=ex)
-        intent = (f"Starting now, {ex} is exempt from the {rule_noun} ({old_thr}); "
-                  f"every other {noun} remains subject to it as before.")
+        if ct == "trigger":
+            intent = (f"Starting now, {ex} is exempt from the quorum ESCALATION rule ({old_thr}) — "
+                      f"its occurrences are still recorded but never fire the {spec.unit or 'action'}; "
+                      f"every other {noun} escalates as before.")
+        elif ct == "dedup":
+            intent = (f"Starting now, {ex} is exempt from deduplication ({old_thr}) — its repeats "
+                      f"are all processed; every other {noun} is deduplicated as before.")
+        else:
+            intent = (f"Starting now, {ex} is exempt from the limit ({old_thr}); "
+                      f"every other {noun} remains subject to it as before.")
 
     elif mod_type == "removal":                       # the rule is retired entirely
         events = run(old_thr, rule_off=True)
@@ -879,6 +887,9 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
         # entities or a parseable roster; rate_limit needs a key). Retrying here is what catches a
         # seed shape the code can't drive, instead of emitting a spec with 0 base events.
         validator=lambda r: bool(r.threshold) and _valid_seed(r.seed) and bool(r.phrasings)
+        and not (_re.search(r"\b(negative|positive|sentiment|urgent|high[- ]priority|spam|toxic)\b",
+                            f"{r.threshold} {r.description}", _re.I)
+                 and not (r.analysis_field and r.analysis_terms and r.irrelevant_deco.strip()))
         and not (r.analysis_terms and (not r.irrelevant_deco.strip() or any(
             t.lower() in (k.lower() + " " + r.irrelevant_deco.lower())
             for t in r.analysis_terms for k in (r.keys or [""]))))

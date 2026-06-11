@@ -519,8 +519,11 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
     ordered = sorted(approve_events, key=lambda x: (x[0].when, x[0].id))
     for e, qid, amt, rep, mgr in ordered:
         key = rep if per_person else "__shared__"
+        cap_r = cap_for(rep) if per_person else cap
         total = totals.get(key, starting_total if (not per_person or rep == subm[0][0]) else 0)
         whose = f"{rep}'s" if per_person else "the"
+        cap_phrase = (f"their configured balance of {F(cap_r)}" if per_person and person_caps
+                      else f"{scope} {F(cap_r)} cap")
         per_note = f"; {unit} totals are PER PERSON — {rep}'s own budget, unaffected by anyone else's"             if per_person else ""
         if total + amt <= cap_r:
             totals[key] = total + amt
