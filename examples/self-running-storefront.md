@@ -279,106 +279,172 @@ of this program; they are not designed before it.
 
 ---
 
-## Object map — split by the stage each event passes through
+## Object map — the example as a sequence, split by stage
 
-Same full object set as before, but rendered as the separate cascades each event
-triggers, so no single diagram sprawls. Layout is left-to-right (`LR`) so every
-fan-out stacks **vertically** instead of spreading wide. Blue = histories
-(state); the rest are policy/process; dashed = the runtime rewrite.
+The same full object set, rendered as **sequence diagrams** of one composite
+business day (one completed order, a return, the midnight close, and the runtime
+rewrite). Split into the stages each event drives so no single diagram gets too
+wide; every object appears as a participant in at least one stage. External actors
+— Customer, Scheduler, User — sit outside the object set.
 
-### Stages at a glance
-
-```mermaid
-flowchart LR
-  EV1["Order placed"] --> S1["1 - Order / checkout"]
-  S1 -. "last unit at reorder point" .-> S2["2 - Restock & procurement"]
-  EV2["Return arrives"] --> S3["3 - Return"]
-  EV3["Midnight"] --> S4["4 - End-of-day close"]
-  MOD["Black Friday rewrite"] -. broadcast .-> S5["5 - Runtime rewrite"]
-```
-
-### 1 - Order / checkout cascade
+### Stage 1a - Order: decide & reserve
 
 ```mermaid
-flowchart LR
-  EV1["Order placed"] --> ORD["Order / Checkout"]
-  ORD -->|"look up"| CAT["Catalog"]
-  ORD -->|"reserve"| INV["Inventory"]
-  ORD -->|"price"| PRICE["Pricing"]
-  ORD -->|"discount"| PROMO["Promotions"]
-  ORD -->|"reserve vs cap"| BUDGET["Promo Budget"]
-  ORD -->|"assess"| RISK["Risk Evaluator"]
-  RISK -->|"returns"| RR["Return Record"]
-  RISK -->|"standing"| STAND["Payment Standing"]
-  ORD -->|"redeem"| WAL["Wallet"]
-  ORD -->|"charge"| PAYMT["Payments"]
-  PAYMT -->|"verify"| STAND
-  ORD -->|"inflow"| TREAS["Treasury"]
-  ORD -->|"tier"| LOY["Loyalty"]
-  ORD -->|"accrue"| TAX["Tax"]
-  ORD -->|"ship"| FULFIL["Fulfillment"]
-  FULFIL -->|"slot"| CARR["Carriers"]
-  FULFIL -->|"no slot: case"| SUPPORT["Support"]
-  ORD -->|"notify"| NOTIF["Notifications"]
-  INV -. "at reorder point" .-> RESTOCK["Restock - stage 2"]
-  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
-  class CAT,INV,PRICE,PROMO,BUDGET,RR,STAND,WAL,TREAS,LOY,TAX,CARR,SUPPORT st;
+sequenceDiagram
+  actor Cust as Customer
+  participant CO as Checkout
+  participant CAT as Catalog
+  participant INV as Inventory
+  participant PRC as Pricing
+  participant PRM as Promotions
+  participant BUD as Promo Budget
+  Cust->>CO: place order (last Black Tee, part wallet part card)
+  CO->>CAT: look up item facts
+  CAT-->>CO: category, cost, clearance=no
+  CO->>INV: reserve 1 unit
+  INV-->>CO: reserved
+  Note over INV: on-hand reaches reorder point -> triggers Restock (stage 2)
+  CO->>PRC: current price
+  PRC-->>CO: unit price
+  CO->>PRM: active discount?
+  PRM-->>CO: 40 percent off
+  CO->>BUD: reserve discount vs weekly cap
+  BUD-->>CO: granted (within cap)
 ```
 
-### 2 - Restock & procurement
+### Stage 1b - Order: risk gate, pay & complete
 
 ```mermaid
-flowchart LR
-  RESTOCK["Restock Policy"] -->|"read 7-day sales"| SELL["Sell-through"]
-  RESTOCK -->|"create PO"| PROC["Procurement"]
-  PROC -->|"request payment"| TREAS["Treasury"]
-  PROC -->|"place order"| SUP["Suppliers"]
-  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
-  class SELL,PROC,TREAS st;
+sequenceDiagram
+  participant CO as Checkout
+  participant RSK as Risk
+  participant RR as Return Record
+  participant STD as Payment Standing
+  participant WAL as Wallet
+  participant PAY as Payments
+  participant TRE as Treasury
+  participant LOY as Loyalty
+  participant TAX as Tax
+  CO->>RSK: assess customer
+  RSK->>RR: read return rate
+  RR-->>RSK: 1 of 10
+  RSK->>STD: read standing
+  STD-->>RSK: clean
+  RSK-->>CO: allow (not elevated-risk)
+  CO->>WAL: redeem store credit
+  WAL-->>CO: balance debited
+  CO->>PAY: charge remainder to card
+  PAY->>STD: verify card standing
+  STD-->>PAY: ok
+  PAY-->>CO: captured
+  CO->>TRE: record cash inflow
+  CO->>LOY: recompute tier on complete
+  LOY-->>CO: promoted to Gold
+  CO->>TAX: accrue sales tax
 ```
 
-### 3 - Return cascade
+### Stage 1c - Order: ship & notify
 
 ```mermaid
-flowchart LR
-  EV2["Return arrives"] --> RET["Returns Intake"]
-  RET -->|"refund"| PAYMT["Payments"]
-  RET -->|"cash out"| TREAS["Treasury"]
-  RET -->|"restore unit"| INV["Inventory"]
-  RET -->|"update"| RR["Return Record"]
-  RET -->|"reverse"| TAX["Tax"]
-  RET -->|"notice"| NOTIF["Notifications"]
-  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
-  class TREAS,INV,RR,TAX st;
+sequenceDiagram
+  participant CO as Checkout
+  participant FUL as Fulfillment
+  participant CAR as Carriers
+  participant SUP as Support
+  participant NOT as Notifications
+  CO->>FUL: ship completed order (Gold means express)
+  FUL->>CAR: reserve express slot
+  alt slot available
+    CAR-->>FUL: reserved (capacity decremented)
+    FUL-->>CO: shipped
+  else no capacity today
+    CAR-->>FUL: none left
+    FUL->>SUP: open delay case
+    FUL->>NOT: notify customer of delay
+  end
+  CO->>NOT: confirm order + tier change
 ```
 
-### 4 - End-of-day close
+### Stage 2 - Restock & procurement (triggered by stage 1a)
 
 ```mermaid
-flowchart LR
-  EV3["Midnight"] --> REPORT["Reporting / Close"]
-  REPORT -->|"discounts vs budget"| BUDGET["Promo Budget"]
-  REPORT -->|"reconcile"| TREAS["Treasury"]
-  REPORT -->|"stockouts"| INV["Inventory"]
-  REPORT -->|"reset capacity"| CARR["Carriers"]
-  REPORT -->|"roll windows"| SELL["Sell-through"]
-  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
-  class BUDGET,TREAS,INV,CARR,SELL st;
+sequenceDiagram
+  participant INV as Inventory
+  participant RST as Restock Policy
+  participant SLL as Sell-through
+  participant PRO as Procurement
+  participant TRE as Treasury
+  participant VEN as Suppliers
+  INV->>RST: on-hand at reorder point
+  RST->>SLL: read 7-day sales
+  SLL-->>RST: steady seller (above threshold)
+  RST->>PRO: create purchase order
+  PRO->>TRE: request supplier payment
+  alt cash above floor
+    TRE-->>PRO: approved
+    PRO->>VEN: place order
+  else below floor
+    TRE-->>PRO: payment deferred
+    Note over PRO: PO created, payment held until settlements
+  end
 ```
 
-### 5 - Runtime rewrite (programmable-online)
+### Stage 3 - Return
 
 ```mermaid
-flowchart LR
-  MOD["Black Friday rewrite"] -.->|"triple cap"| BUDGET["Promo Budget"]
-  MOD -.->|"clearance restockable"| RESTOCK["Restock Policy"]
-  MOD -.->|"express for all"| FULFIL["Fulfillment"]
-  MOD -.->|"suspend holds under 200"| RISK["Risk Evaluator"]
-  classDef st fill:#e8edff,stroke:#5566aa,color:#222;
-  class BUDGET st;
+sequenceDiagram
+  actor Cust as Customer
+  participant RET as Returns Intake
+  participant PAY as Payments
+  participant TRE as Treasury
+  participant INV as Inventory
+  participant RR as Return Record
+  participant TAX as Tax
+  participant NOT as Notifications
+  Cust->>RET: return item (undamaged)
+  RET->>PAY: refund to original method
+  PAY->>TRE: cash out
+  RET->>INV: restore unit to stock
+  RET->>RR: update return record
+  RET->>TAX: reverse accrual
+  RET->>NOT: refund notice
 ```
 
-Across the five stages the same ~24 objects recur; every history (blue) is
-touched at least once, and `Treasury`, `Inventory`, and `Sell-through` recur
-across stages — which is exactly why they are single shared owners, not per-event
-copies.
+### Stage 4 - End-of-day close
+
+```mermaid
+sequenceDiagram
+  participant SCH as Scheduler
+  participant REP as Reporting
+  participant BUD as Promo Budget
+  participant TRE as Treasury
+  participant INV as Inventory
+  participant CAR as Carriers
+  participant SLL as Sell-through
+  SCH->>REP: midnight tick
+  REP->>BUD: discounts given vs budget
+  REP->>TRE: reconcile cash
+  REP->>INV: list stockouts
+  REP->>CAR: reset daily capacity
+  REP->>SLL: roll 7-day windows
+```
+
+### Stage 5 - Runtime rewrite (programmable-online)
+
+```mermaid
+sequenceDiagram
+  actor User
+  participant BUD as Promo Budget
+  participant RST as Restock Policy
+  participant FUL as Fulfillment
+  participant RSK as Risk
+  User->>BUD: triple weekly cap
+  User->>RST: treat clearance as restockable
+  User->>FUL: express for all tiers
+  User->>RSK: suspend holds under 200
+  Note over BUD,RSK: rules change at runtime; the long-running state runs on
+```
+
+Across the stages the same ~24 objects recur as participants; `Treasury`,
+`Inventory`, and `Sell-through` reappear in several stages — which is exactly why
+they are single shared owners, not per-event copies.
