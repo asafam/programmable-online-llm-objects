@@ -209,7 +209,7 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                 e.expect = EventExpect(
                     action=_fill_outcome(outcomes, "allowed",
                         f"the {unit} for {k} is within the limit and IS performed ({_ev_ref(e)}).",
-                        ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
+                        ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k) or "the configured recipient"),
                     reason=why)
             else:
                 lead = (f"the rolling-window limit was retired by the modification, so the {unit} "
@@ -221,13 +221,13 @@ def build_rate_limit_scenario(seed: str, threshold: str, key: str, phrase,
                 e.expect = EventExpect(
                     action=_fill_outcome(outcomes, "allowed",
                         f"the {unit} for {k} is within the limit and IS performed ({_ev_ref(e)}).",
-                        ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
+                        ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k) or "the configured recipient"),
                     reason=f"{lead}{note}{flip}")
         else:
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "blocked",
                     f"the {unit} for {k} ({_ev_ref(e)}) is NOT performed — it is blocked by the rolling-window limit.",
-                    ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
+                    ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k) or "the configured recipient"),
                 reason=f"{in_window} {unit}(s) were already done for {k} within the last {DAYS} (the "
                        f"limit of {N}), so a new one is blocked until that key's window clears.")
         out.append(e)
@@ -302,7 +302,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                 action=_fill_outcome(outcomes, "consolidated",
                     f"{_ev_ref(e)} is logged against the {unit} already issued for {k}; "
                     f"NO new {unit} fires.",
-                    ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
+                    ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k) or "the configured recipient"),
                 reason=f"a {unit} for {k} was already issued {ago} day(s) ago; until its {DAYS} "
                        f"window clears, further occurrences are only logged against that record — "
                        f"no new {unit} is started.")
@@ -316,7 +316,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                     f"fires it." if flip_old_limit and c < flip_old_limit else "")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "fired",
-                    f"the {unit} FIRES for {k} ({_ev_ref(e)}).", ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
+                    f"the {unit} FIRES for {k} ({_ev_ref(e)}).", ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k) or "the configured recipient"),
                 reason=f"this is occurrence #{c} for {k} within the last {DAYS} — the quorum of {N} "
                        f"is reached, so the {unit} fires and {k}'s count resets. The fired {unit} "
                        f"covers ALL of {k}'s occurrences accumulated in the window, not only this "
@@ -348,7 +348,7 @@ def build_trigger_scenario(seed: str, threshold: str, key: str, phrase,
                     f"of {N}; counts are PER key.")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "recorded",
-                    f"{_ev_ref(e)} is recorded for {k}; NO {unit} fires.", ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
+                    f"{_ev_ref(e)} is recorded for {k}; NO {unit} fires.", ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k) or "the configured recipient"),
                 reason=f"{lead}{flip}")
         out.append(e)
     return out
@@ -407,7 +407,7 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
                 action=_fill_outcome(outcomes, "ignored",
                     f"{_ev_ref(e)} is recognized as a DUPLICATE and merged into the open {unit} "
                     f"for {k}; no new {unit} is created.",
-                    ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
+                    ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k) or "the configured recipient"),
                 reason=f"an identical {unit} for {k} was processed only {delta} minute(s) ago — "
                        f"within the {WTXT} dedup window, so this one is handled as a duplicate "
                        f"(merged, not re-processed).")
@@ -439,7 +439,7 @@ def build_dedup_scenario(seed: str, threshold: str, key: str, phrase,
                     f"no {unit} for {k} was processed within the last {WTXT}; dedup is PER key.")
             e.expect = EventExpect(
                 action=_fill_outcome(outcomes, "allowed",
-                    f"the {unit} {_ev_ref(e)} IS processed.", ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k, "")),
+                    f"the {unit} {_ev_ref(e)} IS processed.", ID=_ev_ref(e), KEY=k, CONTACT=(contacts or {}).get(k) or "the configured recipient"),
                 reason=f"{lead}{note}{flip}")
         out.append(e)
     return out
@@ -506,7 +506,7 @@ def build_cap_scenario(seed: str, threshold: str, submit_phrase, approve_phrase,
     pair_seen = 0
     for j, (qid, amt, is_pair, rep, mgr) in enumerate(quotes):
         if is_pair:
-            when = f"W{week:02d}-{day}T13:{pair_seen * 5:02d}"
+            when = f"W{week:02d}-{day}T14:{pair_seen * 5:02d}"
             pair_seen += 1
         else:
             when = f"W{week:02d}-{day}T{10 + j:02d}:30"

@@ -755,7 +755,10 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
         # correction/temporal/expansion any tracked key works (fresh state, under every limit)
         irr_key = next((k for k in (spec.keys or []) if k != affected_key),
                        spec.key if spec.key != affected_key else (other or spec.key))
-        deco = spec.irrelevant_deco or (spec.decorations or [""])[0]
+        # for analysis workflows NEVER fall back to a decoration — those carry counting terms
+        deco = spec.irrelevant_deco or (
+            f"with a routine, clearly neutral mention of {irr_key} (no qualifying terms)"
+            if spec.analysis_field else (spec.decorations or [""])[0])
         irr_input = (req.replace("{ID}", irr_id).replace("{KEY}", irr_key)
                         .replace("{AMOUNT}", "500").replace("{DECO}", deco))
         irr_input = _re.sub(r"\{[A-Z_]+\}", "", irr_input).strip()
@@ -822,6 +825,9 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
         # entities or a parseable roster; rate_limit needs a key). Retrying here is what catches a
         # seed shape the code can't drive, instead of emitting a spec with 0 base events.
         validator=lambda r: bool(r.threshold) and _valid_seed(r.seed) and bool(r.phrasings)
+        and not (r.analysis_terms and (not r.irrelevant_deco.strip() or any(
+            t.lower() in (k.lower() + " " + r.irrelevant_deco.lower())
+            for t in r.analysis_terms for k in (r.keys or [""]))))
         and bool(_build_scenario(r)),
     )
     if gen is None:

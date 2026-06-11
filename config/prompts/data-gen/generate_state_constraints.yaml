@@ -173,7 +173,10 @@ user_prompt: |
      ("lawsuit", "outage", "refund refused"). EVERY counting event's content must contain at
      least one term (put them in the decorations/request content); `irrelevant_deco` provides one
      clearly NON-matching content (a positive mention, no terms) for the event the analysis
-     filters out — so not everything in the scenario is the same sentiment. Code publishes the
+     filters out — so not everything in the scenario is the same sentiment. The tracked `keys`
+     are ENTITY names (brands, products, accounts) and must NOT embed any analysis term
+     ("AcmeCloud", never "AcmeCloud outage" — the term belongs in the event text, the key is what
+     the term is ABOUT). Code publishes the
      rules as seed.analysis_rules; the analysis service's behavior must SAY it applies those
      seeded rules to the text. Leave all empty when no step analyzes.
      ANALYSIS CRITERIA IN SEED: the seed must also DEFINE what the analysis is applied against —
@@ -203,7 +206,10 @@ user_prompt: |
      Decorations MUST be ENTITY-NEUTRAL: never name a seed entity (a rep, SKU, subscription, contact,
      channel) — code pairs {KEY}/{ENTITY} with decorations INDEPENDENTLY, so an entity-bearing
      decoration creates contradictions (e.g. a reminder for contact A decorated with contact B's
-     subscription). Invent outside flavor (customers, products, reasons) instead.
+     subscription). The same applies to IMPLYING a key: when keys are topics/categories, a
+     decoration must not contain another topic's tell-tale content ("sso loop" decorating a
+     vpn-access request mislabels it). Invent outside flavor (customers, products, reasons) that
+     fits ANY key equally.
 
   8. `entities` — counter ONLY: the rotation members IN ORDER, as a flat list of names EXACTLY as
      they appear in the seed (any domain — reps, channels, agents, queues): e.g.
