@@ -146,9 +146,10 @@ def deterministic_issues(s: Sample) -> list[str]:
         if obj_mentioned and len(obj_mentioned) < len(ents):
             issues.append(f"object behaviors specialize to {obj_mentioned} but the invariant covers all of {ents}")
 
-    # events are RAW STIMULI — "is detected/captured/processed" is the system's job, not the event's
+    # events are RAW STIMULI — detection AND outcomes are the system's job, never in the input
     processed = [e.id for e in s.events if e.role in ("base", "post_mod")
-                 and re.search(r"\bis (detected|captured|processed|triaged)\b", e.input, re.I)]
+                 and (re.search(r"\bis (detected|captured|processed|triaged)\b", e.input, re.I)
+                      or re.search(r"\bIS (appended|added|recorded|sent|posted|created)\b", e.input))]
     if processed:
         issues.append(f"events phrased as system processing, not raw stimulus: {processed[:4]}")
 
@@ -182,8 +183,11 @@ def deterministic_issues(s: Sample) -> list[str]:
     if s.seed and '"analysis_rules"' in s.seed:
         try:
             rules = json.loads(s.seed).get("analysis_rules") or {}
-            terms = [t.lower() for r in rules.values()
-                     for t in (r.get("value_when_text_contains") or [])]
+            terms = []
+            for r in rules.values():
+                terms += [t.lower() for t in (r.get("value_when_text_contains") or [])]
+                for ts in (r.get("value_when_text_contains_by_value") or {}).values():
+                    terms += [t.lower() for t in ts]
             if terms:
                 untermed = [e.id for e in s.events if e.role in ("base", "post_mod")
                             and not any(t in e.input.lower() for t in terms)
@@ -213,6 +217,15 @@ def deterministic_issues(s: Sample) -> list[str]:
                 issues.append(f"analysis_results has stale entries for non-events: {stale[:4]}")
         except Exception:
             pass
+
+    # emails baked into object behaviors must exist in the seed (the wiring guarantee: the
+    # address an object acts on IS seed data, reachable by every read service)
+    if s.seed:
+        seed_emails = set(re.findall(r"[\w.+-]+@[\w.-]+", s.seed))
+        for o in s.objects:
+            for em in set(re.findall(r"[\w.+-]+@[\w.-]+", f"{o.behavior or ''}")):
+                if em not in seed_emails:
+                    issues.append(f"object {o.object_id} behavior emails {em} — address absent from the seed")
 
     # cap: the approval request is emailed to the manager — approvers must carry email addresses
     if ct == "cap" and s.seed:

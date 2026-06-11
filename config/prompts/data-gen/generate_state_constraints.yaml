@@ -119,7 +119,9 @@ user_prompt: |
         — all filled by code from the seed's sales_reps.)
      role="followup" (OPTIONAL): when a step says the notified party acts BACK (the assigned
      owner updates status from Slack), provide the phrasing for that inbound interaction — and
-     prefer the FULL lifecycle: the follow-up RESOLVES the item ("{CONTACT} replies in {KEY}'s
+     prefer the FULL lifecycle (and the follow-up is a RAW stimulus: what the person says/does —
+     its downstream effects like "the solution is appended to the KB" belong in the EXPECT, never
+     in the event text): the follow-up RESOLVES the item ("{CONTACT} replies in {KEY}'s
      support channel marking the ticket RESOLVED with the fix notes"), and the outcome states the
      downstream effects the steps promise (the resolution is appended to the knowledge base via
      its write tool). An item that is opened but never resolved leaves the KB-update step
@@ -189,6 +191,14 @@ user_prompt: |
      the term is ABOUT). Code publishes the
      rules as seed.analysis_rules; the analysis service's behavior must SAY it applies those
      seeded rules to the text. Leave all empty when no step analyzes.
+     EVERY VALUE HAS RULES — `analysis_values`: the rules must define EVERY classification value
+     the workflow acts on, not only the counting one ({"positive": ["praise","wins","commended"]}
+     when positive mentions post to a wins channel). A value the workflow routes on with no rule
+     behind it is unclassifiable.
+     KEYS DERIVED FROM CONTENT — `key_contents`: when the classification DETERMINES the key
+     (topic routing), provide per-key content fragments ({"account-lockout": ["locked out of my
+     account after three attempts", ...]}) — the event text carries ONLY such content (never the
+     key/topic name; remove {KEY} from the request template) and the system must categorize it.
      ANALYSIS CRITERIA IN SEED: the seed must also DEFINE what the analysis is applied against —
      the monitored topics, priority rules, category definitions — like any signal→action mapping.
      analysis_field must be the EXACT classification the steps perform (topic, priority,

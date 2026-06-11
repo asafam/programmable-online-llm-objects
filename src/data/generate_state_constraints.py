@@ -395,7 +395,7 @@ def _first_key(seed_str: str):
 
 def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
                  entities=None, keys=None, contacts=None, cap_scope="shared",
-                 person_caps=None, qty_noun="", **kw) -> list:
+                 person_caps=None, qty_noun="", key_contents=None, **kw) -> list:
     """Construct the phrase closures from the LLM's phrasing templates + decorations, then call
     the family builder. Shared by the base scenario AND the modification scenario.
     `entities` (counter) / `keys` (rate_limit) are the LLM-named domain values — the builders use
@@ -412,11 +412,17 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
             s = s.replace("{" + k + "}", str(v))
         return _re.sub(r"\{[A-Z_]+\}", "", s).strip()
 
-    def deco_for(idstr):
-        if not decos:
+    def deco_for(idstr, kk=None):
+        # key-implying content (topic classification): the event text carries content that the
+        # system must CLASSIFY into the key — the pool is per-key, and {KEY} never appears
+        if kk is not None and key_contents and key_contents.get(kk):
+            pool = key_contents[kk]
+        elif not decos:
             return ""
+        else:
+            pool = decos
         m = _re.search(r"\d+", idstr or "")
-        return decos[(int(m.group()) if m else 0) % len(decos)]
+        return pool[(int(m.group()) if m else 0) % len(pool)]
 
     def amount_for(idstr):
         m = _re.search(r"\d+", idstr or "")
@@ -439,21 +445,21 @@ def _run_builder(ct, seed, threshold, phrasings, decorations, key="", unit="",
     if ct == "rate_limit":
         req = tmpl.get("request") or "A request {ID} arrives for {KEY} {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid))
+        phrase = lambda rid, blk, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk))
         return build_rate_limit_scenario(seed, threshold, k, phrase,
                                          outcomes=tmpl, unit=unit or "request", keys=keys, contacts=contacts, **kw)
     if ct == "trigger":
         from src.data.scenario_builder import build_trigger_scenario
         req = tmpl.get("request") or "An event {ID} for {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid))
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk))
         return build_trigger_scenario(seed, threshold, k, phrase,
                                       outcomes=tmpl, unit=unit or "escalation", keys=keys, contacts=contacts, **kw)
     if ct == "dedup":
         from src.data.scenario_builder import build_dedup_scenario
         req = tmpl.get("request") or "A report {ID} about {KEY} arrives {DECO}."
         k = key or (keys[0] if keys else None) or _first_key(seed) or "KEY-1"
-        phrase = lambda rid, kk: fill(req, ID=rid, KEY=kk, AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid))
+        phrase = lambda rid, kk: fill(req, ID=rid, KEY=("" if key_contents else kk), AMOUNT=amount_for(rid), SUBMITTER=submitter_for(rid), DECO=deco_for(rid, kk))
         return build_dedup_scenario(seed, threshold, k, phrase,
                                     outcomes=tmpl, unit=unit or "report", keys=keys, contacts=contacts, **kw)
     if ct == "cap":
@@ -483,7 +489,8 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
     events = _run_builder(getattr(gen.constraint_type, "value", gen.constraint_type),
                           gen.seed, gen.threshold, gen.phrasings, gen.decorations, gen.key, gen.unit,
                           entities=gen.entities, keys=gen.keys, contacts=gen.key_contacts,
-                          cap_scope=gen.cap_scope, person_caps=gen.person_caps, qty_noun=gen.qty_noun)
+                          cap_scope=gen.cap_scope, person_caps=gen.person_caps, qty_noun=gen.qty_noun,
+                        key_contents=gen.key_contents)
     if events and gen.analysis_field and gen.irrelevant_deco:
         tmpl = {p.role: p.template for p in gen.phrasings}
         req = tmpl.get("request")
@@ -727,7 +734,8 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
         return _run_builder(ct, spec.seed, thr, spec.phrasings, spec.decorations,
                             key_ or spec.key, spec.unit, entities=spec.entities, keys=spec.keys,
                             contacts=spec.key_contacts, cap_scope=spec.cap_scope,
-                            person_caps=spec.person_caps, qty_noun=spec.qty_noun, **kw)
+                            person_caps=spec.person_caps, qty_noun=spec.qty_noun,
+                            key_contents=spec.key_contents, **kw)
 
     noun = {"counter": "member", "cap": "rep"}.get(ct, "key")
     rule_noun = {"trigger": "quorum", "dedup": "deduplication"}.get(ct, "limit")
@@ -905,8 +913,10 @@ def publish_analysis_results(spec, post_events) -> None:
     label = spec.analysis_label or "matching"
     # RULES-BASED: the analysis maps TEXT CONTENT to the result (a term in the text implies the
     # label), not event ids — the analysis service applies these rules to whatever text it is given
+    values = {label: list(spec.analysis_terms) or [label]}
+    values.update({v: list(ts) for v, ts in (spec.analysis_values or {}).items()})
     d["analysis_rules"] = {spec.analysis_field: {
-        "value_when_text_contains": list(spec.analysis_terms) or [label],
+        "value_when_text_contains_by_value": values,
         "otherwise": "neutral",
     }}
     d.pop("analysis_results", None)
@@ -943,6 +953,24 @@ def _validate_gen(r: GeneratedScenarioSpec) -> bool:
                     raise ValueError(
                         f"key {k!r} embeds the analysis term {t!r} — keys are entity names; the "
                         f"term belongs in event text, not the key")
+    if r.key_contents:
+        req_t = next((p.template for p in r.phrasings if p.role in ("request", "submit")), "")
+        if "{KEY}" in req_t:
+            raise ValueError(
+                "key_contents is declared (the system must CLASSIFY content into the key), but the "
+                "request template still contains {KEY} — remove it; the content implies the key")
+        for k in (r.keys or []):
+            if not r.key_contents.get(k):
+                raise ValueError(f"key_contents is missing content fragments for key {k!r}")
+    if (r.analysis_terms or r.analysis_values) and r.branch_demos:
+        all_terms = {v.lower() for ts in ([r.analysis_terms] + list((r.analysis_values or {}).values()))
+                     for v in ts}
+        for bd in r.branch_demos:
+            if all_terms and not any(t in bd.content.lower() for t in all_terms):
+                raise ValueError(
+                    f"branch demo {bd.content!r} matches no declared value's terms — every "
+                    f"classification value the workflow acts on needs terms in analysis_values, "
+                    f"and the demo content must contain one")
     if not _build_scenario(r):
         raise ValueError("the scenario builder produced no events from this response "
                          "(check seed shape: counter needs entities/roster, key families need keys)")
@@ -981,6 +1009,8 @@ def _process_template(llm, template: dict, prompt_template: str) -> tuple[Workfl
     spec.analysis_terms = gen.analysis_terms
     spec.irrelevant_deco = gen.irrelevant_deco
     spec.branch_demos = gen.branch_demos
+    spec.analysis_values = gen.analysis_values
+    spec.key_contents = gen.key_contents
     spec.cap_scope = gen.cap_scope
     spec.person_caps = gen.person_caps
     spec.qty_noun = gen.qty_noun
