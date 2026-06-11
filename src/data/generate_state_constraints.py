@@ -618,7 +618,8 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
             k = gen.key or (gen.keys[0] if gen.keys else "")
             contact = (gen.key_contacts or {}).get(k) or "the assigned owner"
             m_ref = _re.search(r"\b(?:REQ|Q|LD)[-\d]+\b", events[fired_idx].input or "")
-            fired_id = m_ref.group(0) if m_ref else "the open item"
+            # never reference an id that exists nowhere: fall back to a composable phrase
+            fired_id = m_ref.group(0) if m_ref else f"for {k}"
             txt = _fill_free(fu, ID=fired_id, KEY=k, CONTACT=contact)
             when = events[fired_idx].when or "W01-1T12:00"
             hh = int(when.split("T")[1][:2]) + 1
@@ -627,9 +628,10 @@ def _build_scenario(gen: GeneratedScenarioSpec) -> list:
                 when=f"{when.split('T')[0]}T{hh:02d}:00", role="base",
                 expect=EventExpect(
                     action=f"the status update from {contact} is recorded against the open "
-                           f"{gen.unit or 'item'} created for {fired_id} ({k}), and the submitting "
-                           f"user is notified of the change in Slack; NO new "
-                           f"{gen.unit or 'item'} is created."
+                           f"{k} {gen.unit or 'item'}"
+                           + (f" ({fired_id})" if not fired_id.startswith("for ") else "")
+                           + ", and the submitting user is notified of the change in Slack; "
+                             f"NO new {gen.unit or 'item'} is created."
                            + (" The resolution is appended to the knowledge base for future "
                               "reference, per the workflow." if "knowledge" in
                               (gen.seed + " ".join(q.template for q in gen.phrasings)).lower()
@@ -959,11 +961,12 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
                                SUBMITTER=ppl_irr[-1],
                                DECO=("" if has_kc_irr else deco), KEY_CONTENT=deco)
         tmplx = {p.role: p.template for p in spec.phrasings}
+        irr_ref = irr_id if irr_id in irr_input else "the request"
         if spec.analysis_field:
             base_out = _fill_outcome(tmplx, "recorded",
-                f"{irr_id} is recorded and handled per its classification.",
-                ID=irr_id, KEY=irr_key, CONTACT=(spec.key_contacts or {}).get(irr_key, ""))
-            ok_act = (f"{irr_id} is analyzed against the seeded {spec.analysis_field} rules and "
+                f"{irr_ref} is recorded and handled per its classification.",
+                ID=irr_ref, KEY=irr_key, CONTACT=(spec.key_contacts or {}).get(irr_key, ""))
+            ok_act = (f"{irr_ref} is analyzed against the seeded {spec.analysis_field} rules and "
                       f"handled accordingly: {base_out}")
         else:
             ok_act = {"counter": f"{irr_id} IS assigned to the next available member in rotation and posted normally.",
@@ -978,7 +981,8 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
                 action=ok_act,
                 reason=f"under BOTH the original rule and the modification this request is handled "
                        f"identically (fresh state, well within every limit), so the modification "
-                       f"does not affect it — its outcome is exactly what it would have been before.")))
+                       f"does not affect it — its outcome is exactly what it would have been before."
+                       f"{' [scoped by key: ' + irr_key + ']' if (spec.key_contents or spec.keys) else ''}")))
     return intent, mod_when, events
 
 

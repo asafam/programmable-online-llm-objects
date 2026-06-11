@@ -221,6 +221,7 @@ def deterministic_issues(s: Sample) -> list[str]:
                     bv = r.get("value_when_text_contains_by_value") or {}
                     counting += [t.lower() for t in (bv.get(cv) or r.get("value_when_text_contains") or [])]
                 bad_irr = [e.id for e in s.events if e.role == "irrelevant"
+                           and "scoped by key" not in ((e.expect.reason if e.expect else "") or "")
                            and any(t in e.input.lower() for t in counting)]
                 if bad_irr:
                     issues.append(f"irrelevant event text matches a counting-value term: {bad_irr}")
