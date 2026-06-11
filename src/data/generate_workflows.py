@@ -114,7 +114,11 @@ def _ground_template(llm, template: dict, prompt_cfg: dict, seed: str = "",
             "- The workflow COVERS ALL PEERS: when the seed lists multiple peer entities (channels, "
             "reps, categories, contacts), the workflow monitors/serves ALL of them equally — do NOT "
             "specialize any step to a single one (not 'monitor #eng-platform' when the seed has three "
-            "channels; write 'monitor each configured channel')."
+            "channels; write 'monitor each configured channel').\n"
+            "- HANDOFFS LAND ON NAMED PARTIES: when the workflow routes to a queue/team/channel, a "
+            "step must state WHO becomes associated with the request — the queue's serving "
+            "specialist/owner per the seed is assigned (or notified by name) and owns the follow-up. "
+            "A notification into a channel with nobody behind it is an unfinished procedure."
         )
     if constraint:
         prompt += (

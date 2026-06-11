@@ -63,6 +63,14 @@ prompt: |
 
      A Custodian's `behavior` describes that single-message decision: read the current entry → (lazily reset/age it if its window or period expired) → check against the cap → maintain the accumulator in its own state and reply. Use **reserve → confirm / release** when a fallible/slow step follows the check at the *requester* (reserve holds the amount against the cap; the requester later asks for `confirm` on success or `release` on failure), or a single **admit + commit** when nothing fallible follows (e.g. round-robin assignment). For time-bounded counts, prefer a **lazy** window reset (drop/zero expired entries on touch).
 
+  ### Named handoffs
+
+  Every HANDOFF the steps describe must land on a NAMED party: if requests are routed to a
+  queue/team/channel, somebody serves it — the seed defines WHO (named specialists/owners per
+  queue), and a step states the association explicitly (the queue's specialist from the seed is
+  assigned / notified and updates status). "The queue receives a notification" with no person
+  behind it is an unfinished workflow.
+
   ### Mandatory checklist
 
   Before writing any objects, answer these four questions:
