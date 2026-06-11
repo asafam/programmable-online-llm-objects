@@ -196,10 +196,17 @@ def deterministic_issues(s: Sample) -> list[str]:
                             and "DIFFERENT handling path" not in ((e.expect.reason if e.expect else "") or "")]
                 if untermed:
                     issues.append(f"analysis events whose text matches NO rule term: {untermed[:4]}")
+                # the IRR must not match the COUNTING value's terms; other values'/topics'
+                # terms are fine (a normal request for an unaffected topic carries its content)
+                counting = []
+                for r in rules.values():
+                    cv = r.get("counting_value")
+                    bv = r.get("value_when_text_contains_by_value") or {}
+                    counting += [t.lower() for t in (bv.get(cv) or r.get("value_when_text_contains") or [])]
                 bad_irr = [e.id for e in s.events if e.role == "irrelevant"
-                           and any(t in e.input.lower() for t in terms)]
+                           and any(t in e.input.lower() for t in counting)]
                 if bad_irr:
-                    issues.append(f"irrelevant event text matches a counting rule term: {bad_irr}")
+                    issues.append(f"irrelevant event text matches a counting-value term: {bad_irr}")
         except Exception:
             pass
 

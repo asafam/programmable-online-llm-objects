@@ -917,6 +917,7 @@ def publish_analysis_results(spec, post_events) -> None:
     values.update({v: list(ts) for v, ts in (spec.analysis_values or {}).items()})
     d["analysis_rules"] = {spec.analysis_field: {
         "value_when_text_contains_by_value": values,
+        "counting_value": label,
         "otherwise": "neutral",
     }}
     d.pop("analysis_results", None)
@@ -940,10 +941,19 @@ def _validate_gen(r: GeneratedScenarioSpec) -> bool:
         p.append("this rule CLASSIFIES content, so analysis_field, analysis_terms (3-6 terms) "
                  "and a non-empty term-free irrelevant_deco are ALL required")
     if r.analysis_terms:
-        for d in (r.decorations or []):
-            if not any(t.lower() in d.lower() for t in r.analysis_terms):
-                p.append(f"decoration {d!r} contains NO analysis term — every decoration must "
-                         f"embed one of: {', '.join(r.analysis_terms)}")
+        if r.key_contents:
+            # with key_contents the builder sources event content from the per-key fragments —
+            # decorations are unused venue flavor; the COUNTING terms must live in the fragments
+            for k, frs in r.key_contents.items():
+                for fr in frs:
+                    if not any(t.lower() in fr.lower() for t in r.analysis_terms):
+                        p.append(f"key_contents[{k!r}] fragment {fr!r} contains NO counting term — "
+                                 f"each fragment must embed one of: {', '.join(r.analysis_terms)}")
+        else:
+            for d in (r.decorations or []):
+                if not any(t.lower() in d.lower() for t in r.analysis_terms):
+                    p.append(f"decoration {d!r} contains NO analysis term — every decoration must "
+                             f"embed one of: {', '.join(r.analysis_terms)}")
         if not r.irrelevant_deco.strip():
             p.append("irrelevant_deco is required (term-free content the analysis filters out)")
         else:
