@@ -168,6 +168,12 @@ class SystemConfig:
     # enable_replan_checkpoints; safe to enable either, both, or neither.
     enable_step_retry_replan: bool = True
     step_max_retries: int = 2
+    # Replan-on-modification: when an admin modification patches a definition,
+    # mark in-flight plans needs_replan so they re-plan against the new
+    # definition. Default OFF — a modification governs FUTURE events; past
+    # traces' logic should complete as planned (and each re-plan is an extra
+    # planner call).
+    replan_on_modification: bool = False
     step_replan_max: int = 1
     reactive_replan_max_per_trace: int = 4  # total synthetic replans allowed per trace
 
@@ -205,6 +211,7 @@ class SystemConfig:
             memory_backend=str(data.get("memory_backend", "nested")),
             planner_mode=planner_mode,
             enable_replan_checkpoints=bool(data.get("enable_replan_checkpoints", False)),
+            replan_on_modification=bool(data.get("replan_on_modification", False)),
             replan_max_per_trace=int(data.get("replan_max_per_trace", 3)),
             enable_step_retry_replan=bool(data.get("enable_step_retry_replan", True)),
             step_max_retries=int(data.get("step_max_retries", 2)),
@@ -496,6 +503,7 @@ class Runtime:
             planner_prompt_file=self._planner_prompt_file,
             planner_mode=self._planner_mode,
             enable_replan_checkpoints=self._heartbeat.enable_replan_checkpoints,
+            replan_on_modification=self._heartbeat.replan_on_modification,
             replan_max_per_trace=self._heartbeat.replan_max_per_trace,
             enable_step_retry_replan=self._heartbeat.enable_step_retry_replan,
             step_max_retries=self._heartbeat.step_max_retries,

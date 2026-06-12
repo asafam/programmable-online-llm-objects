@@ -9,7 +9,7 @@ from src.lnl import (
     OutgoingMessage,
     PeerDeclaration,
 )
-from src.lnl.runtime import Runtime
+from src.lnl.runtime import Runtime, SystemConfig
 from src.lnl.tools import CodeExecutor, MockToolExecutor, ToolRegistry
 from src.lnl.types import MessageType, ToolCall
 
@@ -380,7 +380,7 @@ class TestAdminModification:
             updated_definition={"role": "New role."},
             object_id="worker",
         )
-        rt = Runtime(brain)
+        rt = Runtime(brain, system_config=SystemConfig(replan_on_modification=True))
         rt.create_object(ObjectDefinition(object_id="worker", role="Original role."))
 
         # Inject a fake active plan as if a prior DOMAIN message had planned it.
@@ -467,7 +467,7 @@ class TestAdminModification:
             outgoing_messages=[],
         ))
 
-        rt = Runtime(brain)
+        rt = Runtime(brain, system_config=SystemConfig(replan_on_modification=True))
         rt.create_object(ObjectDefinition(
             object_id="worker",
             role="Original.",
@@ -743,7 +743,7 @@ class TestAdminEdgeCases:
             updated_definition={"role": "New."},
             object_id="worker",
         )
-        rt = Runtime(brain)
+        rt = Runtime(brain, system_config=SystemConfig(replan_on_modification=True))
         rt.create_object(ObjectDefinition(object_id="worker", role="Old."))
 
         obj = rt._bus.objects["worker"]
@@ -787,7 +787,7 @@ class TestAdminEdgeCases:
         )
         brain.script("worker", LLMResponse(updated_state="", reply="done"))
 
-        rt = Runtime(brain)
+        rt = Runtime(brain, system_config=SystemConfig(replan_on_modification=True))
         rt.create_object(ObjectDefinition(object_id="worker", role="X", behavior="b1"))
         obj = rt._bus.objects["worker"]
 

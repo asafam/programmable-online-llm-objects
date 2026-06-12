@@ -76,6 +76,7 @@ class LLMObject:
         planner_prompt_file: str = "planner_sequential.yaml",
         planner_mode: str = "dag",
         enable_replan_checkpoints: bool = False,
+        replan_on_modification: bool = False,
         replan_max_per_trace: int = 3,
         enable_step_retry_replan: bool = True,
         step_max_retries: int = 2,
@@ -155,6 +156,7 @@ class LLMObject:
         # Replan checkpoints: when enabled, planner may emit `kind=replan` steps
         # that hand control back to the planner mid-cascade once deps land.
         self._enable_replan_checkpoints = bool(enable_replan_checkpoints)
+        self._replan_on_modification = bool(replan_on_modification)
         self._replan_max_per_trace = int(replan_max_per_trace) if replan_max_per_trace else 0
         # Per-trace replan cycle counts (cap to prevent runaway recursion).
         self._replan_cycles_per_trace: dict[str, int] = {}
@@ -1471,12 +1473,14 @@ class LLMObject:
         patch = finish.get("updated_definition") or None
         if isinstance(patch, dict) and patch:
             self._apply_definition_update(patch)
-            # Mark every in-flight plan as needing a re-plan against the new
-            # definition. The next inbound message on that trace re-plans
-            # before dispatching; plan state and deltas are preserved.
-            with self._plans_lock:
-                for plan in self._active_plans.values():
-                    plan.needs_replan = True
+            # Replan-on-modification is opt-in (default OFF): a modification
+            # governs FUTURE events — in-flight traces complete as planned.
+            # When enabled, in-flight plans re-plan against the new definition
+            # on their next inbound message; plan state and deltas preserved.
+            if self._replan_on_modification:
+                with self._plans_lock:
+                    for plan in self._active_plans.values():
+                        plan.needs_replan = True
 
         self._append_history(message, None, None)
 
