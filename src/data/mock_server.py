@@ -59,6 +59,12 @@ __all__ = [
 # must serve the TC-specific template (e.g. post_slack_message).  This table
 # maps each known TC tool name → the extension's registered generic name so
 # merge_tc_mock_tools can inject an alias entry.
+_GENERIC_READ_NAMES: list[str] = [
+    "zapier_tables_list_records", "zapier_tables_get_record",
+    "airtable_list_records", "airtable_get_record",
+    "sheets_get_rows", "sheets_list_rows", "sheets_get_values",
+]
+
 _TC_TO_EXTENSION_ALIASES: dict[str, str] = {
     # Slack
     "post_slack_message": "slack_send_message",
@@ -261,6 +267,32 @@ def merge_tc_mock_tools(
                 method=generic,
                 immediate=method_def.immediate,
             )
+
+    # Dynamic READ aliases — no hand-mapping per sample. Single-agent baselines
+    # guess generic read surfaces (zapier_tables_list_records, airtable_list_records,
+    # sheets reads); if the sample's reference data (rosters, directories, catalogs —
+    # the *_data tools) is unreachable through them, the agent concludes external
+    # state is broken and refuses to act. Serve every generic read name with the
+    # sample's _data payload(s).
+    data_tools = [t for t in tc_mock_tools if t.tool_name.endswith("_data")]
+    if data_tools:
+        if len(data_tools) == 1:
+            blob = data_tools[0].response_template
+        else:
+            import json as _json
+            parts = []
+            for t in data_tools:
+                v = t.response_template.strip()
+                if not v.startswith(("{", "[")):
+                    v = _json.dumps(v)
+                parts.append(f'"{t.tool_name[:-5]}": {v}')
+            blob = "{" + ", ".join(parts) + "}"
+        for generic in _GENERIC_READ_NAMES:
+            if generic not in tc_methods:
+                tc_methods[generic] = MockMethodDef(
+                    method=generic,
+                    immediate=MockImmediateResponse(template=blob),
+                )
 
     if script is None:
         return MockScript(systems=[MockSystemDef(system="tc_mock_tools", tools=list(tc_methods.values()))])

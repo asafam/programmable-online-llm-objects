@@ -141,7 +141,15 @@ def _make_app(state: "_ServerState") -> FastAPI:
         elif method_def:
             result = _interpolate(method_def.immediate.template, body, tool_call_id)
         else:
-            result = f"(mock) {method} called — no script configured"
+            # Verb-aware fallback: "no script configured" reads as a broken tool and
+            # makes cautious agents refuse to act. Reads get empty data (the component
+            # state lives in the agent's own state, not behind a tool); writes get a
+            # success ack — the call and its args are the evidence that matters.
+            _low = method.lower()
+            if any(v in _low for v in ("get", "list", "read", "fetch", "search", "lookup", "query")):
+                result = "{}"
+            else:
+                result = json.dumps({"status": "success", "tool": method, "id": tool_call_id})
 
         record = {
             "method": method,
