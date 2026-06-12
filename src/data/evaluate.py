@@ -1724,7 +1724,15 @@ def run(args: argparse.Namespace) -> Path:
     mock_server_url: Optional[str] = None
     if getattr(args, "mock_server", False):
         from src.data.mock_server import MockServer
-        mock_port = getattr(args, "mock_server_port", 18888)
+        mock_port = getattr(args, "mock_server_port", 0) or 0
+        if mock_port == 0:
+            # Ephemeral port per run: a fixed port made concurrent evals a race —
+            # the loser couldn't bind, silently routed its tool calls into the
+            # winner's mock (wrong scripts, cross-run judge-evidence pollution).
+            import socket as _socket
+            with _socket.socket() as _s:
+                _s.bind(("127.0.0.1", 0))
+                mock_port = _s.getsockname()[1]
         mock_server = MockServer(port=mock_port)
         mock_server.start()
         mock_server.wait_ready()
@@ -2756,8 +2764,9 @@ Examples:
     parser.add_argument(
         "--mock-server-port",
         type=int,
-        default=18888,
-        help="Port for the local mock server started by --mock-server (default: 18888).",
+        default=0,
+        help="Port for the local mock server started by --mock-server "
+             "(default: 0 = ephemeral OS-assigned port; pass a fixed port to pin it).",
     )
     parser.add_argument(
         "--mock-config",
