@@ -151,7 +151,9 @@ while true; do
             sleep 2
             NEW_PID=$(pgrep -x "openclaw" 2>/dev/null | head -1 || true)
             [ -n "${NEW_PID}" ] && break
-            NEW_PID=$(pgrep -x "openclaw-gateway" 2>/dev/null | head -1 || true)
+            # comm is truncated to 15 chars ("openclaw-gatewa") — pgrep -x on the
+            # full name NEVER matches; match the full cmdline instead.
+            NEW_PID=$(pgrep -f "openclaw-gateway" 2>/dev/null | head -1 || true)
             [ -n "${NEW_PID}" ] && break
         done
         if [ -n "${NEW_PID}" ]; then
