@@ -43,7 +43,9 @@ prediction, single variable, then result and verdict. Confounded results say so.
 | H3 | Log-shaped state drives cost + late-event errors | probe cost drops materially | P2 vs clock series | $3.43 vs $6.5–7 | **supported for cost**; accuracy effect unattributed |
 | H4 | Re-fire storm killed 9/31 P2 waves; in-flight guard recovers them | round-robin +3–8 events vs P2's 6/31 | P3 round-robin (guard) | RUNNING | pending |
 | H5 | Custodian ceremony (planner+evaluator per atomic turn) wastes 3–6× latency/cost | latency/cost drop ≥3×, score unchanged | P4 expenses (leaf path) | 3:25/$0.50 (≥3× faster/cheaper ✓) but 1/12 score | **CONFOUNDED** — probe also first to isolate expenses; freelancing observed; score drop not attributable to leaf path (no control) |
-| H6 | Unscoped tools let entry services freelance write-sinks' jobs (observed: append_expense_row(status=submitted) from the entry, bypassing the policy's "pending") | with skills-scoped tools (0ea200a): expenses ≥4/12 AND zero append calls by the entry object | P5 expenses | — | pending |
+| H6 | Unscoped tools let entry services freelance write-sinks' jobs (observed: append_expense_row(status=submitted) from the entry, bypassing the policy's "pending") | with skills-scoped tools (0ea200a): expenses ≥4/12 AND zero append calls by the entry object | P5 expenses | 2/12; mechanism check: entry IS the sink (legit owner) — no freelancing to block | **FALSIFIED**; real defect = sample design |
+
+| H7 | Tracker behavior's "append with current status" is ambiguous → model writes "submitted"; workflow semantics define new expenses as Pending | with behavior stating Pending-on-append + explicit forward-to-policy: expenses ≥7/12, zero "submitted rather than pending" verdicts | P6 expenses | — | pending |
 
 Lesson recorded: H5/H6 were stacked without a control — P4 cannot separate
 leaf-path effects from pre-existing freelancing. Don't repeat.
