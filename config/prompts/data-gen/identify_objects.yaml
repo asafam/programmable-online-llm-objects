@@ -109,10 +109,11 @@ prompt: |
      maintenance — and NO business policy:
      - READ: reply with the current canonical state (the order, the counts, the running total,
        the window entries) — never with a recommendation or decision.
-     - COMMIT: atomically apply an update the requester specifies ("increment Maya's count for
-       2026-03-14 and move Maya to the back of the order"), reply with the new state. Reject a
-       commit whose basis is stale (the requester read state that has since changed) so the
-       requester re-reads and re-decides.
+     - COMMIT (OPTIMISTIC, the default): apply the requester-specified update immediately and
+       reply with the new state — last write wins. Do NOT require version tokens, do NOT check
+       for a stale basis, and NEVER reject a commit: rejection-and-retry loops cost a small
+       model more correctness than the rare lost update they prevent. (Events are processed
+       serially; concurrent-writer protection is not worth the handshake.)
      - MAINTENANCE (state hygiene only): lazily reset/expire time-bounded entries on touch
        (day boundary passed → zero daily counts; window entries older than D days → drop).
      The BUSINESS-LOGIC object makes every decision: it READs the custodian's state, applies the
