@@ -317,6 +317,14 @@ def _combined_agents_md(objects: list[ObjectDefinition]) -> str:
         "bootstrap it exactly as the behavior describes (e.g. fetch the roster via its read "
         "tool, seed the rotation, zero the counts) and proceed — an empty section is a fresh "
         "start, not an error.\n\n"
+        "**COMPLETION CONTRACT:** There is no later. Nothing you defer ever happens — no "
+        "queue, no background processing, no follow-up turn will finish it. A reply that "
+        "says work is 'queued', 'started', 'in progress', or 'being processed' is a FAILED "
+        "event. Before ending your reply, verify: every decision the behaviors require for "
+        "THIS event has been made, every required write-service tool call has actually been "
+        "made in this reply, and every affected state section in `state.md` shows the final "
+        "post-event values (updated counts, updated order, recorded outcome) — not a note "
+        "that processing is underway.\n\n"
         "## Objects\n",
     ]
     for obj in objects:
