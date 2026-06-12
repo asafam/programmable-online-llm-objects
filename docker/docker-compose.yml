@@ -93,6 +93,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_1:-changeme-single-worker-1}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19789:18789"
       - "19888:18888"
@@ -110,6 +111,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_2:-changeme-single-worker-2}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19790:18789"
       - "19889:18888"
@@ -127,6 +129,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_3:-changeme-single-worker-3}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19791:18789"
       - "19890:18888"
@@ -144,6 +147,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_4:-changeme-single-worker-4}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19792:18789"
       - "19891:18888"
@@ -161,6 +165,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_5:-changeme-single-worker-5}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19793:18789"
       - "19892:18888"
@@ -178,6 +183,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_6:-changeme-single-worker-6}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19794:18789"
       - "19893:18888"
@@ -195,6 +201,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_7:-changeme-single-worker-7}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19795:18789"
       - "19894:18888"
@@ -212,6 +219,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_8:-changeme-single-worker-8}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19796:18789"
       - "19895:18888"
@@ -229,6 +237,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_9:-changeme-single-worker-9}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19797:18789"
       - "19896:18888"
@@ -246,6 +255,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_10:-changeme-single-worker-10}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19798:18789"
       - "19897:18888"
@@ -263,6 +273,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_11:-changeme-single-worker-11}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19799:18789"
       - "19898:18888"
@@ -280,6 +291,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_12:-changeme-single-worker-12}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19800:18789"
       - "19899:18888"
@@ -297,6 +309,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_13:-changeme-single-worker-13}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19801:18789"
       - "19900:18888"
@@ -314,6 +327,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_14:-changeme-single-worker-14}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19802:18789"
       - "19901:18888"
@@ -331,6 +345,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_15:-changeme-single-worker-15}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19803:18789"
       - "19902:18888"
@@ -348,6 +363,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_16:-changeme-single-worker-16}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19804:18789"
       - "19903:18888"
@@ -365,6 +381,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_17:-changeme-single-worker-17}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19805:18789"
       - "19904:18888"
@@ -382,6 +399,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_18:-changeme-single-worker-18}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19806:18789"
       - "19905:18888"
@@ -399,6 +417,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_19:-changeme-single-worker-19}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19807:18789"
       - "19906:18888"
@@ -416,6 +435,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_20:-changeme-single-worker-20}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19808:18789"
       - "19907:18888"
@@ -433,6 +453,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_21:-changeme-single-worker-21}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19809:18789"
       - "19908:18888"
@@ -450,6 +471,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_22:-changeme-single-worker-22}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19810:18789"
       - "19909:18888"
@@ -467,6 +489,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_23:-changeme-single-worker-23}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19811:18789"
       - "19910:18888"
@@ -484,6 +507,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_24:-changeme-single-worker-24}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "19812:18789"
       - "19911:18888"
@@ -505,6 +529,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_1:-changeme-multi-worker-1}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20789:18789"
       - "20888:18888"
@@ -522,6 +547,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_2:-changeme-multi-worker-2}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20790:18789"
       - "20889:18888"
@@ -539,6 +565,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_3:-changeme-multi-worker-3}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20791:18789"
       - "20890:18888"
@@ -556,6 +583,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_4:-changeme-multi-worker-4}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20792:18789"
       - "20891:18888"
@@ -573,6 +601,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_5:-changeme-multi-worker-5}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20793:18789"
       - "20892:18888"
@@ -590,6 +619,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_6:-changeme-multi-worker-6}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20794:18789"
       - "20893:18888"
@@ -607,6 +637,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_7:-changeme-multi-worker-7}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20795:18789"
       - "20894:18888"
@@ -624,6 +655,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_8:-changeme-multi-worker-8}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20796:18789"
       - "20895:18888"
@@ -641,6 +673,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_9:-changeme-multi-worker-9}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20797:18789"
       - "20896:18888"
@@ -658,6 +691,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_10:-changeme-multi-worker-10}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20798:18789"
       - "20897:18888"
@@ -675,6 +709,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_11:-changeme-multi-worker-11}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20799:18789"
       - "20898:18888"
@@ -692,6 +727,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_12:-changeme-multi-worker-12}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20800:18789"
       - "20899:18888"
@@ -709,6 +745,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_13:-changeme-multi-worker-13}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20801:18789"
       - "20900:18888"
@@ -726,6 +763,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_14:-changeme-multi-worker-14}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20802:18789"
       - "20901:18888"
@@ -743,6 +781,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_15:-changeme-multi-worker-15}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20803:18789"
       - "20902:18888"
@@ -760,6 +799,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_16:-changeme-multi-worker-16}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20804:18789"
       - "20903:18888"
@@ -777,6 +817,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_17:-changeme-multi-worker-17}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20805:18789"
       - "20904:18888"
@@ -794,6 +835,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_18:-changeme-multi-worker-18}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20806:18789"
       - "20905:18888"
@@ -811,6 +853,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_19:-changeme-multi-worker-19}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20807:18789"
       - "20906:18888"
@@ -828,6 +871,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_20:-changeme-multi-worker-20}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20808:18789"
       - "20907:18888"
@@ -845,6 +889,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_21:-changeme-multi-worker-21}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20809:18789"
       - "20908:18888"
@@ -862,6 +907,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_22:-changeme-multi-worker-22}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20810:18789"
       - "20909:18888"
@@ -879,6 +925,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_23:-changeme-multi-worker-23}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20811:18789"
       - "20910:18888"
@@ -896,6 +943,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_24:-changeme-multi-worker-24}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20812:18789"
       - "20911:18888"
@@ -913,6 +961,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_25:-changeme-multi-worker-25}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20813:18789"
       - "20912:18888"
@@ -930,6 +979,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_26:-changeme-multi-worker-26}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20814:18789"
       - "20913:18888"
@@ -947,6 +997,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_27:-changeme-multi-worker-27}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20815:18789"
       - "20914:18888"
@@ -964,6 +1015,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_28:-changeme-multi-worker-28}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20816:18789"
       - "20915:18888"
@@ -981,6 +1033,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_29:-changeme-multi-worker-29}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20817:18789"
       - "20916:18888"
@@ -998,6 +1051,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_30:-changeme-multi-worker-30}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20818:18789"
       - "20917:18888"
@@ -1015,6 +1069,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_31:-changeme-multi-worker-31}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20819:18789"
       - "20918:18888"
@@ -1032,6 +1087,7 @@ services:
     environment:
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN_32:-changeme-multi-worker-32}"
       LNL_MOCK_SERVER_URL: "http://localhost:18888"
+      OPENCLAW_DISABLE_BONJOUR: "1"
     ports:
       - "20820:18789"
       - "20919:18888"
