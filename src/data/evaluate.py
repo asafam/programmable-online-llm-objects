@@ -2089,7 +2089,9 @@ def _pbar_postfix(pbar, results, events_done: int = 0, in_tok: int = 0, out_tok:
     cost = _compute_cost(in_tok, out_tok, agent_model or "")
     cost_str = f" (${cost:.2f})" if cost is not None else ""
     fields["tok"] = f"{in_tok//1000}k↑{out_tok//1000}k↓{cost_str}"
-    pbar.set_postfix(refresh=False, **fields)
+    # refresh=True: postfix-only changes never trigger a redraw on their own — pbar.update()
+    # only fires per completed RUN, so single-TC runs showed NO live counters at all
+    pbar.set_postfix(refresh=True, **fields)
 
 
 def _compute_summary(results: list[SampleResult]) -> EvalSummary:
