@@ -930,15 +930,20 @@ def _run_test_case_timeline(
         log_snap = len(rt.message_log)
         exec_s = _snapshot_logs(execs)
         t0 = time.monotonic()
+        # The scenario clock travels WITH the event: agents otherwise have no way to
+        # know the scenario date and stamp real wall-clock time, which breaks every
+        # date-keyed decision (daily caps, rolling windows, mod expiry) — while the
+        # judge grades against scenario timestamps. Same W-notation as mods/expects.
+        stamped = f"[scenario time: {evt.when}] {evt.input}" if getattr(evt, "when", None) else evt.input
         if evt.call_type == "send_event":
-            payload = json.dumps({"system": evt.source, "content": evt.input})
+            payload = json.dumps({"system": evt.source, "content": stamped, "timestamp": evt.when})
             res, tout = _run_with_timeout(
                 lambda e=evt, p=payload: gw.dispatch(e.recipient, p, source=e.source),
                 timeout_s,
             )
         else:
             res, tout = _run_with_timeout(
-                lambda e=evt: rt.send(e.recipient, e.input, sender=e.source),
+                lambda e=evt, m=stamped: rt.send(e.recipient, m, sender=e.source),
                 timeout_s,
             )
         lat = (time.monotonic() - t0) * 1000
@@ -1120,7 +1125,10 @@ def _run_test_case_timeline(
                 # behavior / peers / skills). DOMAIN messages no longer carry
                 # `updated_definition`, so a modification sent via rt.send
                 # would only update state — never the definition itself.
-                lambda it=item: rt.send_admin(it.target, it.intent, sender=it.source),
+                lambda it=item: rt.send_admin(
+                    it.target,
+                    (f"[scenario time: {it.when}] {it.intent}" if getattr(it, "when", None) else it.intent),
+                    sender=it.source),
                 timeout_s,
             )
             latency_ms = (time.monotonic() - t0) * 1000

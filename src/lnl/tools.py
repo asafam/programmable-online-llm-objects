@@ -169,7 +169,9 @@ class MockInProcessExecutor:
         # empty identifiers. Presence is NOT enforced — forcing optional fields (hold_reason on
         # an assigned lead) caused blank-fill/reject ping-pong loops. Only fields the agent
         # chose to send are validated.
-        _BLANK = {"", "unknown", "unknown@company.example", "n/a", "none", "null", "tbd",
+        # "" is allowed: an empty optional field is a natural "not applicable" (e.g.
+        # hold_reason on an assigned lead) — rejecting it forced junk-fill retries.
+        _BLANK = {"unknown", "unknown@company.example", "n/a", "none", "null", "tbd",
                   "placeholder"}
         bad = [k for k, v in args.items()
                if isinstance(v, str) and v.strip().lower() in _BLANK]
