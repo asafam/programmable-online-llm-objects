@@ -174,6 +174,38 @@ LLM_REACT_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
+        "plan_update": {
+            "type": "object",
+            "description": (
+                "Optional plan maintenance. step_updates set TERMINAL outcomes only — a step that "
+                "is not finished simply stays as it is; never write status='planned' or "
+                "'in_progress' (non-terminal statuses are invalid and ignored)."
+            ),
+            "properties": {
+                "goal": {"type": ["string", "null"]},
+                "step_updates": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": ["string", "null"], "description": "Step id, e.g. 's2'."},
+                            "index": {"type": ["integer", "null"]},
+                            "status": {
+                                "type": "string",
+                                "enum": ["done", "failed", "skipped"],
+                                "description": "TERMINAL outcome only.",
+                            },
+                            "result_summary": {"type": ["string", "null"]},
+                        },
+                        "required": ["status"],
+                        "additionalProperties": False,
+                    },
+                },
+                "add_steps": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
+                "status": {"type": ["string", "null"], "enum": [None, "done", "failed"]},
+            },
+            "additionalProperties": False,
+        },
         "state_update": {
             "type": "object",
             "description": "Optional. Emit ONLY when a value genuinely changed. Omit entirely if nothing changed — do not invent updates.",
@@ -2558,6 +2590,12 @@ def _parse_plan_update(raw: dict) -> Optional[PlanUpdate]:
         return None
     steps = raw.get("steps")
     step_updates = raw.get("step_updates")
+    if isinstance(step_updates, list):
+        # non-terminal statuses are not actionable — drop them here so the runtime never has
+        # to warn-and-ignore ("status='planned' not allowed"); the step simply keeps its state
+        for su in step_updates:
+            if isinstance(su, dict) and su.get("status") not in ("done", "failed", "skipped"):
+                su.pop("status", None)
     add_steps = raw.get("add_steps")
     return PlanUpdate(
         goal=raw.get("goal"),
