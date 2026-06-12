@@ -85,7 +85,12 @@ class OpenAIJudge(LLMJudge):
             raise ImportError("openai package required. Install with: pip install openai")
 
         self.model = model
-        self._client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"])
+        import httpx as _httpx
+        self._client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"],
+                              timeout=120.0, max_retries=2,
+                              http_client=_httpx.Client(
+                                  timeout=120.0,
+                                  limits=_httpx.Limits(max_keepalive_connections=0)))
         self._system_prompt = system_prompt
 
     def evaluate(self, condition: str, evidence: str, context: str = "") -> tuple[bool, str, int, int]:
@@ -126,10 +131,19 @@ class AzureJudge(LLMJudge):
         resolved_key = api_key or os.environ.get("AZURE_OPENAI_API_KEY")
         if not resolved_key:
             raise ValueError("Azure API key required. Set AZURE_OPENAI_API_KEY or pass api_key=.")
+        # Fail-fast + no keepalive reuse — see the matching comment in brain.py:
+        # idle pooled connections get NAT-evicted and hang the next read forever.
+        import httpx as _httpx
         self._client = AzureOpenAI(
             api_key=resolved_key,
             azure_endpoint=resolved_endpoint,
             api_version=resolved_version,
+            timeout=120.0,
+            max_retries=2,
+            http_client=_httpx.Client(
+                timeout=120.0,
+                limits=_httpx.Limits(max_keepalive_connections=0),
+            ),
         )
         self._system_prompt = system_prompt
 

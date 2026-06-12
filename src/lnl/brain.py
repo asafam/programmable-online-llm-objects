@@ -1385,9 +1385,13 @@ class OpenAIBrain(LLMBrain):
         self.model = model
         self._temperature = temperature
         self._seed = seed
-        # Same fail-fast timeout as the Azure client — see comment there.
+        # Same fail-fast timeout + no-keepalive policy as the Azure client.
+        import httpx as _httpx
         self._client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"],
-                              timeout=120.0, max_retries=2)
+                              timeout=120.0, max_retries=2,
+                              http_client=_httpx.Client(
+                                  timeout=120.0,
+                                  limits=_httpx.Limits(max_keepalive_connections=0)))
 
     def call(
         self,
@@ -1646,12 +1650,23 @@ class AzureBrain(LLMBrain):
         # lets one dead connection hang an eval for tens of minutes with zero CPU —
         # observed as a frozen token counter on an ESTABLISHED-but-silent TLS socket.
         # 120s fails fast; our _create_with_filter_retry layer handles the retry.
+        # No keepalive reuse: pooled connections that sat idle during local
+        # processing get their NAT mappings silently evicted (home-router class
+        # middlebox) — the next reuse writes into a void and ssl.read hangs until
+        # the timeout. Observed as hour-long 100%-timeout runs while fresh-
+        # connection pings succeeded in 1.7s from the same machine. A TLS
+        # handshake per request (~150ms) is noise next to 3s+ completions.
+        import httpx as _httpx
         self._client = AzureOpenAI(
             api_key=resolved_key,
             azure_endpoint=resolved_endpoint,
             api_version=resolved_version,
             timeout=120.0,
             max_retries=2,
+            http_client=_httpx.Client(
+                timeout=120.0,
+                limits=_httpx.Limits(max_keepalive_connections=0),
+            ),
         )
 
     def call(
