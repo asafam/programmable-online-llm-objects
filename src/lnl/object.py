@@ -210,6 +210,14 @@ class LLMObject:
         # correlates back to the original asker's plan.
         self._pending_inbound_asks: dict[str, tuple[str, Optional[int]]] = {}
         self._pending_inbound_lock = threading.Lock()
+        # In-flight outbound guard (async dispatch): each tool/peer REPLY starts a
+        # fresh turn, and the executor re-emits asks it is still awaiting answers
+        # to — observed as message storms cut by the chain-depth limit (lossy).
+        # Keyed (trace_id, recipient): asks suppressed while unanswered and younger
+        # than pending_timeout; identical tells suppressed once sent for the trace.
+        self._outstanding_out_lock = threading.Lock()
+        self._outstanding_asks: dict[tuple, float] = {}
+        self._sent_tells: dict[tuple, set] = {}
         # Per-object REPL namespace for the built-in `python` coding tool.
         # Lazily initialized so objects that never call the tool pay nothing.
         # Not part of NL `_state` — never serialized into the prompt.
@@ -974,6 +982,13 @@ class LLMObject:
 
         # Retire stale or excess plans before doing any work for this trace.
         self._sweep_stale_plans()
+        # An inbound message from a peer answers our outstanding ask to it —
+        # clear the in-flight guard so follow-up sends (e.g. commit after read)
+        # flow freely.
+        if getattr(message, "sender", None):
+            with self._outstanding_out_lock:
+                self._outstanding_asks.pop((trace_id, str(message.sender).strip().lower()), None)
+
         # Auto-close stale completed plans so LLM sees a fresh view.
         self._auto_close_plan_if_complete(trace_id)
 
@@ -2040,7 +2055,36 @@ class LLMObject:
                 out.in_reply_to = mid
                 out.plan_step_index = asker_step_index
                 out.is_reply = True
-        return outgoing
+
+        # In-flight guard: drop re-fired sends. Replies are never suppressed.
+        import time as _time
+        now = _time.monotonic()
+        kept = []
+        for out in outgoing:
+            if out.is_reply:
+                kept.append(out)
+                continue
+            rkey = (trace_id, (out.recipient or "").strip().lower())
+            with self._outstanding_out_lock:
+                if out.expects_reply:
+                    sent_at = self._outstanding_asks.get(rkey)
+                    if sent_at is not None and (now - sent_at) < self._pending_timeout_seconds:
+                        logger.warning(
+                            "%s: suppressed re-fired ask to %s (unanswered, %.0fs old)",
+                            self.object_id, out.recipient, now - sent_at)
+                        continue
+                    self._outstanding_asks[rkey] = now
+                else:
+                    content_key = hash((out.recipient or "", (out.content or "").strip()))
+                    sent = self._sent_tells.setdefault(rkey, set())
+                    if content_key in sent:
+                        logger.warning(
+                            "%s: suppressed duplicate tell to %s (identical content already sent this trace)",
+                            self.object_id, out.recipient)
+                        continue
+                    sent.add(content_key)
+            kept.append(out)
+        return kept
 
     def _handle_knowledge_gap(
         self,
