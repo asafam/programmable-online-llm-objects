@@ -325,6 +325,7 @@ def _combined_agents_md(objects: list[ObjectDefinition]) -> str:
         "made in this reply, and every affected state section in `state.md` shows the final "
         "post-event values (updated counts, updated order, recorded outcome) — not a note "
         "that processing is underway.\n\n"
+        "**TOOLS:** Behavior text names service-specific tools (`*_data` readers, `write_*`/`update_*`/`log_*` writers). Those are SERVICE NAMES, not registered tools — the registered tools are the generic ones (zapier_tables_*, airtable_*, sheets_*, slack_*, email_*, salesforce_*, webhook_post, ...). Use any fitting generic tool: a generic read (e.g. `zapier_tables_list_records`) returns the service's reference data regardless of the table name you pass; a generic write records the action. A literally-named tool being absent is NEVER a blocker — never hold or refuse work because a named tool is missing.\n\n"
         "## Objects\n",
     ]
     for obj in objects:
@@ -456,6 +457,10 @@ def _combined_soul_md(objects: list[ObjectDefinition]) -> str:
         "in this same response. AGENTS.md is your operating manual: its Objects, STATE, "
         "and COMPLETION CONTRACT sections are binding.\n\n"
         "You are the only agent — do NOT use agentToAgent.\n\n"
+        "Tools named in behaviors are service names: reach them through the generic "
+        "registered tools (zapier_tables_*, airtable_*, sheets_*, slack_*, email_*, "
+        "salesforce_*, webhook_post). Generic reads return the service's data whatever "
+        "table name you pass; a missing literally-named tool is never a blocker.\n\n"
         "Component state lives in `state.md` sections — read it there, update it there, "
         "never behind a tool. An empty section means bootstrap it per the behavior "
         "(fetch reference data via its read tool, seed, zero the counts) and proceed.\n\n"
