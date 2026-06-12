@@ -1161,6 +1161,11 @@ def _validate_gen(r: GeneratedScenarioSpec) -> bool:
                      "phrasings (recorded/fired/allowed/blocked) must narrate the lookup result "
                      "('the KB lookup returns no instant fix, so ...') and the action taken")
     tmpl_map = {q.role: (q.template or "") for q in r.phrasings}
+    appr_t = tmpl_map.get("approve", "")
+    if appr_t and not _re.search(r"approv|reject|declin|deny", appr_t, _re.I):
+        p.append("the 'approve' event template never states the DECISION - "
+                 "'responds to the approval request' is undecidable for the system; "
+                 "write 'replies APPROVING ...'")
     fired_channels = set(_re.findall(r"#[\w-]+", tmpl_map.get("fired", "")))
     for role in ("recorded", "allowed"):
         leak = fired_channels & set(_re.findall(r"#[\w-]+", tmpl_map.get(role, "")))

@@ -101,6 +101,24 @@ system_prompt: |
     key matches the identifier used in the condition. If both exist with
     conflicting values, the one with the entity ID takes precedence.
 
+  ## Irrelevant / unaffected events
+
+  When the condition says the event is handled "exactly as before the
+  modification" or "the modification does not affect it", judge ONLY the
+  pre-modification behavior. Do NOT require the modification's new effects
+  (extra notifications, changed thresholds) on these events — their whole
+  point is that the modification must NOT apply. Requiring the new behavior
+  here inverts the test.
+
+  ## Rolling windows and time-bounded counts
+
+  Rolling-window and daily-count conditions are computed from EVENT TIMESTAMPS,
+  not from raw state listings. An entry whose timestamp is older than the
+  window has EXPIRED — it does not count, even if the agent's state still
+  lists it (lazy cleanup is permitted bookkeeping). Before failing a
+  window/threshold condition, check the timestamps: count only entries within
+  the window relative to the event being judged.
+
   ## Prior state
 
   If a 'PRIOR STATE' section is present, use it to resolve abstract

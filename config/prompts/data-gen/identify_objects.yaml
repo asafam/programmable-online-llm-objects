@@ -55,6 +55,19 @@ prompt: |
 
      - **Dual-role objects** (a service that is BOTH a write target AND an event entry-point — e.g., a channel that receives outbound posts AND inbound user action events) MUST still declare the business logic object as a peer. A dual-role object's behavior MUST include: "When [action event] arrives, forward it to [business-logic-object] via peer message." The peer entry MUST be listed.
 
+     THRESHOLD DISCIPLINE: when the domain rule is an accumulation threshold (the Nth occurrence
+     fires a consolidated action), the business-logic object's behavior must say BOTH halves
+     explicitly: below the threshold there is NO version of the gated action at all (no per-item
+     email, no courtesy ticket, no partial alert — only the silent accumulation/logging the rule
+     prescribes), and AT the threshold the consolidated action fires exactly once. Agents default
+     to per-event notification unless the behavior forbids it.
+
+     CHAIN COMPLETION: a business-logic object's turn is NOT done when it has decided — it is done
+     when every downstream effect of the decision is dispatched and confirmed: the write-service
+     records, the notification goes out, the custodian commit is acknowledged. Behaviors must end
+     by naming the writes the object is responsible for completing; forwarding to a peer and
+     stopping is an incomplete turn.
+
   2. **Business logic objects** — one per distinct domain of responsibility. Named as domain slugs (nouns describing *what they know*, not what they do): e.g., `approval-policy`, `incident-triage`, `onboarding-rules`, `pricing-engine`. **Never** name an object "orchestrator", "manager", "coordinator", "dispatcher", or any other generic control-flow role — those are architecture smells. Each object embodies a specific domain: it knows the rules of that domain, applies them to incoming messages, and sends outputs to its peers. There is no captain. Objects work in tandem — each one acts on its slice of the domain, forwarding to the next peer when its responsibility ends.
 
   3. **Custodian objects** — the **single writer** of an invariant that spans multiple requests or multiple object instances: a cumulative cap, a quota/budget, a rate-limit, a running total, a shared pool, or a round-robin queue. Named after the resource they own (e.g., `discount-budget`, `lead-desk`, `reorder-window`) — NOT "ledger"/"manager"/"tracker". A Custodian exists so the accumulator has exactly one owner; requesters message it and keep **no private copy** of the total. Create one ONLY when such a cross-request / cross-instance invariant exists — never for a decision that reads only the current message.
