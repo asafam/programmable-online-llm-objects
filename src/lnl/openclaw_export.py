@@ -297,11 +297,16 @@ def _combined_agents_md(objects: list[ObjectDefinition]) -> str:
     lines = [
         "# Multi-Object Workflow Agent\n\n"
         "You handle a multi-object workflow where each component has a defined role and behavior. "
-        "Each message identifies the target object. Respond as that object — execute its "
-        "responsibilities using the available tools, and update its section of `state.md`.\n\n"
+        "Each message identifies the target object, but a message is never just for that one "
+        "object: it STARTS THE WHOLE WORKFLOW. Begin as the target object, then keep executing "
+        "every downstream component's behavior in sequence — policy decisions, state reads and "
+        "updates in `state.md`, and every write-service tool call — until the event is fully "
+        "processed end to end. Never stop after the entry component's logging step: 'forward for "
+        "processing' means YOU continue the processing yourself, in this same turn.\n\n"
         "**CRITICAL:** Do NOT use agentToAgent or attempt to message other agents. "
         "You are the only agent. When an object's behavior says to 'forward', 'send', or "
-        "'notify' another component, use the available tools to take that action directly "
+        "'notify' another component, perform that component's behavior yourself and use the "
+        "available tools to take its external actions directly "
         "(e.g. call `slack_send_message`, `zapier_tables_create_record`, etc.).\n\n"
         "## Objects\n",
     ]
