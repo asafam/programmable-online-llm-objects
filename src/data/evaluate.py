@@ -805,7 +805,9 @@ def _run_test_case_timeline(
         log_snapshot = len(rt.message_log)
         exec_snap = _snapshot_logs(execs)
         t0 = time.monotonic()
-        step_payload = json.dumps({"system": step.source, "content": step.input})
+        step_payload = json.dumps({"system": step.source, "content": (
+            f"[scenario time: {step.when}] {step.input}" if getattr(step, "when", None) else step.input),
+            "timestamp": getattr(step, "when", None)})
         results, timed_out = _run_with_timeout(
             lambda s=step, p=step_payload: gw.dispatch(s.recipient, p, source=s.source), timeout_s,
         )
@@ -1065,16 +1067,20 @@ def _run_test_case_timeline(
         def _record_lat(_result) -> None:
             evt_latencies.append((time.monotonic() - t0) * 1000)
 
+        # Scenario clock travels with the event (same stamping as _dispatch_event) —
+        # this group path is the one actually taken for timeline events.
+        def _stamp(e) -> str:
+            return f"[scenario time: {e.when}] {e.input}" if getattr(e, "when", None) else e.input
         if all(e.call_type == "send_event" for e in batch):
             items = [
-                (e.recipient, json.dumps({"system": e.source, "content": e.input}), e.source)
+                (e.recipient, json.dumps({"system": e.source, "content": _stamp(e), "timestamp": e.when}), e.source)
                 for e in batch
             ]
             res, tout = _run_with_timeout(
                 lambda its=items: gw.dispatch_many(its, on_result=_record_lat), timeout_s
             )
         else:
-            items = [(e.recipient, e.input, e.source) for e in batch]
+            items = [(e.recipient, _stamp(e), e.source) for e in batch]
             res, tout = _run_with_timeout(
                 lambda its=items: rt.send_many(its, on_result=_record_lat), timeout_s
             )
