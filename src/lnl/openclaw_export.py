@@ -308,6 +308,15 @@ def _combined_agents_md(objects: list[ObjectDefinition]) -> str:
         "'notify' another component, perform that component's behavior yourself and use the "
         "available tools to take its external actions directly "
         "(e.g. call `slack_send_message`, `zapier_tables_create_record`, etc.).\n\n"
+        "**STATE:** Each object's state lives in its section of `state.md` — that IS the "
+        "canonical store. When a behavior says to read state from a component (a desk, "
+        "window, tracker, ledger), read that component's `state.md` section; when it says "
+        "to commit/record/increment state, rewrite that section in your updated `state.md`. "
+        "NEVER look for component state behind a tool — tools are only for the external "
+        "systems listed under Available Tools. If a state section is empty or uninitialized, "
+        "bootstrap it exactly as the behavior describes (e.g. fetch the roster via its read "
+        "tool, seed the rotation, zero the counts) and proceed — an empty section is a fresh "
+        "start, not an error.\n\n"
         "## Objects\n",
     ]
     for obj in objects:
