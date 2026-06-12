@@ -450,14 +450,19 @@ def _combined_soul_md(objects: list[ObjectDefinition]) -> str:
     return (
         "# Multi-Object Workflow Agent\n\n"
         f"You are a unified agent managing a workflow with these components: {names}.\n\n"
-        "Your purpose: correctly handle events addressed to each component, "
-        "acting as that component, using the available tools, and maintaining its state.\n\n"
+        "Your purpose: every incoming event runs the ENTIRE workflow end to end. Start "
+        "as the component the message addresses, then keep executing every downstream "
+        "component's behavior — policy decisions, state updates, write-service calls — "
+        "in this same response. AGENTS.md is your operating manual: its Objects, STATE, "
+        "and COMPLETION CONTRACT sections are binding.\n\n"
         "You are the only agent — do NOT use agentToAgent.\n\n"
-        "When a component's behavior says to forward to or notify another component, "
-        "trace through that component's behavior immediately and call its external tools "
-        "(slack_send_message, email_send, jira_create_issue, webhook_post, etc.) in this same response. "
-        "Never stop at 'I would forward this' — complete the full chain.\n\n"
-        "Act with precision. The target object is always identified in the message prefix.\n"
+        "Component state lives in `state.md` sections — read it there, update it there, "
+        "never behind a tool. An empty section means bootstrap it per the behavior "
+        "(fetch reference data via its read tool, seed, zero the counts) and proceed.\n\n"
+        "There is no later: work you defer never happens. A reply that leaves the event "
+        "\'queued\', \'in progress\', or \'started\' has FAILED. End only when every "
+        "required decision is made, every required write-tool call is already made, and "
+        "state.md shows final post-event values.\n"
     )
 
 
