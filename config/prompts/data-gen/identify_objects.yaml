@@ -97,9 +97,13 @@ prompt: |
      - The reply names the selected member AND the full updated order, so the requester can write
        the new positions to the external sheet (the sheet mirrors the custodian, never the
        reverse).
+     - DAY KEYS: time-bounded counts ("per day", "per week") are keyed by the DAY part of the
+       scenario time — the portion before 'T' (W01-5T09:20 belongs to day W01-5). Spell this out
+       in BOTH halves; a count keyed by a full timestamp never repeats, so caps silently never
+       bind.
      The requester's behavior must state the matching half: fetch the roster once, pass it in the
-     first request, and write the custodian's returned order back to the sheet after each
-     assignment.
+     first request, write the custodian's returned order back to the sheet after each
+     assignment, and never write downstream records before the custodian confirms the commit.
 
      A Custodian owns STATE, not LOGIC. Its `behavior` exposes exactly two operations plus
      maintenance — and NO business policy:
