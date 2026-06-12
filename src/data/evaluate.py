@@ -2805,13 +2805,15 @@ def _install_hang_diagnostics(stall_after_s: float = 300.0, check_every_s: float
     import signal as _signal
     import threading as _threading
     import time as _time
-    from src.data.costs import tracker as _tracker
+    from src.lnl.brain import LIVENESS as _liveness
 
     faulthandler.register(_signal.SIGUSR1, all_threads=True, chain=True)
 
     def _pulse() -> int:
-        s = _tracker.summary()
-        return int(s["total_prompt_tokens"]) + int(s["total_completion_tokens"])
+        # Attempts tick even when responses hang; a frozen counter for 5 minutes
+        # means nothing is even TRYING to call out — or one call is wedged and
+        # nothing else can proceed. Either way: dump.
+        return int(_liveness["attempts"]) + int(_liveness["completions"])
 
     def _loop() -> None:
         last_pulse, last_change, dumped = _pulse(), _time.monotonic(), False

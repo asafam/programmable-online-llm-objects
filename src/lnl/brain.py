@@ -8,6 +8,11 @@ import os
 import time
 
 logger = logging.getLogger(__name__)
+
+# Liveness pulse for external watchdogs (evaluate.py hang watchdog): bumped on
+# every chat-completion ATTEMPT and every completed response. A hung HTTP read
+# shows up as a frozen counter; healthy runs tick every few seconds.
+LIVENESS = {"attempts": 0, "completions": 0, "prompt_tokens": 0, "completion_tokens": 0}
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1758,7 +1763,7 @@ class AzureBrain(LLMBrain):
             kwargs["seed"] = self._seed
         try:
             t0 = time.time()
-            resp = self._client.chat.completions.create(**kwargs)
+            resp = self._create_with_filter_retry(kwargs, object_id)
             latency_ms = (time.time() - t0) * 1000
         except Exception as exc:
             self._raise_if_content_filter(exc, object_id)
@@ -1797,7 +1802,7 @@ class AzureBrain(LLMBrain):
             kwargs["seed"] = self._seed
         try:
             t0 = time.time()
-            resp = self._client.chat.completions.create(**kwargs)
+            resp = self._create_with_filter_retry(kwargs, object_id)
             latency_ms = (time.time() - t0) * 1000
         except Exception as exc:
             self._raise_if_content_filter(exc, object_id)
@@ -1840,7 +1845,7 @@ class AzureBrain(LLMBrain):
             kwargs["seed"] = self._seed
         try:
             t0 = time.time()
-            resp = self._client.chat.completions.create(**kwargs)
+            resp = self._create_with_filter_retry(kwargs, object_id)
             latency_ms = (time.time() - t0) * 1000
         except Exception as exc:
             self._raise_if_content_filter(exc, object_id)
@@ -1879,7 +1884,7 @@ class AzureBrain(LLMBrain):
             kwargs["seed"] = self._seed
         try:
             t0 = time.time()
-            resp = self._client.chat.completions.create(**kwargs)
+            resp = self._create_with_filter_retry(kwargs, object_id)
             latency_ms = (time.time() - t0) * 1000
         except Exception as exc:
             self._raise_if_content_filter(exc, object_id)
@@ -1906,7 +1911,13 @@ class AzureBrain(LLMBrain):
         last = None
         for attempt in range(4):
             try:
-                return self._client.chat.completions.create(**kwargs)
+                LIVENESS["attempts"] += 1
+                resp = self._client.chat.completions.create(**kwargs)
+                LIVENESS["completions"] += 1
+                if getattr(resp, "usage", None):
+                    LIVENESS["prompt_tokens"] += resp.usage.prompt_tokens or 0
+                    LIVENESS["completion_tokens"] += resp.usage.completion_tokens or 0
+                return resp
             except Exception as e:
                 body = getattr(e, "body", None) or {}
                 err = (body.get("error") or {}) if isinstance(body, dict) else {}
