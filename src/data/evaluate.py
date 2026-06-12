@@ -2791,8 +2791,49 @@ def _load_tc_results(path: Path) -> list[SampleResult]:
     return results
 
 
+def _install_hang_diagnostics(stall_after_s: float = 300.0, check_every_s: float = 60.0) -> None:
+    """Self-diagnosing hangs: two deadlocked runs froze with all threads parked on
+    Python locks and nothing observable from outside (py-spy needs root on macOS).
+
+    1. `kill -USR1 <pid>` dumps every thread's Python stack to stderr on demand.
+    2. A daemon watchdog dumps all stacks automatically when the cost tracker
+       records no new tokens for `stall_after_s` — token flow is the run's pulse;
+       a silent 5 minutes means a deadlock or a hung request, and the dump names
+       the exact file/line each thread is blocked on.
+    """
+    import faulthandler
+    import signal as _signal
+    import threading as _threading
+    import time as _time
+    from src.data.costs import tracker as _tracker
+
+    faulthandler.register(_signal.SIGUSR1, all_threads=True, chain=True)
+
+    def _pulse() -> int:
+        s = _tracker.summary()
+        return int(s["total_prompt_tokens"]) + int(s["total_completion_tokens"])
+
+    def _loop() -> None:
+        last_pulse, last_change, dumped = _pulse(), _time.monotonic(), False
+        while True:
+            _time.sleep(check_every_s)
+            cur = _pulse()
+            if cur != last_pulse:
+                last_pulse, last_change, dumped = cur, _time.monotonic(), False
+            elif not dumped and _time.monotonic() - last_change > stall_after_s:
+                sys.stderr.write(
+                    f"\n=== HANG WATCHDOG: no token movement for {stall_after_s:.0f}s — "
+                    f"dumping all thread stacks ===\n")
+                faulthandler.dump_traceback(all_threads=True)
+                sys.stderr.flush()
+                dumped = True  # one dump per stall; resets when tokens move again
+
+    _threading.Thread(target=_loop, daemon=True, name="hang-watchdog").start()
+
+
 def main():
     args = build_parser().parse_args()
+    _install_hang_diagnostics()
     if args.stats:
         results = _load_tc_results(args.stats)
         summary = _compute_summary(results)
