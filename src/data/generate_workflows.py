@@ -525,7 +525,11 @@ def _make_write_tool(entry: dict) -> "MockToolDef | None":
     args = entry.get("arguments", [])
     if isinstance(args, list) and args:
         properties = {a: {"type": "string"} for a in args if isinstance(a, str)}
-        args_schema = {"type": "object", "properties": properties, "additionalProperties": True}
+        # declared arguments are the tool's CORE fields — make them REQUIRED so the model
+        # cannot legally omit the recipient/subject/topic (eval showed blank-argument writes
+        # silently succeeding and failing the judge later)
+        args_schema = {"type": "object", "properties": properties,
+                       "required": sorted(properties), "additionalProperties": True}
     else:
         args_schema = {"type": "object", "additionalProperties": True}
     return MockToolDef(

@@ -165,6 +165,21 @@ class MockInProcessExecutor:
         }
         self.call_log.append(log_entry)
 
+        # Enforce required arguments: a real API rejects a write with a missing/blank
+        # recipient — returning success for garbage taught agents nothing (eval: emails to
+        # "unknown", archive rows with empty fields). The error is corrective: the agent can
+        # retry within its ReAct cycle.
+        required = (self._tool_def.arguments_schema or {}).get("required") or []
+        _BLANK = {"", "unknown", "n/a", "none", "null", "tbd"}
+        bad = [k for k in required
+               if k not in args or (isinstance(args.get(k), str) and args[k].strip().lower() in _BLANK)]
+        if bad:
+            return ToolResult(
+                id=call.id, output="",
+                error=f"invalid arguments: required field(s) missing or blank: {', '.join(bad)}. "
+                      f"Provide concrete values (look them up from your state, the message, or "
+                      f"your read-service peers) and call the tool again.")
+
         interp_vars = {**args, "call_index": call_index}
 
         if self._remote_url is not None:
