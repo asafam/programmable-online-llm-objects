@@ -1747,8 +1747,7 @@ async def _execute_tc_async(
 
     # Reset state before run.
     if single_agent_id:
-        # Steps-based single-agent mode: pass the Sample (uses tc.steps), not tc.objects.
-        reset_single_agent_state(tc, openclaw_home, single_agent_id)
+        reset_single_agent_state(tc.objects, openclaw_home, single_agent_id)
     else:
         for obj in tc.objects:
             reset_agent_state(f"{obj.object_id}{slot_suffix}", obj.state_description, openclaw_home)
@@ -1785,7 +1784,7 @@ async def _execute_tc_async(
             "kind": "step",
             "index": i,
             "target": step.recipient,
-            "content": f"[Event from {step.source}]: {step.input}",
+            "content": f"[Event from {step.source} at {step.when}]: {step.input}",
             "expect": step.expect,
         })
 
@@ -1907,6 +1906,21 @@ async def _execute_tc_async(
             handles: dict[str, Any] = {single_agent_id: client.get_agent(single_agent_id, session_name=sname)}
             session_names: dict[str, str] = {single_agent_id: sname}
 
+            # Prime the session with the operating manual. Gateway versions differ on
+            # whether workspace SOUL.md/AGENTS.md reach the agent's context (the
+            # 2026.4.x worker injected NEITHER — the agent improvised "record and
+            # reply" for every event). Message history always reaches the model.
+            try:
+                from src.lnl.openclaw_export import _combined_agents_md
+                _manual = _combined_agents_md(tc.objects)
+                await handles[single_agent_id].execute(
+                    "Operating manual for this workflow. Acknowledge with OK and follow "
+                    "it for every subsequent event without restating it:\n\n" + _manual,
+                    options=_exec_opts,
+                )
+            except Exception as _exc:
+                print(f"  (single-agent priming failed: {_exc})")
+
         async def _dispatch_concurrent_group(group: list, ctx: str, group_key: str = "") -> None:
             """Fire events in `group` simultaneously; append EventResults to event_results."""
             if not group:
@@ -1934,6 +1948,11 @@ async def _execute_tc_async(
                 if h is None:
                     return evt, None, 0.0
                 content = f"[Event from {evt.source} at {evt.when}]: {evt.input}"
+                if single_agent_id:
+                    # Fresh session per concurrent event — carry the manual inline.
+                    from src.lnl.openclaw_export import _combined_agents_md as _cam
+                    content = ("Operating manual for this workflow — follow it for this "
+                               "event:\n\n" + _cam(tc.objects) + "\n\n---\n\n" + content)
                 t_evt = time.time()
                 try:
                     res = await h.execute(content, options=_exec_opts)
@@ -2795,8 +2814,7 @@ async def _run_all_tcs_concurrent(
                             if not seen_exports_per_slot[slot]:
                                 await asyncio.sleep(slot * 2.0)
                             if single_agent_id:
-                                # Steps-based single-agent mode: pass Sample (tc.steps used).
-                                export_single_agent_workspace(tc, slot_openclaw_home,
+                                export_single_agent_workspace(tc.objects, slot_openclaw_home,
                                                               agent_id=single_agent_id, force=True)
                             else:
                                 export_workflow_from_objects(tc.objects, slot_openclaw_home,
@@ -3586,8 +3604,7 @@ def run(args: argparse.Namespace) -> Path:
                 if single_agent_id:
                     tqdm.write(f"  Exporting single agent '{single_agent_id}' for sample {tc.sample_id!r} "
                           f"({len(tc.objects)} objects: {[o.object_id for o in tc.objects]})")
-                    # Steps-based single-agent mode: pass Sample (tc.steps used, not tc.objects).
-                    export_single_agent_workspace(tc, openclaw_home, agent_id=single_agent_id, force=True)
+                    export_single_agent_workspace(tc.objects, openclaw_home, agent_id=single_agent_id, force=True)
                     if agent_model or agent_provider:
                         effective_provider = asyncio.run(_configure_single_openclaw_agent(
                             single_agent_id,
