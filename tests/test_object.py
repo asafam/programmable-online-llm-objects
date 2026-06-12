@@ -759,7 +759,7 @@ class TestHistoryTaskGrouping:
             object_id="test-obj",
         )
         obj = LLMObject(
-            _make_definition(), brain,
+            _make_definition(peers=[PeerDeclaration("peer-x", "downstream")]), brain,
             enable_planner=True, enable_evaluator=False,
         )
         plan = self._inject_plan(obj, trace_id="t-A", steps=[

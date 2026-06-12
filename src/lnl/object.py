@@ -136,6 +136,13 @@ class LLMObject:
         # Pre-execution planner: separate LLM call producing a plan before
         # the ReAct loop.
         self._enable_planner = enable_planner
+        # LEAF FAST PATH: an object with no peers and no tools (custodians, pure
+        # state-keepers) has exactly one possible move per message — read or
+        # commit its state and reply. Running the coordinator ceremony on it
+        # (planner call + per-step evaluator cycles) turns a ~3s atomic
+        # operation into 12-22s and 3-6 LLM calls of governance. Leaves get a
+        # single executor inference; planner and evaluator are skipped.
+        self._is_leaf = not (definition.peers or definition.skills)
         # Planner brain: separate LLM brain used for the pre-execution planning
         # call. Defaults to the executor brain if not set; can be a smaller or
         # different model.
@@ -560,7 +567,7 @@ class LLMObject:
         - No active plan (planner didn't fire or plan already closed)
         - All plan steps already terminal — nothing left to grade
         """
-        if not self._enable_evaluator:
+        if not self._enable_evaluator or self._is_leaf:
             return None, None
         if message is None:
             return None, None
@@ -1004,6 +1011,7 @@ class LLMObject:
         needs_replan = existing_plan is not None and existing_plan.needs_replan
         if (
             self._enable_planner
+            and not self._is_leaf
             and message.type == MessageType.DOMAIN
             and (existing_plan is None or needs_replan)
         ):
@@ -1296,7 +1304,7 @@ class LLMObject:
 
             # Self-evaluation. run_evaluator returns (None, None) when the
             # evaluator should be skipped (disabled, no plan, no message).
-            if not self._enable_evaluator or eval_cycle >= self._evaluator_max_cycles:
+            if not self._enable_evaluator or self._is_leaf or eval_cycle >= self._evaluator_max_cycles:
                 # Evaluator disabled or cycle cap reached — auto-close now
                 # to preserve no-evaluator runtime behavior.
                 self._auto_close_plan_if_complete(trace_id)

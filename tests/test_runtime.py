@@ -472,6 +472,7 @@ class TestAdminModification:
             object_id="worker",
             role="Original.",
             behavior="Original behavior.",
+            peers=[PeerDeclaration("peer-x", "downstream")],
         ))
         obj = rt._bus.objects["worker"]
 
@@ -572,7 +573,7 @@ class TestAdminEdgeCases:
             object_id="worker",
         )
         rt = Runtime(brain)
-        rt.create_object(ObjectDefinition(object_id="worker", role="Original."))
+        rt.create_object(ObjectDefinition(object_id="worker", role="Original.", peers=[PeerDeclaration("peer-x", "downstream")]))
 
         rt.send_admin("worker", "Rename yourself.")
 
@@ -788,7 +789,7 @@ class TestAdminEdgeCases:
         brain.script("worker", LLMResponse(updated_state="", reply="done"))
 
         rt = Runtime(brain, system_config=SystemConfig(replan_on_modification=True))
-        rt.create_object(ObjectDefinition(object_id="worker", role="X", behavior="b1"))
+        rt.create_object(ObjectDefinition(object_id="worker", role="X", behavior="b1", peers=[PeerDeclaration("peer-x", "downstream")]))
         obj = rt._bus.objects["worker"]
 
         plan_x = Plan(goal="X stale", steps=[PlanStep(kind="reason", description="old")], trace_id="trace-X")
