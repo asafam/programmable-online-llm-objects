@@ -1404,6 +1404,12 @@ def _print_summary(summary, output_path=None, elapsed_s=None,
         elapsed_str = f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}" if h else f"{m:02d}:{s:02d}.{ms:03d}"
         print(f"Elapsed:             {elapsed_str}")
     print(f"Mean pass rate:      {_fmts(summary.mean_pass_rate, summary.pass_rate_ci95)}")
+    # Sample-level: a sample "fully passes" only when EVERY judged event passes —
+    # the strictest view; shown live in the pbar as sample=, previously absent here.
+    _full = getattr(summary, "samples_fully_passed", None)
+    _elig = getattr(summary, "samples_scored", None)
+    if _full is not None and _elig:
+        print(f"Samples fully passed: {_full}/{_elig}  ({_full/_elig:.1%})")
     print(f"Steps pass rate:     {_fmts(summary.steps_pass_rate, summary.steps_pass_rate_ci95)}")
     print(f"Workflows completion:  {_fmts(summary.samples_completion, summary.samples_completion_ci95)}")
     print(f"Mod pass rate:       {_fmt_mod(summary.mod_pass_rate, summary.mod_pass_rate_ci95, summary.mod_pass_rate_all, summary.mod_pass_rate_all_ci95)}  (pre+post+irrelevant)")
@@ -2306,7 +2312,13 @@ def _compute_summary(results: list[SampleResult]) -> EvalSummary:
     post_mod_pass_rate_all, post_mod_pass_rate_all_ci95 = _role_pass_rate_and_ci95("post_mod", exclude_inconclusive=False)
     irrelevant_pass_rate_all, irrelevant_pass_rate_all_ci95 = _role_pass_rate_and_ci95("irrelevant", exclude_inconclusive=False)
 
+    # Strict sample-level: full pass = every judged event passed (infra TCs excluded).
+    _scored = [r for r in results if r.pass_rate is not None and not getattr(r, "error_type", None)]
+    _fully = sum(1 for r in _scored if r.pass_rate == 1.0)
+
     return EvalSummary(
+        samples_fully_passed=_fully,
+        samples_scored=len(_scored),
         total_test_cases=total_test_cases,
         total_runs=total_runs,
         total_events=len(all_events),

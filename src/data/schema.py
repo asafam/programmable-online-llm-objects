@@ -1095,6 +1095,9 @@ class SampleResult(BaseModel):
     error_type: Optional[str] = None    # "infra" = infrastructure failure (pairing, network, terminated); None = behavioral
 
 class EvalSummary(BaseModel):
+    # Sample-level strict view: a sample fully passes when EVERY judged event passes.
+    samples_fully_passed: Optional[int] = None
+    samples_scored: Optional[int] = None
     """Aggregate metrics across all test cases and runs."""
     total_test_cases: int
     total_runs: int
