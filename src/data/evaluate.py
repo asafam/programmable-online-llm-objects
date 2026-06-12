@@ -1811,7 +1811,7 @@ def run(args: argparse.Namespace) -> Path:
             _in_tok_counter[0] += result.input_tokens or 0
             _out_tok_counter[0] += result.output_tokens or 0
             if _pbar_holder[0] is not None:
-                _pbar_postfix(_pbar_holder[0], all_tc_results, _event_counter[0], _in_tok_counter[0], _out_tok_counter[0])
+                _pbar_postfix(_pbar_holder[0], all_tc_results, _event_counter[0], _in_tok_counter[0], _out_tok_counter[0], agent_model=args.model)
 
         def _on_mod_applied(mod, _tc=tc):
             _emit(
