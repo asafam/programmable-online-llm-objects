@@ -31,6 +31,23 @@ burned too much wall-clock per data point as the default probe.
 | E. Read-and-commit collapse | separate read turn + commit turn | single custodian exchange | not started |
 | F. Sink/window tuning | — | (mostly subsumed by C) | — |
 
+## Hypothesis register
+
+Process rule (2026-06-13): NO run launches without a row here — hypothesis,
+prediction, single variable, then result and verdict. Confounded results say so.
+
+| ID | Hypothesis | Prediction | Test | Result | Verdict |
+|---|---|---|---|---|---|
+| H1 | Versioned custodian commits (stale-reject, bootstrap-reject) kill waves via rejection loops | optimistic commits raise round-robin score | P1 (A alone, sync) | run killed (port race) | **untested in isolation** — folded into package |
+| H2 | Async dispatch (design-faithful) is not worse than sync, once measured | package ≥ sync band 5–8/31 | P2 round-robin | 6/31, coherence 56% (best), WITH storm active | supported (not worse); exposed re-fire storm |
+| H3 | Log-shaped state drives cost + late-event errors | probe cost drops materially | P2 vs clock series | $3.43 vs $6.5–7 | **supported for cost**; accuracy effect unattributed |
+| H4 | Re-fire storm killed 9/31 P2 waves; in-flight guard recovers them | round-robin +3–8 events vs P2's 6/31 | P3 round-robin (guard) | RUNNING | pending |
+| H5 | Custodian ceremony (planner+evaluator per atomic turn) wastes 3–6× latency/cost | latency/cost drop ≥3×, score unchanged | P4 expenses (leaf path) | 3:25/$0.50 (≥3× faster/cheaper ✓) but 1/12 score | **CONFOUNDED** — probe also first to isolate expenses; freelancing observed; score drop not attributable to leaf path (no control) |
+| H6 | Unscoped tools let entry services freelance write-sinks' jobs (observed: append_expense_row(status=submitted) from the entry, bypassing the policy's "pending") | with skills-scoped tools (0ea200a): expenses ≥4/12 AND zero append calls by the entry object | P5 expenses | — | pending |
+
+Lesson recorded: H5/H6 were stacked without a control — P4 cannot separate
+leaf-path effects from pre-existing freelancing. Don't repeat.
+
 ## Run ladder (probe = round-robin unless noted)
 
 | # | Config (A/B/C/...) | Score | Coherence | Cost | Run file | Verdict |
