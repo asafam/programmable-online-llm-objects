@@ -4,8 +4,11 @@ Goal: lift LNL (gpt-5.4-mini) on the v34 state-scenario dataset toward/past the
 single-agent baseline, by ablating the design variables that govern distributed
 state. Constraint: **gpt-5.4-mini only** (full 5.4 was diagnostic-only).
 
-Probe TC: `round-robin-lead-assignment` (31 events; hardest state chain; the
-sample a single gpt-5.4 agent solved 31/31, so every expect is reachable).
+Probe TC (since 2026-06-13): **`expenses-tracker`** — 7 events, ~5-8 min/probe,
+and LNL's worst relative gap vs baseline (0.33 vs 0.62): fast loops aimed at the
+most informative deficit. Secondary: `inventory` (0.40 vs 0.60). Round-robin
+(31 events, 20-45 min) is reserved for MILESTONE confirmations only — it
+burned too much wall-clock per data point as the default probe.
 
 ## Reference points
 
@@ -83,5 +86,7 @@ self-consistent" from incoherent.
   dispatch + quiesce make versioned handshakes cost more than they protect).
 - 2026-06-13: `--tool-dispatch` default flipped to async — all historical LNL
   numbers were measured in sync mode and undersell the design if async wins.
+- 2026-06-13: probe TC switched round-robin → expenses-tracker (iteration
+  velocity; round-robin only for milestones).
 - 2026-06-13: state contract — facts/aggregates only; audit trails belong to
   the external systems (tool-call logs), never object state.
