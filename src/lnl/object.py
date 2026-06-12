@@ -998,11 +998,25 @@ class LLMObject:
                         self._definition, self._state, message,
                         prompt_file=self._planner_prompt_file,
                         tools=self._tool_registry.describe() if self._tool_registry else "",
+                        replan_enabled=self._enable_replan_checkpoints,
                     )
                     plan_dict, planner_metrics = self._planner_brain.plan_call(
                         planner_prompt, object_id=self.object_id,
                     )
                     plan = plan_dict_to_plan(plan_dict, trace_id=trace_id)
+                    # Safety net: with replan checkpoints disabled, a replan step
+                    # would never fire and the wave would stall after its reads —
+                    # demote it to a reason step carrying its deferred question so
+                    # the executor decides inline from earlier step results.
+                    if not self._enable_replan_checkpoints:
+                        for _st in plan.steps:
+                            if _st.kind == "replan":
+                                _st.kind = "reason"
+                                _q = getattr(_st, "replan_question", None) or ""
+                                _st.description = (
+                                    f"{_st.description} — decide this now from the earlier "
+                                    f"steps' results and carry out the chosen branch: {_q}"
+                                ).strip()
                     # If the planner produced no executable steps, do NOT
                     # synthesize a fallback — the planner prompt mandate says
                     # every plan must have ≥1 step; an empty result indicates
@@ -2744,6 +2758,7 @@ class LLMObject:
                 tools=tools_desc,
                 prior_plan=prior_plan_snapshot,
                 replan_question=replan_question,
+                replan_enabled=self._enable_replan_checkpoints,
             )
             try:
                 plan_dict, planner_metrics = self._planner_brain.plan_call(

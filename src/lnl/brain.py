@@ -554,6 +554,7 @@ def build_planner_prompt(
     tools: str = "",
     prior_plan: "Optional[Plan]" = None,  # type: ignore[name-defined]
     replan_question: Optional[str] = None,
+    replan_enabled: bool = True,
 ) -> str:
     """Build the planner system prompt from `planner_sequential.yaml` (the sequential default).
 
@@ -608,6 +609,18 @@ def build_planner_prompt(
     # post-modification.
     if _MODIFICATION_RULES_MARKER in behavior_text:
         rendered = rendered + _MODIFICATION_RULES_PLANNER_HINT
+    if not replan_enabled:
+        rendered = rendered + (
+            "\n\n## REPLAN IS DISABLED IN THIS RUNTIME\n"
+            "`kind=replan` steps will NOT fire — a plan that defers its decision to a "
+            "replan checkpoint stalls after the reads and the work never happens. Never "
+            "emit `kind=replan`. Encode every conditional branch as a normal action step "
+            "whose description states the condition and both outcomes, e.g. `tell "
+            "<writer>: commit the update for the first eligible candidate per the step-s1 "
+            "read; if none qualifies, send the hold/exception write instead`. The "
+            "executor resolves the condition at execution time from the earlier step's "
+            "result.\n"
+        )
     return rendered
 
 
