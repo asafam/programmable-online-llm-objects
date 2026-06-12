@@ -44,6 +44,18 @@ Coherence = assignments matching a rotation seeded by the system's OWN history
 (`python -m src.data.coherence -r <results.jsonl>`); separates "shifted but
 self-consistent" from incoherent.
 
+## Findings log
+
+- **B (async) has a re-fire storm** (found 2026-06-13 02:15, both live runs):
+  each tool/peer REPLY starts a fresh turn and the object re-dispatches plan
+  steps still awaiting their own replies (policy→lead-desk ×7 in P2;
+  engineering-intake → all peers until depth limit). Chain-depth=20 drops the
+  excess — protective but lossy. Async needs an IN-FLIGHT GUARD (mark step
+  dispatched-awaiting-reply; no re-dispatch until correlated reply/timeout)
+  before it can be judged fairly. If P2 ≥ sync history even with the storm,
+  async+guard is strictly better; if it craters, revert default to sync until
+  the guard lands.
+
 ## Standing measurement rules
 
 - One variable per probe when feasible; package-measure (P2) only because the
