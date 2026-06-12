@@ -238,9 +238,14 @@ class PassthroughExecutor:
     instead of returning an error. All calls are logged for judge evidence.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, object_ids: "set[str] | None" = None) -> None:
         self._call_counts: dict[str, int] = {}  # tool_name → call count
         self.call_log: list[dict] = []
+        # Object ids in the running graph: a "tool call" naming one of these is a
+        # peer interaction the model mis-routed. Silently succeeding lies to the
+        # model — the peer never hears anything — and the wave dies spinning
+        # between fake tool successes and evaluator FAILs.
+        self._object_ids = set(object_ids or ())
 
     def execute(self, call: "ToolCall", context: dict[str, Any]) -> "ToolResult":
         self._call_counts[call.tool] = self._call_counts.get(call.tool, 0) + 1
@@ -251,6 +256,12 @@ class PassthroughExecutor:
             "call_index": call_index,
             "arguments": call.arguments,
         })
+        if call.tool in self._object_ids:
+            return ToolResult(
+                id=call.id, output="",
+                error=(f"'{call.tool}' is a peer OBJECT, not a tool — this call reached "
+                       f"nobody. To interact with it, send it a message "
+                       f"(outgoing_messages / ask {call.tool}: ...) and act on its reply."))
         # Data-lookup tools (by _data suffix convention) return an empty but valid
         # JSON object so the LLM can handle missing data gracefully rather than
         # treating the call as a hard failure.

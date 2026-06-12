@@ -474,7 +474,7 @@ def _execute_test_case_inner(
     # on every Runtime (Runtime.__init__ registers CreateObjectExecutor when registry present).
     # Mock tools for domain skills are layered on top.
     mock_executors: list = []
-    passthrough = PassthroughExecutor()
+    passthrough = PassthroughExecutor(object_ids={o.object_id for o in tc.objects})
     tool_registry: "ToolRegistry" = ToolRegistry()
     tool_registry.register("execute_code", CodeExecutor())
     tool_registry.register_fallback(passthrough)
