@@ -135,7 +135,9 @@ now_ms = int(time.time() * 1000)
 paired_entry = {
     "deviceId": device_id,
     "publicKey": raw_pub_key,
-    "platform": "linux",
+    "platform": "darwin",  # must match the HOST client's claimed platform — the
+                            # gateway pins device metadata and closes with "pairing
+                            # required" on mismatch (eval CLI connects from macOS)
     "clientId": "cli",
     "clientMode": "cli",
     "role": "operator",
