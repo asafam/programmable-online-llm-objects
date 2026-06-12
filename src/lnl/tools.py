@@ -346,10 +346,22 @@ class ToolRegistry:
         """True when a catch-all fallback executor is registered."""
         return self._fallback is not None
 
-    def describe(self) -> str:
-        """Return a text description of tools for injection into the system prompt."""
+    def names(self) -> list:
+        """Registered tool names."""
+        return list(self._specs.keys())
+
+    def describe(self, allowed: "set[str] | None" = None) -> str:
+        """Return a text description of tools for injection into the system prompt.
+
+        allowed: when given, only these tools are described and the open-ended
+        fallback hint is omitted — objects see ONLY the tools their skills
+        grant (every object seeing every tool let entry services freelance the
+        write-sinks' jobs with naive arguments).
+        """
         lines = []
         for name, spec in self._specs.items():
+            if allowed is not None and name not in allowed:
+                continue
             lines.append(f"- {name}: {spec.description}")
             props = spec.arguments_schema.get("properties", {})
             if props:
@@ -357,7 +369,7 @@ class ToolRegistry:
                     f"{k} ({v.get('type', 'any')})" for k, v in props.items()
                 )
                 lines.append(f"  Arguments: {args_str}")
-        if self._fallback is not None:
+        if self._fallback is not None and allowed is None:
             lines.append(
                 "- <any other tool name>: Call any domain-specific tool by name "
                 "(e.g. send_email, create_deal, post_slack_message, append_row). "

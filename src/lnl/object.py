@@ -293,7 +293,7 @@ class LLMObject:
         try:
             ctx = self._tool_context_factory(self) if self._tool_context_factory else {}
             try:
-                result = self._tool_registry.execute(tc, ctx)
+                result = self._execute_scoped(tc, ctx)
             except Exception as exc:
                 result = ToolResult(
                     id=tc.id, output="", error=f"Tool execution raised: {exc}",
@@ -1022,7 +1022,7 @@ class LLMObject:
                     planner_prompt = build_planner_prompt(
                         self._definition, self._state, message,
                         prompt_file=self._planner_prompt_file,
-                        tools=self._tool_registry.describe() if self._tool_registry else "",
+                        tools=self._tool_registry.describe(self._allowed_tool_names()) if self._tool_registry else "",
                         replan_enabled=self._enable_replan_checkpoints,
                     )
                     plan_dict, planner_metrics = self._planner_brain.plan_call(
@@ -1115,7 +1115,7 @@ class LLMObject:
                         self.object_id, exc,
                     )
 
-        tools_desc = self._tool_registry.describe() if self._tool_registry else ""
+        tools_desc = self._tool_registry.describe(self._allowed_tool_names()) if self._tool_registry else ""
 
         total_metrics = InferenceMetrics(model="")
         if planner_metrics is not None:
@@ -1649,7 +1649,7 @@ class LLMObject:
                 for tc in tcs:
                     tools_called.append(tc.tool)
                     try:
-                        result = self._tool_registry.execute(tc, ctx)
+                        result = self._execute_scoped(tc, ctx)
                     except Exception as exc:
                         result = ToolResult(id=tc.id, output="", error=f"Tool execution raised: {exc}")
                     if tc.plan_step_index is not None and trace_id is not None:
@@ -1988,6 +1988,49 @@ class LLMObject:
                     wait_timeout_seconds=wait_timeout_seconds,
                 ))
             plan.last_progress_at = datetime.datetime.now(datetime.timezone.utc)
+
+    def _allowed_tool(self, name: str) -> bool:
+        """Skills scope tools: an object may only call tools its own skills grant.
+
+        Token-based matching, not exact — bind-time skill names and tool names
+        drift (skill send_email ~ tool send_hiring_email).
+        """
+        import re as _re
+        # Core runtime tools are granted to every object, not via skills.
+        if name in ("create_object", "execute_code"):
+            return True
+        skills = self._definition.skills or []
+        if not skills:
+            return False
+
+        def _toks(x: str) -> set:
+            return {t for t in _re.split(r"[^a-z0-9]+", (x or "").lower()) if t}
+
+        nt = _toks(name)
+        for sk in skills:
+            st = _toks(sk)
+            if name == sk or st <= nt or nt <= st:
+                return True
+        return False
+
+    def _allowed_tool_names(self) -> "set[str]":
+        if not self._tool_registry:
+            return set()
+        try:
+            names = self._tool_registry.names()
+        except AttributeError:
+            return set()
+        return {n for n in names if self._allowed_tool(n)}
+
+    def _execute_scoped(self, tc, ctx):
+        """Registry execution behind the skills gate, with a corrective error."""
+        if not self._allowed_tool(tc.tool):
+            return ToolResult(
+                id=tc.id, output="",
+                error=(f"'{tc.tool}' is not one of YOUR tools — it belongs to the service "
+                       f"that owns it. Send a message to the appropriate peer to request "
+                       f"that action; only call tools your own skills grant."))
+        return self._tool_registry.execute(tc, ctx)
 
     def _correlate_outgoing(self, outgoing, trace_id: Optional[str] = None):
         """Auto-stamp correlation on outgoing messages.
@@ -2805,7 +2848,7 @@ class LLMObject:
                 replan_question = target_step.replan_question or target_step.description
             # ── Invoke the planner outside the lock ────────────────────────
             from .brain import build_planner_prompt, plan_dict_to_plan
-            tools_desc = self._tool_registry.describe() if self._tool_registry else ""
+            tools_desc = self._tool_registry.describe(self._allowed_tool_names()) if self._tool_registry else ""
             planner_prompt = build_planner_prompt(
                 self._definition,
                 self._working_state_for(trace_id),

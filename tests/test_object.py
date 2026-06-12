@@ -233,7 +233,7 @@ class TestToolLoop:
         reg = ToolRegistry()
         reg.register("my_tool", mock_exec)
 
-        obj = LLMObject(_make_definition(), brain, tool_registry=reg)
+        obj = LLMObject(_make_definition(skills=["my_tool"]), brain, tool_registry=reg)
         result = _process_with_tools(obj, _user_msg("go"))
 
         assert result.state_after == {"status": "tool done"}
@@ -258,7 +258,7 @@ class TestToolLoop:
         reg = ToolRegistry()
         reg.register("my_tool", mock_exec)
 
-        obj = LLMObject(_make_definition(), brain, tool_registry=reg)
+        obj = LLMObject(_make_definition(skills=["my_tool"]), brain, tool_registry=reg)
         _process_with_tools(obj, _user_msg("go"))
 
         # Should have stopped at the default max_tool_rounds (5)
@@ -282,7 +282,7 @@ class TestToolLoop:
         reg.register("exec", CodeExecutor())
 
         obj = LLMObject(
-            _make_definition(), brain,
+            _make_definition(skills=["exec"]), brain,
             tool_registry=reg,
             tool_context_factory=lambda o: {"push_event": lambda c, s="__code__": events.append((c, s))},
         )
@@ -308,7 +308,7 @@ class TestToolLoop:
         reg = ToolRegistry()
         reg.register("t", mock_exec)
 
-        obj = LLMObject(_make_definition(), brain, tool_registry=reg)
+        obj = LLMObject(_make_definition(skills=["t"]), brain, tool_registry=reg)
         # With async dispatch, the first process_message returns "pending" (10 tokens)
         # and the second (after tool REPLY) returns the final result (20 tokens).
         # Use _process_with_tools to collect all results, then sum metrics.
@@ -341,7 +341,7 @@ class TestSyncDispatch:
         reg = ToolRegistry()
         reg.register("my_tool", mock_exec)
 
-        obj = LLMObject(_make_definition(), brain, tool_registry=reg, tool_dispatch="sync")
+        obj = LLMObject(_make_definition(skills=["my_tool"]), brain, tool_registry=reg, tool_dispatch="sync")
         result = obj.process_message(_user_msg("go"))
 
         assert result.reply == "finished sync"
@@ -365,7 +365,7 @@ class TestSyncDispatch:
         reg = ToolRegistry()
         reg.register("my_tool", mock_exec)
 
-        obj = LLMObject(_make_definition(), brain, tool_registry=reg, tool_dispatch="sync")
+        obj = LLMObject(_make_definition(skills=["my_tool"]), brain, tool_registry=reg, tool_dispatch="sync")
         obj.process_message(_user_msg("go"))
 
         assert len(mock_exec.call_log) == 5  # default max_tool_rounds
