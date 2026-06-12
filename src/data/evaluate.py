@@ -560,6 +560,24 @@ def _execute_test_case_inner(
         rt._pool.shutdown(wait=False)
 
 
+def _quiesce_after_timeout(rt, max_wait_s: float) -> None:
+    """A timed-out event's wave is abandoned, NOT cancelled — its threads keep
+    processing and would interleave with the next event, racing custodian
+    versions and cross-contaminating leads (observed: SC001's commit landing
+    with version 7 while SC003 was dispatching). Wait (bounded) for every
+    object to go idle before the next event is released."""
+    import time as _t
+    deadline = _t.monotonic() + max_wait_s
+    while _t.monotonic() < deadline:
+        objs = list(rt._bus._objects.values())
+        if all(not getattr(o, "_active", False) and not getattr(o, "_mailbox", None) for o in objs):
+            return
+        _t.sleep(2.0)
+    logging.getLogger(__name__).warning(
+        "quiesce: abandoned wave still running after %.0fs — state may bleed into the next event",
+        max_wait_s)
+
+
 def _run_with_timeout(fn, timeout_s: Optional[float]):
     """Run fn() with an optional per-step timeout. Returns (result, timed_out).
 
@@ -948,6 +966,8 @@ def _run_test_case_timeline(
                 lambda e=evt, m=stamped: rt.send(e.recipient, m, sender=e.source),
                 timeout_s,
             )
+        if tout:
+            _quiesce_after_timeout(rt, max_wait_s=min(timeout_s or 120.0, 240.0))
         lat = (time.monotonic() - t0) * 1000
         return res, tout, lat, log_snap, exec_s
 
