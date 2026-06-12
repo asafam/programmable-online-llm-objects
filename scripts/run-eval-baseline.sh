@@ -30,13 +30,18 @@ cd "${REPO_ROOT}"
 if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 fi
+# Never trust PATH for the interpreter: a stale activate (venv created under a
+# renamed repo dir) silently fell through to miniconda python3.9 — evals ran on
+# the wrong interpreter + site-packages for a full day before anyone noticed.
+PYBIN="${REPO_ROOT}/.venv/bin/python"
+[ -x "$PYBIN" ] || PYBIN="python"
 
 # ── Run with temp log, then rename to match output file ───────────────────────
 mkdir -p logs/evaluate
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 TEMP_LOG="logs/evaluate/.tmp_${TIMESTAMP}.log"
 
-python -m src.data.evaluate_baseline "$@" 2>&1 | tee "${TEMP_LOG}"
+"$PYBIN" -m src.data.evaluate_baseline "$@" 2>&1 | tee "${TEMP_LOG}"
 
 OUTPUT_FILE=$(grep "^Complete\. Output:" "${TEMP_LOG}" | sed 's/Complete\. Output: //' | tail -1)
 if [ -n "${OUTPUT_FILE}" ]; then
