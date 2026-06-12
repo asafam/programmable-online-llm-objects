@@ -65,6 +65,12 @@ name: lnl-openclaw-pool
 
 x-worker-base: &worker-base
   image: lnl-openclaw-worker
+  # Public resolvers: the host router's DNS intermittently fails mid-run
+  # ([Errno -2] Name or service not known on the Azure endpoint at event ~23
+  # of an otherwise-perfect baseline) — workers shouldn't depend on it.
+  dns:
+    - 1.1.1.1
+    - 8.8.8.8
   build:
     context: ..
     dockerfile: docker/Dockerfile
