@@ -2807,7 +2807,9 @@ def _install_hang_diagnostics(stall_after_s: float = 300.0, check_every_s: float
     import time as _time
     from src.lnl.brain import LIVENESS as _liveness
 
-    faulthandler.register(_signal.SIGUSR1, all_threads=True, chain=True)
+    # chain=False: chaining re-runs the DEFAULT SIGUSR1 disposition, which is
+    # process termination — a USR1 "diagnostic" killed a 45-minute run.
+    faulthandler.register(_signal.SIGUSR1, all_threads=True, chain=False)
 
     def _pulse() -> int:
         # Attempts tick even when responses hang; a frozen counter for 5 minutes
