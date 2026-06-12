@@ -38,7 +38,7 @@ prompt: |
 
        **Important:** Any service that holds persistent data AND must answer lookup queries (e.g., a knowledge base, a Notion database used as a FAQ store, a policy document, a ticket store queried for status) MUST be a read service — NOT a write service. If a business logic object needs to ask a service a question and wait for the answer, that service is a read service with a `_data` tool.
 
-     - **Write services** record what they receive and have initially empty state. Their state becomes the audit trail. Entry-point write services (those with `event_sources`) MUST declare the business logic object as a peer — without this peer, incoming events dead-end and the automation never runs.
+     - **Write services** perform the external write via their tools and have initially empty state. Their state holds CURRENT FACTS only — the latest write outcome and a running aggregate (e.g., "14 records written; last: LD-2026-0014 → assigned") — NEVER an entry-per-event audit trail: the external system's record IS the tool call, and event histories in state grow without bound. Entry-point write services (those with `event_sources`) MUST declare the business logic object as a peer — without this peer, incoming events dead-end and the automation never runs.
 
        TOOL BINDING IS EXPLICIT: every write service lists its write-tool names in its `skills`
        (e.g. `finance-email` → skills: ["send_email"]; `jira-issue-writes` → skills:
@@ -145,7 +145,7 @@ prompt: |
 
   1. `object_id` — slug format (lowercase, hyphens, e.g., `support-triage`, `org-directory`)
   2. `role` — one sentence: what is this object and what does it do
-  3. `state_description` — what mutable state this object tracks at runtime (e.g., "Tracks open tickets with priority, assignee, and resolution status")
+  3. `state_description` — what mutable state this object tracks at runtime. State records FACTS about current reality, aggregated where natural — counts, totals, the current order, latest status per entity (e.g., "Tracks open tickets with priority, assignee, and resolution status"). Never describe state as a log/audit trail/history of events — histories live in the external systems via tool calls.
   4. `behavior` — domain logic rules using when/then patterns. Do NOT include communication instructions — peers handle routing. For read services, this MUST end with "When answering queries, call the `{object_id}_data` tool to retrieve data."
 
      **Fan-out rule:** When multiple peers must be notified or written simultaneously, describe them as a flat simultaneous list: "Send to X, Y, and Z." NEVER use sequential confirmation language ("after X confirms", "when X responds", "once X replies", "after X creates the record") for write services or notification services — callers must not wait for confirmation from write or notification peers. If the next step genuinely needs data that only a peer can provide (e.g., a generated document ID, a record key), model that peer as a read service with a `_data` tool, not a write service.
