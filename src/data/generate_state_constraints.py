@@ -1005,9 +1005,19 @@ def build_mod_scenario(spec, mod_type: str, mod_dim: str = None):
                            "scope, so its behavior must be IDENTICAL to the base scenario; any "
                            "deviation means the modification broke an unrelated part of the "
                            "system. [scoped by key: non-counting branch]")))
+        irr_abs = last_abs + 2
+        if ct in ("rate_limit", "trigger"):
+            # the "fresh state" claim must be TRUE: clear the irr_key's own accumulated window
+            # (post-mod events / fires on that key would otherwise make the expect wrong)
+            D_irr = _parse_window_days(old_thr)
+            key_evs = [_ev_abs_day(e.when) for e in list(spec.base_events) + list(events)
+                       if e.when and (irr_key in (e.input or "")
+                                      or (e.expect and irr_key in (e.expect.action or "")))]
+            if key_evs:
+                irr_abs = max(irr_abs, max(key_evs) + D_irr + 1)
         events.append(SpecEventWithExpect(
             id="IRR001", call_type="send_event", source="__external__", input=irr_input,
-            when=_abs_to_day(last_abs + 2) + "T09:00", role="irrelevant", after_mod_ids=["M001"],
+            when=_abs_to_day(irr_abs) + "T09:00", role="irrelevant", after_mod_ids=["M001"],
             expect=EventExpect(
                 action=ok_act,
                 reason=f"under BOTH the original rule and the modification this request is handled "
