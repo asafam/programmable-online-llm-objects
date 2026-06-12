@@ -1380,7 +1380,9 @@ class OpenAIBrain(LLMBrain):
         self.model = model
         self._temperature = temperature
         self._seed = seed
-        self._client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"])
+        # Same fail-fast timeout as the Azure client — see comment there.
+        self._client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"],
+                              timeout=120.0, max_retries=2)
 
     def call(
         self,
@@ -1635,10 +1637,16 @@ class AzureBrain(LLMBrain):
         resolved_key = api_key or os.environ.get("AZURE_OPENAI_API_KEY")
         if not resolved_key:
             raise ValueError("Azure API key required. Set AZURE_OPENAI_API_KEY or pass api_key=.")
+        # Explicit per-request timeout: the SDK default (600s, plus its own retries)
+        # lets one dead connection hang an eval for tens of minutes with zero CPU —
+        # observed as a frozen token counter on an ESTABLISHED-but-silent TLS socket.
+        # 120s fails fast; our _create_with_filter_retry layer handles the retry.
         self._client = AzureOpenAI(
             api_key=resolved_key,
             azure_endpoint=resolved_endpoint,
             api_version=resolved_version,
+            timeout=120.0,
+            max_retries=2,
         )
 
     def call(
