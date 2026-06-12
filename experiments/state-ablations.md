@@ -34,8 +34,8 @@ sample a single gpt-5.4 agent solved 31/31, so every expect is reachable).
 |---|---|---|---|---|---|---|
 | clock2 | none (pre-fixes) | 8/31 | 1/21 | $7.02 | `eval_rr_clock2.jsonl` | all-Maya; counts keyed by timestamp |
 | clock3 | clock fix | 5/31 | 9/22 | $6.49 | `eval_rr_clock3.jsonl` | replan stalls + peer-as-tool fake successes (since fixed) |
-| P1 | **A** (sync, log-state) | RUNNING | — | — | `eval_rr_optimistic.jsonl` | isolates optimistic commits vs clock series |
-| P2 | **A+B+C** (new defaults) | queued | — | — | `eval_rr_async_facts.jsonl` | the landed-package measurement |
+| P1 | **A** (sync, log-state) | KILLED (port race + quota contention) | — | — | — | superseded; decompose later if needed |
+| P2 | **A+B+C** (new defaults) | **6/31** | **9/16 (56%)** | $3.43 | `eval_rr_async_facts.jsonl` | in sync band DESPITE re-fire storm; 9 dead waves = storm cost = headroom; first_div SC002→SC004; cost halved vs clock series → build the in-flight guard |
 | P3 | A+B+C+**D** | planned | — | — | — | only if P2 leaves a gap |
 | P4 | A+B+C+D+**E** | planned | — | — | — | last protocol simplification |
 | Full | best config, all 10 TCs, `--runs 3` | planned | — | — | — | the headline vs baseline 0.468 |
