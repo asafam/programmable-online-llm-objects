@@ -425,7 +425,7 @@ def _execute_test_case_inner(
     mock_slot_id: str = "default",
     memory_backend: str = "nested",
     log_planner_output: bool = False,
-    tool_dispatch: str = "async",
+    tool_dispatch: str = "sync",
     planner_mode: str = "dag",
     enable_replan_checkpoints: bool = False,
     replan_max_per_trace: int = 3,
@@ -1240,7 +1240,7 @@ def execute_test_case(
     mock_slot_id: str = "default",
     memory_backend: str = "nested",
     log_planner_output: bool = False,
-    tool_dispatch: str = "async",
+    tool_dispatch: str = "sync",
     planner_mode: str = "dag",
     enable_replan_checkpoints: bool = False,
     replan_max_per_trace: int = 3,
@@ -1900,7 +1900,7 @@ def run(args: argparse.Namespace) -> Path:
                 mock_server_url=mock_server_url,
                 mock_slot_id=f"tc{tc_idx}-r{run_idx}",
                 log_planner_output=(getattr(args, "verbose", None) == "DEBUG"),
-                tool_dispatch=getattr(args, "tool_dispatch", "async"),
+                tool_dispatch=getattr(args, "tool_dispatch", "sync"),
                 planner_mode=getattr(args, "planner_mode", "dag"),
                 enable_replan_checkpoints=getattr(args, "enable_replan_checkpoints", False),
                 replan_max_per_trace=getattr(args, "replan_max", 3),
@@ -2738,7 +2738,7 @@ Examples:
     parser.add_argument(
         "--tool-dispatch",
         choices=["async", "sync"],
-        default="async",
+        default="sync",
         help=(
             "Tool dispatch mode (default: sync). "
             "'sync' — tools execute inline in the ReAct loop (single multi-turn LLM call); "

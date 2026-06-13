@@ -194,4 +194,4 @@ Validated config deltas vs 5/25 (e12c00a) — all code-level defaults, not logge
 
 | Ablation | Arm | Prediction | Result | Verdict |
 |---|---|---|---|---|
-| TOOL DISPATCH | async (current default) vs sync (5/25) — isolate dispatch only | sync ≥ async if async machinery (F1/in-flight/reply-continuation) regressed | gold steps-only --limit 15, --workers 1 | pending |
+| TOOL DISPATCH | async vs sync, 9 gold steps-only TCs, only dispatch differs | sync ≥ async | **async sample-full 44%; SYNC 78%** (+34pt; sync even > 5/25's 55.9%) | **CONFIRMED — async dispatch is the regression; replan-ON exonerated (sync ran replan-ON, still 78%)** |
