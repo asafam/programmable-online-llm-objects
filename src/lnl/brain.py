@@ -638,6 +638,7 @@ def build_evaluator_prompt(
     message=None,  # the incoming Message this turn processed (context for evaluator)
     prompt_file: str = "evaluator.yaml",
     tool_calls_this_turn: "Optional[list[str]]" = None,
+    dispatch_log: "Optional[list]" = None,
 ) -> str:
     """Build the evaluator system prompt from `evaluator.yaml`.
 

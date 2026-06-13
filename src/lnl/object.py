@@ -2182,7 +2182,7 @@ class LLMObject:
                 continue
             rkey = (trace_id, (out.recipient or "").strip().lower())
             self._log_dispatch(trace_id,
-                f"{'ask' if out.expects_reply else 'tell'} -> {out.recipient}: {(out.content or '')[:80]}")
+                f"{'ask' if out.expects_reply else 'tell'} -> {out.recipient}: {str(out.content or '')[:80]}")
             with self._outstanding_out_lock:
                 if out.expects_reply:
                     sent_at = self._outstanding_asks.get(rkey)
@@ -2193,7 +2193,7 @@ class LLMObject:
                         continue
                     self._outstanding_asks[rkey] = now
                 else:
-                    content_key = hash((out.recipient or "", (out.content or "").strip()))
+                    content_key = hash((out.recipient or "", str(out.content or "").strip()))
                     sent = self._sent_tells.setdefault(rkey, set())
                     if content_key in sent:
                         logger.info(
