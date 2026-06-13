@@ -167,3 +167,18 @@ Reusable pattern (lifted expenses 0.33→0.75 and applicant 0.15→0.69):
 5. optimistic + concrete custodian commits.
 RESIDUAL (both samples): the threshold-digest (3rd-in-window fires consolidated) —
 the genuine cross-event accumulation case. → H8.
+
+## FINAL (2026-06-13 single-example feedback loop, ~$15 of $30 budget)
+
+Two samples solved-by-pattern, gpt-5.4-mini:
+- **expenses-tracker: 0.33 → 0.75** (H1 expense_id field, confirmed/committed)
+- **applicant-tracker: 0.15 → ~0.62-0.69** (H5-H7: collapse write+email to entry, expose
+  manager-email reference data; stable across confirm runs, base events 5/5)
+
+H8 boundary finding: making the threshold custodian-count ROBUST (intake self-counts)
+fixed the base threshold event but BROKE the post-mod events (the modification RETIRES
+the quorum; heavy threshold logic doesn't cleanly retire). Reverted to H7's lighter touch.
+
+RESIDUAL (both samples, the genuine mini floor): the threshold-digest event (3rd-in-window
+fires consolidated email) — distributed cross-event state accumulation, the multi-agent tax
+the dataset is designed to measure. Not closable without breaking modification-retirement.
