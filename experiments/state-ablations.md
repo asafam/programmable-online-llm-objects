@@ -113,3 +113,27 @@ self-consistent" from incoherent.
   velocity; round-robin only for milestones).
 - 2026-06-13: state contract — facts/aggregates only; audit trails belong to
   the external systems (tool-call logs), never object state.
+
+## Replan-on-branch diagnosis (2026-06-13, expenses A/B)
+
+Q (user): does the planner (1) correctly identify branch nodes and (2) replan
+successfully? Evidence from 04:49 expenses plans (replan ON, verbose):
+
+1. **Branch node: identified, but DUPLICATED 3-4x.** SC001 policy plan emits
+   s4,s5,s6,s7 — all kind=replan, all deps=[s3] (the window read), all asking
+   the same "send consolidated finance email?" decision. Correct location,
+   4 markers for 1 decision. Same SC003 (s4-s7), SC005 (s4,s5,s7,s9).
+2. **Replan fires but duplication wrecks it.** SC003: s4,s5,s6 status=done →
+   re-planned 3x for ONE decision, exhausting replan_max_per_trace=3 on
+   duplicates, still failed. SC005: re-entries produced conflicting
+   tell→expense-window continuations (s6,s8,s10) that FAILED. SC001 passed
+   only because all 4 replan steps were skipped (standard path didn't need them).
+
+Scores (expenses /12): replan-OFF(old stack) 9 | replan-ON(no fix) 4 |
+replan-ON+inflight-fix 5 | replan-OFF(today's stack) PENDING.
+
+ROOT CAUSE: defer-and-append model lets the planner emit N duplicate replan
+markers for one branch; budget consumed by dupes; re-entries conflict.
+DIRECTION: guarded-prune model (plan both branches ONCE, resolve guard with one
+decision call, mark untaken branch skipped) makes duplication structurally
+impossible. In-flight evaluator fix (4a07172) is orthogonal & kept.
