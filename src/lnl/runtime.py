@@ -168,6 +168,11 @@ class SystemConfig:
     # enable_replan_checkpoints; safe to enable either, both, or neither.
     enable_step_retry_replan: bool = True
     step_max_retries: int = 2
+    # Runaway brake: total messages per trace. Chain depth used to do this job
+    # by accident (every leg charged), which falsely killed healthy waves with
+    # several ask/reply round-trips. Depth now measures FORWARD nesting only;
+    # this counter stops loops/storms of any shape.
+    max_trace_messages: int = 60
     # Replan-on-modification: when an admin modification patches a definition,
     # mark in-flight plans needs_replan so they re-plan against the new
     # definition. Default OFF — a modification governs FUTURE events; past
@@ -212,6 +217,7 @@ class SystemConfig:
             planner_mode=planner_mode,
             enable_replan_checkpoints=bool(data.get("enable_replan_checkpoints", False)),
             replan_on_modification=bool(data.get("replan_on_modification", False)),
+            max_trace_messages=int(data.get("max_trace_messages", 60)),
             replan_max_per_trace=int(data.get("replan_max_per_trace", 3)),
             enable_step_retry_replan=bool(data.get("enable_step_retry_replan", True)),
             step_max_retries=int(data.get("step_max_retries", 2)),
@@ -253,6 +259,8 @@ class Runtime:
         self._bus = MessageBus()
         self._max_chain_depth = max_chain_depth if max_chain_depth is not None else cfg.max_chain_depth
         self._max_tool_rounds = cfg.max_tool_rounds
+        self._max_trace_messages = cfg.max_trace_messages
+        self._trace_msg_counts: dict[str, int] = {}
         self._max_history = cfg.max_history
         self._react_cross_objects = cfg.react_cross_objects
         self._auto_track_knowledge_gaps = cfg.auto_track_knowledge_gaps
@@ -611,6 +619,20 @@ class Runtime:
             return self._dispatch(messages, on_result=_filtered)
         return self._dispatch(messages)
 
+    def _charge_trace_message(self, trace_id) -> bool:
+        """Per-trace message budget — the runaway brake (loops, storms, any shape).
+        Returns False when the trace has exhausted its budget; caller drops."""
+        if not trace_id or self._max_trace_messages <= 0:
+            return True
+        n = self._trace_msg_counts.get(trace_id, 0) + 1
+        self._trace_msg_counts[trace_id] = n
+        if n > self._max_trace_messages:
+            if n == self._max_trace_messages + 1:
+                logger.warning("Trace %s exceeded message budget (%d) — dropping further messages",
+                               trace_id, self._max_trace_messages)
+            return False
+        return True
+
     def process_pending(self) -> list[ProcessingResult]:
         """Process all pending mailbox messages and polled events until committed."""
         if self._running.is_set():
@@ -791,8 +813,12 @@ class Runtime:
                 self._awaiting_reply[result.in_reply_to].discard(obj_id)
 
         if should_reply_ok or should_reply_failed:
-            next_depth = result.depth_remaining - 1
-            if next_depth > 0:
+            # Replies RETURN along an existing link — they restore the asker's
+            # level instead of consuming chain depth (depth measures forward
+            # nesting; charging replies falsely killed healthy multi-round-trip
+            # waves). The per-trace message budget is the loop brake now.
+            next_depth = min(result.depth_remaining + 1, self._max_chain_depth)
+            if next_depth > 0 and self._charge_trace_message(result.source_trace_id):
                 reply_status = "failed" if should_reply_failed else "ok"
                 reply_error = result.error if should_reply_failed else None
                 reply_content = result.reply or (
@@ -827,12 +853,18 @@ class Runtime:
         # Deliver outgoing peer messages
         sender_obj = self._bus.objects.get(obj_id)
         for out in result.outgoing_messages:
-            next_depth = result.depth_remaining - 1
+            next_depth = (
+                min(result.depth_remaining + 1, self._max_chain_depth)
+                if out.is_reply
+                else result.depth_remaining - 1
+            )
             if next_depth <= 0:
                 logger.warning(
                     "Chain depth limit reached; dropping message from %s to %s",
                     obj_id, out.recipient,
                 )
+                continue
+            if not self._charge_trace_message(result.source_trace_id):
                 continue
             msg_id = self._next_msg_id(obj_id)
             # `is_reply` is set when the outgoing fulfills a pending inbound Ask.

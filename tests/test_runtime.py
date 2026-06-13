@@ -1442,3 +1442,47 @@ class TestCodeToolConfig:
         # the final reply. The last result carries the completed reply.
         final_result = max(results, key=lambda r: r.sequence)
         assert "42" in final_result.reply
+
+
+class TestDepthSemantics:
+    """Replies restore the asker's level; depth measures forward nesting only;
+    the per-trace message budget is the runaway brake."""
+
+    def test_reply_restores_depth_instead_of_consuming(self):
+        brain = MockBrain()
+        # a asks b; b replies; a finishes.
+        brain.script("a", LLMResponse(updated_state={}, reply="",
+            outgoing_messages=[OutgoingMessage(recipient="b", content="q", expects_reply=True)]))
+        brain.script("b", LLMResponse(updated_state={}, reply="answer"))
+        brain.script("a", LLMResponse(updated_state={}, reply="done"))
+        rt = Runtime(brain)
+        rt.create_object(ObjectDefinition(object_id="a", role="A",
+            peers=[PeerDeclaration("b", "peer")]))
+        rt.create_object(ObjectDefinition(object_id="b", role="B"))
+        rt.send("a", "go")
+        # find the ask (a→b) and the reply (b→a) in the log
+        ask = next(e.message for e in rt.message_log if e.message.sender == "a" and e.message.recipient == "b")
+        reply = next(e.message for e in rt.message_log if e.message.sender == "b" and e.message.recipient == "a")
+        assert ask.depth_remaining < rt._max_chain_depth          # forward send consumed
+        assert reply.depth_remaining == ask.depth_remaining + 1   # reply restored the asker's level
+
+    def test_trace_message_budget_drops_excess(self):
+        brain = MockBrain()
+        # a endlessly tells b (no replies) — forward depth would allow many;
+        # the trace budget must cut it.
+        for _ in range(10):
+            brain.script("a", LLMResponse(updated_state={}, reply="",
+                outgoing_messages=[OutgoingMessage(recipient="b", content="spam")]))
+            brain.script("b", LLMResponse(updated_state={}, reply="",
+                outgoing_messages=[OutgoingMessage(recipient="a", content="spam-back")]))
+        rt = Runtime(brain, system_config=SystemConfig(max_trace_messages=4, max_chain_depth=100))
+        rt.create_object(ObjectDefinition(object_id="a", role="A",
+            peers=[PeerDeclaration("b", "peer")]))
+        rt.create_object(ObjectDefinition(object_id="b", role="B",
+            peers=[PeerDeclaration("a", "peer")]))
+        rt.send("a", "go")
+        trace_ids = {e.message.trace_id for e in rt.message_log if e.message.trace_id}
+        assert trace_ids, "trace expected"
+        tid = next(iter(trace_ids))
+        delivered = [e for e in rt.message_log if e.message.trace_id == tid]
+        assert len(delivered) <= 6  # initial + budget(4) + tolerance for the seed message
