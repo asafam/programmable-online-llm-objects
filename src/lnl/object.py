@@ -142,7 +142,12 @@ class LLMObject:
         # (planner call + per-step evaluator cycles) turns a ~3s atomic
         # operation into 12-22s and 3-6 LLM calls of governance. Leaves get a
         # single executor inference; planner and evaluator are skipped.
-        self._is_leaf = not (definition.peers or definition.skills)
+        # Peerless = leaf: an object with no peers coordinates nothing — planner
+        # has nothing to plan and the evaluator verifies a one-move turn. This
+        # covers custodians (no peers, no skills) AND read/write services
+        # (skills, no peers) — the services were still paying the full ceremony
+        # and policies' asks sat unanswered 8s+ waiting on them.
+        self._is_leaf = not definition.peers
         # Planner brain: separate LLM brain used for the pre-execution planning
         # call. Defaults to the executor brain if not set; can be a smaller or
         # different model.

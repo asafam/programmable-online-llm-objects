@@ -49,6 +49,8 @@ prediction, single variable, then result and verdict. Confounded results say so.
 
 | H8 | The remaining expenses failures are the policy→window→email chain at the threshold (3rd in-window occurrence): the consolidated email doesn't fire or leaves no evidence | TBD after reading SC004's transcript — hypothesis to be sharpened BEFORE the next probe | — | — | registered, not yet sharpened |
 
+| H9 | Read/write services (skills, no peers) still pay the planner+evaluator ceremony — the asks policies wait on (forms-pdf-extraction, inventory-record-store: 8s unanswered) are slow for the same reason custodians were | widening fast path to ALL peerless objects: inventory probe — suppressed-ask ages drop to ≤4s typical, score not worse than its 0.40 reference | P7 inventory | — | pending |
+
 Lesson recorded: H5/H6 were stacked without a control — P4 cannot separate
 leaf-path effects from pre-existing freelancing. Don't repeat.
 
