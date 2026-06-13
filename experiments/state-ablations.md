@@ -137,3 +137,13 @@ markers for one branch; budget consumed by dupes; re-entries conflict.
 DIRECTION: guarded-prune model (plan both branches ONCE, resolve guard with one
 decision call, mark untaken branch skipped) makes duplication structurally
 impossible. In-flight evaluator fix (4a07172) is orthogonal & kept.
+
+## Expenses iteration loop (2026-06-13, single-example feedback)
+
+| H | Hypothesis | Prediction | Result | Verdict |
+|---|---|---|---|---|
+| H-exp-1 | append_expense_row lacks an expense_id field → rows can't carry their REQ id → judge can't confirm "REQ-X added" (id-tracking cluster) | add expense_id field+behavior → ≥7/12, zero "generic row" verdicts | **9/12** (was 5/12); all "not confirmed as REQ-X" verdicts gone; IRR001 recovered | **CONFIRMED** |
+
+Remaining 3 fails all in the THRESHOLD/digest cluster: SC004, PM003 (consolidated
+email didn't fire at 3rd in-window), PM004 (category-group append missing). Same
+7-day-window branch logic applicant needs. → H-exp-2.
