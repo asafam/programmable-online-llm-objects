@@ -704,6 +704,13 @@ def build_evaluator_prompt(
     else:
         tools_str = "  (none — no tools executed this turn)"
 
+    # Cumulative per-task dispatch log (harness-maintained): tool executions
+    # and outgoing asks/tells across ALL turns of this trace. Without it, the
+    # evaluator graded prior-turn work as missing and ordered duplicates.
+    if dispatch_log:
+        tools_str += "\n\n  Cumulative for this task (all turns, harness-recorded):\n"
+        tools_str += "\n".join(f"  - {d}" for d in dispatch_log)
+
     return template.format(
         object_id=definition.object_id,
         role=definition.role,

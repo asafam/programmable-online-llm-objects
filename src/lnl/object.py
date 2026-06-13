@@ -230,6 +230,14 @@ class LLMObject:
         self._outstanding_out_lock = threading.Lock()
         self._outstanding_asks: dict[tuple, float] = {}
         self._sent_tells: dict[tuple, set] = {}
+        # Cumulative per-trace dispatch log (harness-maintained, deterministic):
+        # every tool execution and outgoing ask/tell for a trace, across ALL
+        # turns. The evaluator graded steps against a THIS-TURN tool list — an
+        # anti-hallucination rule sound under sync dispatch, but under async it
+        # converted "completed last turn" into FAIL → "call it now" → commanded
+        # duplicates. This log is the cross-turn evidence.
+        self._trace_dispatch_log: dict[str, list] = {}
+        self._trace_dispatch_lock = threading.Lock()
         # Per-object REPL namespace for the built-in `python` coding tool.
         # Lazily initialized so objects that never call the tool pay nothing.
         # Not part of NL `_state` — never serialized into the prompt.
@@ -298,7 +306,7 @@ class LLMObject:
         try:
             ctx = self._tool_context_factory(self) if self._tool_context_factory else {}
             try:
-                result = self._execute_scoped(tc, ctx)
+                result = self._execute_scoped(tc, ctx, trace_id=trace_id)
             except Exception as exc:
                 result = ToolResult(
                     id=tc.id, output="", error=f"Tool execution raised: {exc}",
@@ -1654,7 +1662,7 @@ class LLMObject:
                 for tc in tcs:
                     tools_called.append(tc.tool)
                     try:
-                        result = self._execute_scoped(tc, ctx)
+                        result = self._execute_scoped(tc, ctx, trace_id=trace_id)
                     except Exception as exc:
                         result = ToolResult(id=tc.id, output="", error=f"Tool execution raised: {exc}")
                     if tc.plan_step_index is not None and trace_id is not None:
@@ -1994,6 +2002,12 @@ class LLMObject:
                 ))
             plan.last_progress_at = datetime.datetime.now(datetime.timezone.utc)
 
+    def _log_dispatch(self, trace_id, entry: str) -> None:
+        if not trace_id:
+            return
+        with self._trace_dispatch_lock:
+            self._trace_dispatch_log.setdefault(trace_id, []).append(entry)
+
     def _allowed_tool(self, name: str) -> bool:
         """Skills scope tools: an object may only call tools its own skills grant.
 
@@ -2027,8 +2041,10 @@ class LLMObject:
             return set()
         return {n for n in names if self._allowed_tool(n)}
 
-    def _execute_scoped(self, tc, ctx):
+    def _execute_scoped(self, tc, ctx, trace_id=None):
         """Registry execution behind the skills gate, with a corrective error."""
+        if trace_id:
+            self._log_dispatch(trace_id, f"tool {tc.tool} executed")
         if not self._allowed_tool(tc.tool):
             return ToolResult(
                 id=tc.id, output="",
@@ -2121,6 +2137,8 @@ class LLMObject:
                 kept.append(out)
                 continue
             rkey = (trace_id, (out.recipient or "").strip().lower())
+            self._log_dispatch(trace_id,
+                f"{'ask' if out.expects_reply else 'tell'} -> {out.recipient}: {(out.content or '')[:80]}")
             with self._outstanding_out_lock:
                 if out.expects_reply:
                     sent_at = self._outstanding_asks.get(rkey)

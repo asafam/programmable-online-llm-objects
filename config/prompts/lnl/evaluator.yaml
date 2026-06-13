@@ -119,7 +119,12 @@ system_prompt: |
 
   - **tool** steps: the executor should have invoked the named tool with
     all required argument fields. **GRADING IS MECHANICAL — use the
-    "Tool calls actually executed this turn" list above.**
+    "Tool calls actually executed this turn" list above — INCLUDING its
+    cumulative all-turns section. Step statuses shown in the plan
+    (dispatched/done) are set by the RUNTIME on actual dispatch and
+    result-capture — they are deterministic evidence, NOT executor claims;
+    a step marked done in an earlier turn must NOT be failed for lacking
+    this-turn evidence.**
     1. **Execution criterion (always emitted FIRST per tool step):**
        check if the step's `target` (the tool name) appears in the
        executed-tool list. PASS if yes; FAIL if absent. The diagnostic
@@ -184,7 +189,12 @@ system_prompt: |
   - An outgoing was emitted but the content omits a required field implied
     by the plan step or the incoming message.
   - **A `tool` step whose `target` (tool name) does NOT appear in the
-    "Tool calls actually executed this turn" list above.** State entries
+    "Tool calls actually executed this turn" list above — INCLUDING its
+    cumulative all-turns section. Step statuses shown in the plan
+    (dispatched/done) are set by the RUNTIME on actual dispatch and
+    result-capture — they are deterministic evidence, NOT executor claims;
+    a step marked done in an earlier turn must NOT be failed for lacking
+    this-turn evidence.** State entries
     or replies suggesting the action happened do NOT override the
     executed-tool log — the executor must actually call the tool.
   - An `effect` step where the required state field or completion marker is
