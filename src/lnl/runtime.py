@@ -746,6 +746,10 @@ class Runtime:
                     # Any HTTP 4xx/5xx from the provider — auth (401), quota (429),
                     # schema rejection (400), server errors (500/503), etc.
                     "http 4", "http 5", "5xx", "internal server error", "service unavailable",
+                    # The OpenAI/Azure SDK renders these as "Error code: 500 - {...}" — the
+                    # literal phrasings above don't match, so match the code form too.
+                    "error code: 5", "error code: 429", "code': 500", "code': 503",
+                    "code': 502", "code': 504", "rate limit", "timeout", "connection error",
                 )
                 if any(m in exc_str for m in _INFRA_EXC_MARKERS):
                     logger.warning("Error reading object %s: %s", _oid, exc)

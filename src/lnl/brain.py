@@ -1927,12 +1927,21 @@ class AzureBrain(LLMBrain):
         return raw, metrics
 
     def _create_with_filter_retry(self, kwargs: dict, object_id: str | None):
-        """Azure's content filter / reasoning invalid_prompt 400s are PROBABILISTIC — the same
-        prompt usually passes on retry. Retry up to 3 times with backoff before treating the
-        flag as real."""
+        """Retry transient Azure/OpenAI errors:
+        - Content filter / invalid_prompt 400s are PROBABILISTIC — same prompt usually passes on retry.
+        - InternalServerError 500s are transient server faults — retryable (SDK default does not retry 500s).
+        Retries up to 3 times with exponential backoff before treating the error as real."""
         import time as _time
+        try:
+            from openai import (InternalServerError as _ISE, APITimeoutError as _ATE,
+                                 APIConnectionError as _ACE, RateLimitError as _RLE)
+            _TRANSIENT = (_ISE, _ATE, _ACE, _RLE)
+        except Exception:
+            from openai import InternalServerError as _ISE
+            _TRANSIENT = (_ISE,)
         last = None
-        for attempt in range(4):
+        _MAX = 8  # ride out sustained Azure 5xx/429 bursts (was 4 — too short)
+        for attempt in range(_MAX):
             try:
                 LIVENESS["attempts"] += 1
                 resp = self._client.chat.completions.create(**kwargs)
@@ -1947,12 +1956,14 @@ class AzureBrain(LLMBrain):
                 msg = (err.get("message") or "").lower()
                 flagged = err.get("code") in ("content_filter", "invalid_prompt") \
                     or "flagged" in msg or "invalid prompt" in msg
-                if not flagged or attempt == 3:
+                transient = isinstance(e, _TRANSIENT)
+                if (not flagged and not transient) or attempt == _MAX - 1:
                     raise
                 last = e
-                logger.warning("Content filter flagged %s (attempt %d/4) — retrying",
-                               object_id, attempt + 1)
-                _time.sleep(2 ** attempt)
+                kind = type(e).__name__ if transient else "content_filter"
+                logger.warning("%s for %s (attempt %d/%d) — retrying",
+                               kind, object_id, attempt + 1, _MAX)
+                _time.sleep(min(2 ** attempt, 15))  # capped backoff; ~60-90s total ride
         raise last  # unreachable
 
     @staticmethod
