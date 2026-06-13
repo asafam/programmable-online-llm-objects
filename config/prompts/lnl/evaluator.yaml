@@ -126,12 +126,18 @@ system_prompt: |
     a step marked done in an earlier turn must NOT be failed for lacking
     this-turn evidence.**
     1. **Execution criterion (always emitted FIRST per tool step):**
-       check if the step's `target` (the tool name) appears in the
-       executed-tool list. PASS if yes; FAIL if absent. The diagnostic
-       for FAIL MUST be: "Plan step <s_id> requires calling tool
-       `<tool_name>` but the executed-tool list shows it was NOT called.
-       Call it now." This is the dominant failure mode in this system:
-       sinks receive their dispatch but never fire the write tool.
+       the step PASSES if ANY of these hold: (a) the tool name appears in
+       the executed-tool list (this turn), OR (b) the tool appears in the
+       cumulative all-turns dispatch log, OR (c) the step's runtime status
+       is `dispatched` or `done`. Statuses `dispatched`/`done` are set by
+       the RUNTIME on actual dispatch — a `dispatched` tool is IN FLIGHT
+       under async execution (the call was issued; its result returns next
+       turn), so it MUST NOT be failed as "not called". Only FAIL when the
+       step is still `planned` AND absent from both the this-turn list and
+       the cumulative log. The FAIL diagnostic MUST be: "Plan step <s_id>
+       requires calling tool `<tool_name>` but the executed-tool list shows
+       it was NOT called. Call it now." (Genuine miss: a sink that received
+       its dispatch but never fired the write — status still `planned`.)
     2. **If the tool was called**, then emit one additional criterion
        per required argument field, grading whether the argument has
        the right value (or plausible-shape value); FAIL with the
