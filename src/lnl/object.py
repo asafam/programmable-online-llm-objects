@@ -147,7 +147,11 @@ class LLMObject:
         # covers custodians (no peers, no skills) AND read/write services
         # (skills, no peers) — the services were still paying the full ceremony
         # and policies' asks sat unanswered 8s+ waiting on them.
-        self._is_leaf = not definition.peers
+        # Ablation hatch: LNL_NO_LEAF=1 forces full planner+evaluator ceremony on
+        # all objects (pre-leaf-path behavior) to isolate the leaf fast path's
+        # contribution to the base-step regression.
+        import os as _os_leaf
+        self._is_leaf = (not definition.peers) and not _os_leaf.environ.get("LNL_NO_LEAF")
         # Planner brain: separate LLM brain used for the pre-execution planning
         # call. Defaults to the executor brain if not set; can be a smaller or
         # different model.
