@@ -285,6 +285,7 @@ class LLMObject:
         tc: ToolCall,
         trace_id: Optional[str],
         dispatch_id: str = "",
+        origin_depth: int = 0,
     ) -> ToolResult:
         """Pool-worker function: execute one tool synchronously, then deliver
         a REPLY message back to this object's own mailbox.
@@ -346,7 +347,11 @@ class LLMObject:
                 error=result.error or None,
                 trace_id=trace_id,
                 plan_step_index=tc.plan_step_index,
-                depth_remaining=0,
+                # Tool replies CONTINUE the dispatching turn — they carry its
+                # depth. Hardcoded 0 here meant any continuation whose plan no
+                # longer held the original depth forwarded at 0-1 and was
+                # dropped ("Chain depth limit reached" seconds into a run).
+                depth_remaining=origin_depth,
                 id=f"tool-reply-{call_key}",
                 in_reply_to=call_key,
                 reference=tc.id,  # original LLM-assigned tool call ID for conversation reconstruction
@@ -1768,7 +1773,8 @@ class LLMObject:
                 if tc.plan_step_index is not None:
                     self.mark_step_dispatched(tc.plan_step_index, trace_id)
                 try:
-                    pool.submit(self._execute_tool, tc, trace_id, dispatch_id)
+                    pool.submit(self._execute_tool, tc, trace_id, dispatch_id,
+                                origin_msg.depth_remaining if origin_msg is not None else 0)
                 except RuntimeError:
                     # Pool shut down — synthesize error reply directly.
                     with self._lock:
@@ -1782,7 +1788,7 @@ class LLMObject:
                         error="Tool pool unavailable.",
                         trace_id=trace_id,
                         plan_step_index=tc.plan_step_index,
-                        depth_remaining=0,
+                        depth_remaining=(origin_msg.depth_remaining if origin_msg is not None else 0),
                         id=f"tool-reply-{call_key}",
                         in_reply_to=call_key,
                     )
