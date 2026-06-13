@@ -2114,7 +2114,12 @@ class LLMObject:
         Token-based matching, not exact — bind-time skill names and tool names
         drift (skill send_email ~ tool send_hiring_email).
         """
-        import re as _re
+        import os as _os, re as _re
+        # Ablation hatch: LNL_NO_TOOL_SCOPING=1 restores 5/25 behavior — every
+        # object sees the full registry (no skill-gating). Isolates 0ea200a as a
+        # base-step regression suspect while keeping async + all other current code.
+        if _os.environ.get("LNL_NO_TOOL_SCOPING"):
+            return True
         # Core runtime tools are granted to every object, not via skills.
         if name in ("create_object", "execute_code"):
             return True
