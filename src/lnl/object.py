@@ -989,6 +989,50 @@ class LLMObject:
                 reply_error=message.error,
             )
 
+        # ── F1: replies CONTINUE plans deterministically ─────────────────────
+        # A step-mapped reply was just captured onto its step (above). If the
+        # plan still has other dispatched steps awaiting THEIR replies and no
+        # planned step has become actionable (all dependencies satisfied), there
+        # is nothing for the model to decide — invoking it here is what caused
+        # re-deliberation storms (re-fired asks, duplicate tells, wasted
+        # inferences). Skip the LLM entirely; the next reply re-checks.
+        if (
+            message.type == MessageType.REPLY
+            and message.plan_step_index is not None
+        ):
+            _plan = self.plan_for(trace_id)
+            if _plan is not None and _plan.status == "active" and _plan.steps:
+                _done_ids = {st.id for st in _plan.steps if st.status in STEP_TERMINAL_STATUSES}
+                _waiting = any(st.status == "dispatched" for st in _plan.steps)
+                _actionable = any(
+                    st.status == "planned" and all(d in _done_ids for d in (st.depends_on or []))
+                    for st in _plan.steps
+                )
+                _all_terminal = all(st.status in STEP_TERMINAL_STATUSES for st in _plan.steps)
+                if _waiting and not _actionable and not _all_terminal:
+                    _t, _p = self._resolve_task_plan_ids(trace_id)
+                    self._append_history(message, _t, _p)
+                    logger.info("%s: reply captured on step; plan still awaiting other replies — no inference needed", self.object_id)
+                    _now = datetime.datetime.now(datetime.timezone.utc)
+                    return ProcessingResult(
+                        object_id=self.object_id,
+                        reply="",
+                        outgoing_messages=[],
+                        state_before=_coerce_state(self._state),
+                        state_after=_coerce_state(self._state),
+                        metrics=InferenceMetrics(model=""),
+                        executor_cycles=0,
+                        in_reply_to=message.sender,
+                        source_message_type=message.type,
+                        depth_remaining=message.depth_remaining,
+                        source_message_id=message.id,
+                        source_plan_step_index=message.plan_step_index,
+                        source_trace_id=message.trace_id,
+                        processing_started_at=_now,
+                        processing_completed_at=_now,
+                        status="pending",
+                    )
+
         # Record pending inbound Asks so a later reply-to-asker (possibly in
         # a different turn, e.g. nested A→B→C→B→A) auto-correlates back with
         # the original Ask's context.
