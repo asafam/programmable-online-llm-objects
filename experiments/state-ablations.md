@@ -182,3 +182,16 @@ the quorum; heavy threshold logic doesn't cleanly retire). Reverted to H7's ligh
 RESIDUAL (both samples, the genuine mini floor): the threshold-digest event (3rd-in-window
 fires consolidated email) — distributed cross-event state accumulation, the multi-agent tax
 the dataset is designed to measure. Not closable without breaking modification-retirement.
+
+## Regression hunt (2026-06-13 13:xx) — gold dataset, vs 5/25 working baseline
+
+5/25 historical gold LNL = 0.66 (sample-full 55.9%). Current (no-500, --workers 1)
+sample-full = 38.9% → real residual regression beyond the 500-burst noise.
+Validated config deltas vs 5/25 (e12c00a) — all code-level defaults, not logged:
+  1. enable_replan_checkpoints: OFF -> ON (tonight 2675732)
+  2. tool_dispatch: sync -> async (tonight 3e9936f)
+  3. deterministic reads + leaf fast path: added (tonight)
+
+| Ablation | Arm | Prediction | Result | Verdict |
+|---|---|---|---|---|
+| TOOL DISPATCH | async (current default) vs sync (5/25) — isolate dispatch only | sync ≥ async if async machinery (F1/in-flight/reply-continuation) regressed | gold steps-only --limit 15, --workers 1 | pending |
