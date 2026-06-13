@@ -147,3 +147,23 @@ impossible. In-flight evaluator fix (4a07172) is orthogonal & kept.
 Remaining 3 fails all in the THRESHOLD/digest cluster: SC004, PM003 (consolidated
 email didn't fire at 3rd in-window), PM004 (category-group append missing). Same
 7-day-window branch logic applicant needs. → H-exp-2.
+
+## Applicant-tracker iteration (2026-06-13) — 0.15 → 0.69
+
+Each probe shifted the failure to the next-deepest layer (textbook convergence):
+| H | Change | Result | Lesson |
+|---|---|---|---|
+| H4 | optimistic+concrete application-window (transferred from expenses) | 0/13 (worse) | window mechanics OVERLOADED intake, crowding out the tracker write |
+| H5 | collapse tracker write to 1 hop (intake writes directly) | 1/13; write now reliable, failure → "email not sent" | deep write chains fail for mini; collapse critical write to entry |
+| H6 | intake sends standard email directly, write+email mandatory-first | 2/13; email fires, failure → "generic recipient" | same: collapse critical send to entry |
+| H7 | expose posting→manager-email mapping to intake | **9/13** | ROOT CAUSE — no object could address the email; applicant was ALWAYS ~0 for this |
+
+Reusable pattern (lifted expenses 0.33→0.75 and applicant 0.15→0.69):
+1. write tools must carry the row's identity (expense_id);
+2. one-tool-two-modes needs a both-modes description (email standard vs digest);
+3. collapse the critical per-event conjunction (write + send) to the ENTRY object,
+   1-hop, mandatory and FIRST — mini reliably completes ~2 actions/event, so depth kills it;
+4. expose the reference data the workflow needs (manager emails);
+5. optimistic + concrete custodian commits.
+RESIDUAL (both samples): the threshold-digest (3rd-in-window fires consolidated) —
+the genuine cross-event accumulation case. → H8.
