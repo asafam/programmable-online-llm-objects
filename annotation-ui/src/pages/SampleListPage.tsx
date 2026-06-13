@@ -4,7 +4,7 @@ import { signOut } from 'firebase/auth';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { useSampleContext } from '../SampleContext';
-import type { Ambiguity, Annotation, ModType, SampleSummary, Verdict } from '../types';
+import type { Annotation, ModType, SampleSummary, StateConstraintType, Verdict } from '../types';
 
 interface RunVersion { run_id: string; dataset_version: number; }
 
@@ -17,11 +17,11 @@ const modTypeColors: Record<ModType, string> = {
   removal: 'bg-red-100 text-red-700',
 };
 
-const ambiguityColors: Record<Ambiguity, string> = {
-  precise: 'bg-green-100 text-green-700',
-  semantic: 'bg-blue-100 text-blue-700',
-  vague: 'bg-yellow-100 text-yellow-700',
-  implicit: 'bg-red-100 text-red-700',
+const stateConstraintColors: Record<StateConstraintType, string> = {
+  cap: 'bg-amber-100 text-amber-700',
+  counter: 'bg-purple-100 text-purple-700',
+  rate_limit: 'bg-orange-100 text-orange-700',
+  trigger: 'bg-pink-100 text-pink-700',
 };
 
 const verdictColors: Record<Verdict, string> = {
@@ -55,7 +55,7 @@ export default function SampleListPage({ loading }: { loading: boolean }) {
 
   const filterVerdict = (searchParams.get('verdict') ?? 'all') as Verdict | 'all';
   const filterModType = (searchParams.get('mod_type') ?? 'all') as ModType | 'all';
-  const filterAmbiguity = (searchParams.get('ambiguity') ?? 'all') as Ambiguity | 'all';
+  const filterSC = (searchParams.get('sc_type') ?? 'all') as StateConstraintType | 'all';
   const page = parseInt(searchParams.get('page') ?? '1', 10);
 
   const setFilter = (key: string, value: string) => {
@@ -71,10 +71,10 @@ export default function SampleListPage({ loading }: { loading: boolean }) {
     return entries.filter((e) => {
       if (filterVerdict !== 'all' && e.verdict !== filterVerdict) return false;
       if (filterModType !== 'all' && e.mod_type !== filterModType) return false;
-      if (filterAmbiguity !== 'all' && e.ambiguity !== filterAmbiguity) return false;
+      if (filterSC !== 'all' && e.state_constraint_type !== filterSC) return false;
       return true;
     });
-  }, [entries, filterVerdict, filterModType, filterAmbiguity]);
+  }, [entries, filterVerdict, filterModType, filterSC]);
 
   const totalItems = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
@@ -112,7 +112,7 @@ export default function SampleListPage({ loading }: { loading: boolean }) {
           name: summary.name,
           domain: summary.domain,
           mod_type: summary.mod_type,
-          ambiguity: summary.ambiguity,
+          state_constraint_type: summary.state_constraint_type,
           sample_verdict: ann.sample_verdict,
           sample_comment: ann.sample_comment,
           modifications: ann.modifications,
@@ -201,9 +201,9 @@ export default function SampleListPage({ loading }: { loading: boolean }) {
           <FilterGroup label="Mod type" value={filterModType}
             options={[{value:'all',label:'All'},{value:'temporal',label:'Temporal'},{value:'contextual',label:'Contextual'},{value:'exception',label:'Exception'},{value:'correction',label:'Correction'},{value:'expansion',label:'Expansion'},{value:'removal',label:'Removal'}]}
             onChange={(v) => setFilter('mod_type', v)} />
-          <FilterGroup label="Ambiguity" value={filterAmbiguity}
-            options={[{value:'all',label:'All'},{value:'precise',label:'Precise'},{value:'semantic',label:'Semantic'},{value:'vague',label:'Vague'},{value:'implicit',label:'Implicit'}]}
-            onChange={(v) => setFilter('ambiguity', v)} />
+          <FilterGroup label="State constraint" value={filterSC}
+            options={[{value:'all',label:'All'},{value:'cap',label:'Cap'},{value:'counter',label:'Counter'},{value:'rate_limit',label:'Rate limit'},{value:'trigger',label:'Trigger'}]}
+            onChange={(v) => setFilter('sc_type', v)} />
           {filtered.length !== entries.length && (
             <span className="text-sm text-gray-500 ml-2">{filtered.length} shown</span>
           )}
@@ -220,7 +220,7 @@ export default function SampleListPage({ loading }: { loading: boolean }) {
                   <th className="text-left px-4 py-3 font-semibold text-gray-600">#</th>
                   <th className="text-left px-4 py-3 font-semibold text-gray-600">Name</th>
                   <th className="text-left px-4 py-3 font-semibold text-gray-600">Mod type</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">Ambiguity</th>
+                  <th className="text-left px-4 py-3 font-semibold text-gray-600">State constraint</th>
                   <th className="text-left px-4 py-3 font-semibold text-gray-600">Domain</th>
                   <th className="text-left px-4 py-3 font-semibold text-gray-600">Verdict</th>
                 </tr>
@@ -241,8 +241,8 @@ export default function SampleListPage({ loading }: { loading: boolean }) {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {entry.ambiguity && (
-                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ambiguityColors[entry.ambiguity]}`}>{entry.ambiguity}</span>
+                      {entry.state_constraint_type && (
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${stateConstraintColors[entry.state_constraint_type] ?? 'bg-gray-100 text-gray-600'}`}>{entry.state_constraint_type}</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-gray-600">{entry.domain}</td>

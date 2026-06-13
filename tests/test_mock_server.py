@@ -100,7 +100,20 @@ class TestToolDispatch:
             json={"__session_key__": "test-session-1"},
         )
         assert resp.status_code == 200
-        assert "no script configured" in resp.json()["result"]
+        # Verb-aware fallback (2026-06-13): unmatched WRITE-ish names return a
+        # success ack; unmatched READ-ish names return empty data. The old
+        # "no script configured" text read as a broken tool and made cautious
+        # agents refuse to act.
+        body = resp.json()["result"]
+        assert '"status": "success"' in body and "unknown_method" in body
+
+    def test_unknown_read_method_returns_empty_data(self, mock_server):
+        resp = httpx.post(
+            "http://127.0.0.1:18898/tool/get_unknown_records",
+            json={"__session_key__": "test-session-1"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["result"] == "{}"
 
 
 class TestCallLog:
@@ -151,7 +164,7 @@ class TestResolveMockConfigs:
             source_type="test",
             link="",
             objects=[obj],
-            steps=[Step(text="do thing", target="test-obj")],
+            steps=["do thing"],
             modifications=[],
             events=[],
         )
@@ -245,7 +258,7 @@ class TestResolveOrchestration:
             source_type="test",
             link="",
             objects=[obj],
-            steps=[Step(text="do thing", target="test-obj")],
+            steps=["do thing"],
             modifications=[],
             events=events,
         )

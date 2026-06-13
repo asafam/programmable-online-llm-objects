@@ -40,9 +40,6 @@ export default function SampleDetailPage() {
     annotation,
     setSampleVerdict,
     setSampleComment,
-    setModVerdict,
-    setModComment,
-    getModAnnotation,
   } = useAnnotation(id, user?.email ?? '', runId ?? undefined);
 
   useEffect(() => {
@@ -231,13 +228,9 @@ export default function SampleDetailPage() {
         <Section title={`Modifications (${sample.modifications.length})`}>
           <div className="space-y-4">
             {sample.modifications.map((mod) => {
-              const modAnn = getModAnnotation(mod.id);
               const targetObj = sample.objects.find((o) => o.object_id === mod.target) ?? null;
               return (
-                <ModificationCard key={mod.id} mod={mod} targetObj={targetObj} sample={sample}
-                  annotation={modAnn}
-                  onVerdictChange={(v) => setModVerdict(mod.id, v)}
-                  onCommentChange={(c) => setModComment(mod.id, c)} />
+                <ModificationCard key={mod.id} mod={mod} targetObj={targetObj} sample={sample} />
               );
             })}
           </div>

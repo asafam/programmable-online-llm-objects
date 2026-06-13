@@ -1066,8 +1066,10 @@ class LLMObject:
                            "update", "set ", "record", "add ", "remove", "move",
                            "mark", "seed", "register", "write", "store", "clear",
                            "expire", "delete", "reset", "initialize", "bootstrap")
+        import os as _os
         if (
-            self._is_leaf
+            not _os.environ.get("LNL_NO_DET_READS")
+            and self._is_leaf
             and not (self._definition.skills or [])
             and message.type == MessageType.DOMAIN
             and getattr(message, "expects_reply", False)

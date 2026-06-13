@@ -1,0 +1,36 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAllowed() {
+      return request.auth != null
+          && request.auth.token.email == 'asaf.ach@gmail.com'
+          && request.auth.token.email_verified == true;
+    }
+
+    match /samples/{sampleId} {
+      allow read: if isAllowed();
+      allow write: if false;
+    }
+
+    match /sample_summaries/{sampleId} {
+      allow read: if isAllowed();
+      allow write: if false;
+    }
+
+    match /annotations/{sampleId} {
+      allow read, write: if isAllowed();
+    }
+
+    match /runs/{runId} {
+      allow read: if isAllowed();
+      allow delete: if isAllowed();
+      allow create, update: if false;
+
+      match /summaries/{sampleId} {
+        allow read: if isAllowed();
+        allow delete: if isAllowed();
+        allow create, update: if false;
+      }
+    }
+  }
+}

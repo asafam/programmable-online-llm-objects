@@ -145,6 +145,17 @@ while true; do
     # launches an "openclaw-gateway" child; the original OC_PID is the
     # "openclaw" launcher (not "openclaw-gateway"), so pgrep for the
     # launcher by exact name and fall back to the gateway child name.
+    #
+    # Reap zombie first: after a self-restart fork+exec the old PID exits
+    # and becomes a zombie while the successor runs under a new PID.
+    # kill -0 returns 0 for zombies, so without this reap the check below
+    # never fires and OC_PID is never updated to the successor — the
+    # container eventually shuts down once bash incidentally reaps the
+    # zombie, by which point the successor has also died.
+    _oc_state=$(awk '{print $3}' /proc/"${OC_PID}"/stat 2>/dev/null || echo "gone")
+    if [ "${_oc_state}" = "Z" ]; then
+        wait "${OC_PID}" 2>/dev/null || true
+    fi
     if ! kill -0 "${OC_PID}" 2>/dev/null; then
         NEW_PID=""
         for _i in $(seq 1 15); do
