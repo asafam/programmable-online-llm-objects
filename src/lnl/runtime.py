@@ -154,7 +154,12 @@ class SystemConfig:
     # results so it can emit continuation steps. Budget-capped to prevent
     # runaway recursion. Orthogonal to planner_mode — works for both sequential
     # and dag.
-    enable_replan_checkpoints: bool = False
+    # ON by design (2026-06-13): control flow is a PLANNING concern — at a
+    # branching point the plan suspends, the planner re-enters with the read
+    # results, decides the branch, and emits the continuation steps (budgeted
+    # by replan_max_per_trace). Executor-resolved conditionals undercut the
+    # plan as the locus of control flow.
+    enable_replan_checkpoints: bool = True
     # Budget per trace_id; mirrors evaluator_max_cycles_per_trace.
     replan_max_per_trace: int = 3
     # Reactive step-retry + replan. When enabled, the runtime tracks how many

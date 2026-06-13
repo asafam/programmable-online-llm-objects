@@ -1051,6 +1051,54 @@ class LLMObject:
 
         # Retire stale or excess plans before doing any work for this trace.
         self._sweep_stale_plans()
+        # ── Deterministic custodian READS ────────────────────────────────────
+        # The custodian contract DEFINES a read as a verbatim copy: "reply with
+        # the current canonical state — never a recommendation or decision."
+        # Paying an inference to photocopy is waste, and serving reads
+        # mechanically ENFORCES the no-recommendations clause by construction
+        # (specific-value asks like "who's next?" get the full state; the
+        # asker derives — derivation is the policy's job). Conservative gate:
+        # true custodians only (no peers AND no skills), an ask expecting a
+        # reply, with no mutation verb — anything ambiguous falls through to a
+        # normal model turn (fail mode: one unnecessary inference, never a
+        # missed mutation).
+        _MUTATION_VERBS = ("commit", "apply", "increment", "decrement", "append",
+                           "update", "set ", "record", "add ", "remove", "move",
+                           "mark", "seed", "register", "write", "store", "clear",
+                           "expire", "delete", "reset", "initialize", "bootstrap")
+        if (
+            self._is_leaf
+            and not (self._definition.skills or [])
+            and message.type == MessageType.DOMAIN
+            and getattr(message, "expects_reply", False)
+            and isinstance(message.content, str)
+            and not any(v in message.content.lower() for v in _MUTATION_VERBS)
+        ):
+            state_str = (json.dumps(self._state, indent=1)
+                         if isinstance(self._state, dict) else str(self._state or "(empty state)"))
+            _t, _p = self._resolve_task_plan_ids(trace_id)
+            self._append_history(message, _t, _p)
+            logger.info("%s: deterministic read served (no inference)", self.object_id)
+            _now = datetime.datetime.now(datetime.timezone.utc)
+            return ProcessingResult(
+                object_id=self.object_id,
+                reply=f"Current canonical state:\n{state_str}",
+                outgoing_messages=[],
+                state_before=_coerce_state(self._state),
+                state_after=_coerce_state(self._state),
+                metrics=InferenceMetrics(model=""),
+                executor_cycles=0,
+                in_reply_to=message.sender,
+                source_message_type=message.type,
+                depth_remaining=message.depth_remaining,
+                source_message_id=message.id,
+                source_plan_step_index=message.plan_step_index,
+                source_trace_id=message.trace_id,
+                processing_started_at=_now,
+                processing_completed_at=_now,
+                status="ok",
+            )
+
         # An inbound message from a peer answers our outstanding ask to it —
         # clear the in-flight guard so follow-up sends (e.g. commit after read)
         # flow freely.

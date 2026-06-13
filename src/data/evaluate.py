@@ -2654,7 +2654,7 @@ Examples:
         "--enable-replan-checkpoints",
         action=argparse.BooleanOptionalAction,
         dest="enable_replan_checkpoints",
-        default=False,
+        default=True,
         help=(
             "Replan checkpoints: planner re-entry when a `kind=replan` step is "
             "reached. The planner may insert replan steps that suspend "

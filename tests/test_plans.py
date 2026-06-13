@@ -44,6 +44,18 @@ def _user_msg(content, recipient="obj", trace_id: str | None = None):
     )
 
 
+
+def _any_plan(obj):
+    """Active plan if open, else the most recent completed plan — deterministic
+    custodian reads now answer asks instantly, so plans frequently COMPLETE and
+    auto-close within rt.send()'s cascade (previously peers' empty mock replies
+    never routed back and plans stayed open forever)."""
+    if obj.active_plan is not None:
+        return obj.active_plan
+    with obj._plans_lock:
+        completed = list(obj._completed_plans)
+    return completed[-1] if completed else None
+
 class TestCreateAndClose:
     def test_auto_create_from_ask_outgoing(self):
         """Runtime auto-creates a plan when outgoing messages include an Ask."""
@@ -127,7 +139,7 @@ class TestCreateAndClose:
 
         rt = Runtime(brain)
         a = rt.create_object(_defn("obj-a", peers=[PeerDeclaration("hr", "lookup")]))
-        rt.create_object(_defn("hr"))
+        rt.create_object(_defn("hr", skills=["service-skill"]))
 
         rt.send("obj-a", "go")
 
@@ -166,7 +178,7 @@ class TestIncrementalUpdate:
 
         rt = Runtime(brain)
         obj = rt.create_object(_defn("obj-a", peers=[PeerDeclaration("peer", "q")]))
-        rt.create_object(_defn("peer"))
+        rt.create_object(_defn("peer", skills=["service-skill"]))
 
         rt.send("obj-a", "go")
 
@@ -244,8 +256,8 @@ class TestOutgoingAutoCorrelation:
             PeerDeclaration("peer-b", "obs"),
             PeerDeclaration("peer-c", "q"),
         ]))
-        rt.create_object(_defn("peer-b"))
-        rt.create_object(_defn("peer-c"))
+        rt.create_object(_defn("peer-b", skills=["service-skill"]))
+        rt.create_object(_defn("peer-c", skills=["service-skill"]))
 
         rt.send("obj-a", "trigger")
 
@@ -273,7 +285,7 @@ class TestOutgoingAutoCorrelation:
 
         rt = Runtime(brain)
         a = rt.create_object(_defn("obj-a", peers=[PeerDeclaration("peer-b", "resp")]))
-        rt.create_object(_defn("peer-b"))
+        rt.create_object(_defn("peer-b", skills=["service-skill"]))
 
         rt.send("obj-a", "trigger")
 
@@ -296,7 +308,7 @@ class TestOutgoingAutoCorrelation:
 
         rt = Runtime(brain)
         obj_a = rt.create_object(_defn("obj-a", peers=[PeerDeclaration("peer-b", "x")]))
-        rt.create_object(_defn("peer-b"))
+        rt.create_object(_defn("peer-b", skills=["service-skill"]))
 
         rt.send("obj-a", "trigger")
 
@@ -334,7 +346,7 @@ class TestReplyAutoMark:
 
         rt = Runtime(brain)
         a = rt.create_object(_defn("obj-a", peers=[PeerDeclaration("b", "resp")]))
-        rt.create_object(_defn("b"))
+        rt.create_object(_defn("b", skills=["service-skill"]))
         rt.send("obj-a", "go")
 
         # Plan auto-closed after step auto-marked done.
@@ -398,7 +410,7 @@ class TestNestedPlans:
             PeerDeclaration("c", "r"),
             PeerDeclaration("obj-a", "asker"),
         ]))
-        rt.create_object(_defn("c"))
+        rt.create_object(_defn("c", skills=["service-skill"]))
 
         rt.send("obj-a", "start")
 
@@ -445,7 +457,7 @@ class TestPromptRendering:
 
         rt = Runtime(brain)
         obj = rt.create_object(_defn("obj", peers=[PeerDeclaration("hr", "lookup")]))
-        rt.create_object(_defn("hr"))
+        rt.create_object(_defn("hr", skills=["service-skill"]))
         rt.send("obj", "go")
 
         sys_prompt = build_system_prompt(
@@ -717,7 +729,7 @@ class TestFailurePropagation:
 
         rt = Runtime(brain)
         a = rt.create_object(_defn("obj-a", peers=[PeerDeclaration("peer-b", "x")]))
-        rt.create_object(_defn("peer-b"))
+        rt.create_object(_defn("peer-b", skills=["service-skill"]))
         rt.send("obj-a", "go")
         # objA's plan step for ask peer-b should be failed
         plan = list(a.active_plans.values())[0] if a.active_plans else a.completed_plans[-1]

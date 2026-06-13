@@ -916,3 +916,38 @@ class TestHistoryTaskGrouping:
         # Plan retired, its history rows gone.
         assert obj.plan_for("t-W") is None
         assert all(e.plan_id != plan.id for e in obj.history_entries)
+
+
+class TestDeterministicCustodianReads:
+    """True custodians serve non-mutating asks verbatim — no inference."""
+
+    def test_read_ask_served_without_brain(self):
+        brain = MockBrain()  # no scripts: any brain call would return defaults; we assert zero calls
+        obj = LLMObject(_make_definition(), brain)  # no peers, no skills = custodian
+        obj._state = {"rotation_order": ["Maya", "Jordan"], "counts": {"W01-1": {"Maya": 1}}}
+        msg = Message(sender="policy", recipient="test-obj", type=MessageType.DOMAIN,
+                      content="Read the canonical rotation state for day W01-1",
+                      expects_reply=True, trace_id="t1", id="m1")
+        result = obj.process_message(msg)
+        assert "rotation_order" in result.reply and "Maya" in result.reply
+        assert result.metrics.model == ""  # no inference happened
+        assert result.executor_cycles == 0
+
+    def test_mutation_ask_goes_to_model(self):
+        brain = MockBrain()
+        brain.script("test-obj", LLMResponse(updated_state={"counts": 1}, reply="committed"))
+        obj = LLMObject(_make_definition(), brain)
+        msg = Message(sender="policy", recipient="test-obj", type=MessageType.DOMAIN,
+                      content="Commit: increment Maya's count for W01-1 and move her to the back",
+                      expects_reply=True, trace_id="t2", id="m2")
+        result = obj.process_message(msg)
+        assert result.reply == "committed"  # the model handled it
+
+    def test_sink_with_skills_not_short_circuited(self):
+        brain = MockBrain()
+        brain.script("test-obj", LLMResponse(updated_state={}, reply="model answered"))
+        obj = LLMObject(_make_definition(skills=["write_row"]), brain)
+        msg = Message(sender="policy", recipient="test-obj", type=MessageType.DOMAIN,
+                      content="What rows do you have?", expects_reply=True, trace_id="t3", id="m3")
+        result = obj.process_message(msg)
+        assert result.reply == "model answered"

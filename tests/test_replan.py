@@ -159,6 +159,7 @@ class TestReplanPromptRendering:
 
 
 def _defn(object_id="orchestrator", **kw):
+    kw.setdefault("peers", [PeerDeclaration("warehouse", "downstream")])
     return ObjectDefinition(
         object_id=object_id, role="orchestrator for inventory", behavior="b",
         **kw,
@@ -248,8 +249,9 @@ class TestReplanEndToEnd:
         assert orch._replan_cycles_per_trace, \
             "expected replan cycle counter to be populated"
 
-    def test_disabled_by_default_no_planner_re_entry(self):
-        """When enable_replan_checkpoints=False (the default), a replan
+    def test_replan_can_be_disabled_explicitly(self):
+        """When enable_replan_checkpoints=False (explicit opt-out; ON is the
+        default since 2026-06-13 — control flow is a planning concern), a replan
         step in the plan is NOT actioned: the planner is invoked once;
         the budget counter stays empty. The step itself is auto-marked
         `skipped` so the plan can close (regression test against a leak
@@ -268,8 +270,8 @@ class TestReplanEndToEnd:
             finish=ReactFinish(reply="ok", outgoing_messages=[]),
         ))
         brain.set_default(LLMResponse(updated_state={}, reply=""))
-        # Default config — replan checkpoints OFF.
-        rt = Runtime(brain)
+        # Explicit opt-out — replan checkpoints OFF.
+        rt = Runtime(brain, system_config=SystemConfig(enable_replan_checkpoints=False))
         rt.create_object(_defn())
         rt.send("orchestrator", "test")
         orch = rt._bus.objects["orchestrator"]
@@ -291,13 +293,11 @@ class TestReplanEndToEnd:
             all_plans = list(orch._active_plans.values()) + list(orch._completed_plans)
         target = next(p for p in all_plans if any(s.id == "s2" for s in p.steps))
         s2 = next(s for s in target.steps if s.id == "s2")
-        assert s2.kind == "replan"
-        assert s2.status == "skipped", (
-            f"expected s2.status='skipped' when runtime flag is off; got {s2.status!r}. "
-            f"A non-terminal status here would prevent _auto_close_plan_if_complete from "
-            f"retiring the plan once s1 is done."
-        )
-        assert "disabled" in (s2.result_summary or "").lower()
+        # With replan explicitly off, the runtime DEMOTES the step to an
+        # inline reason decision (deciding now beats skipping the decision —
+        # a skipped branch decision lost the work it gated).
+        assert s2.kind == "reason"
+        assert "decide this now" in s2.description
 
     def test_budget_exhaustion_marks_replan_failed(self):
         """With replan_max_per_trace=1, a SECOND replan step in the same
