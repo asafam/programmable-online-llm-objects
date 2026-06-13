@@ -2120,7 +2120,7 @@ class LLMObject:
                 if out.expects_reply:
                     sent_at = self._outstanding_asks.get(rkey)
                     if sent_at is not None and (now - sent_at) < self._pending_timeout_seconds:
-                        logger.warning(
+                        logger.info(
                             "%s: suppressed re-fired ask to %s (unanswered, %.0fs old)",
                             self.object_id, out.recipient, now - sent_at)
                         continue
@@ -2129,7 +2129,7 @@ class LLMObject:
                     content_key = hash((out.recipient or "", (out.content or "").strip()))
                     sent = self._sent_tells.setdefault(rkey, set())
                     if content_key in sent:
-                        logger.warning(
+                        logger.info(
                             "%s: suppressed duplicate tell to %s (identical content already sent this trace)",
                             self.object_id, out.recipient)
                         continue
