@@ -616,3 +616,56 @@ def test_build_evaluator_prompt_includes_reason_step():
     assert "reason" in prompt
     assert "Record in state" in prompt
     assert "{plan_section}" not in prompt
+
+
+# ── F2: cumulative dispatch evidence ─────────────────────────────────────────
+
+
+def test_evaluator_prompt_renders_cumulative_dispatch_log():
+    """The evaluator sees the harness-recorded all-turns dispatch log, not just
+    this turn — completed prior-turn work must be visible as evidence."""
+    defn = _make_definition(1)
+    plan = _make_plan()
+    prompt = build_evaluator_prompt(
+        defn, current_state="", plan=plan,
+        outgoing_messages=[], reply="continuing",
+        message=_domain_msg(),
+        tool_calls_this_turn=[],
+        dispatch_log=["tool append_expense_row executed",
+                      "ask -> expense-window: read Travel window"],
+    )
+    assert "Cumulative for this task" in prompt
+    assert "append_expense_row" in prompt
+    assert "ask -> expense-window" in prompt
+
+
+def test_evaluator_prompt_states_statuses_are_runtime_set():
+    """The grading rules must tell the evaluator that step statuses are
+    deterministic runtime bookkeeping — a done step from an earlier turn is
+    evidence, not an executor claim to distrust."""
+    defn = _make_definition(1)
+    plan = _make_plan()
+    plan.steps[0].status = "done"
+    prompt = build_evaluator_prompt(
+        defn, current_state="", plan=plan,
+        outgoing_messages=[], reply="r", message=_domain_msg(),
+    )
+    assert "set by the RUNTIME" in prompt
+    assert "must NOT be failed for lacking" in prompt
+    assert "status=done" in prompt  # the status itself is rendered
+
+
+def test_object_dispatch_log_accumulates_across_turns():
+    """Tool executions and outgoing sends append to the per-trace log the
+    evaluator is fed."""
+    obj = LLMObject(
+        ObjectDefinition(object_id="t", role="r",
+                         peers=[PeerDeclaration("p", "x")], skills=["my_tool"]),
+        _NoopBrain(),
+    )
+    obj._log_dispatch("tr", "tool my_tool executed")
+    msgs = [OutgoingMessage(recipient="p", content="hello", expects_reply=True)]
+    obj._correlate_outgoing(msgs, "tr")
+    log = obj._trace_dispatch_log["tr"]
+    assert any("my_tool" in e for e in log)
+    assert any(e.startswith("ask -> p") for e in log)

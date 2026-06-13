@@ -580,7 +580,7 @@ class LLMObject:
         - No active plan (planner didn't fire or plan already closed)
         - All plan steps already terminal — nothing left to grade
         """
-        if not self._enable_evaluator or self._is_leaf:
+        if not self._enable_evaluator:
             return None, None
         if message is None:
             return None, None
@@ -1361,7 +1361,7 @@ class LLMObject:
 
             # Self-evaluation. run_evaluator returns (None, None) when the
             # evaluator should be skipped (disabled, no plan, no message).
-            if not self._enable_evaluator or self._is_leaf or eval_cycle >= self._evaluator_max_cycles:
+            if not self._enable_evaluator or eval_cycle >= self._evaluator_max_cycles:
                 # Evaluator disabled or cycle cap reached — auto-close now
                 # to preserve no-evaluator runtime behavior.
                 self._auto_close_plan_if_complete(trace_id)
