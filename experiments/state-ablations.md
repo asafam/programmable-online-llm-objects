@@ -45,7 +45,9 @@ prediction, single variable, then result and verdict. Confounded results say so.
 | H5 | Custodian ceremony (planner+evaluator per atomic turn) wastes 3–6× latency/cost | latency/cost drop ≥3×, score unchanged | P4 expenses (leaf path) | 3:25/$0.50 (≥3× faster/cheaper ✓) but 1/12 score | **CONFOUNDED** — probe also first to isolate expenses; freelancing observed; score drop not attributable to leaf path (no control) |
 | H6 | Unscoped tools let entry services freelance write-sinks' jobs (observed: append_expense_row(status=submitted) from the entry, bypassing the policy's "pending") | with skills-scoped tools (0ea200a): expenses ≥4/12 AND zero append calls by the entry object | P5 expenses | 2/12; mechanism check: entry IS the sink (legit owner) — no freelancing to block | **FALSIFIED**; real defect = sample design |
 
-| H7 | Tracker behavior's "append with current status" is ambiguous → model writes "submitted"; workflow semantics define new expenses as Pending | with behavior stating Pending-on-append + explicit forward-to-policy: expenses ≥7/12, zero "submitted rather than pending" verdicts | P6 expenses | — | pending |
+| H7 | Tracker behavior's "append with current status" is ambiguous → model writes "submitted"; workflow semantics define new expenses as Pending | with behavior stating Pending-on-append + explicit forward-to-policy: expenses ≥7/12, zero "submitted rather than pending" verdicts | P6 expenses | **8/12** (was 2/12); zero "submitted vs pending" verdicts; now ABOVE baseline 0.62 | **SUPPORTED** — residue is the threshold/email chain (SC004-class), registered as H8 |
+
+| H8 | The remaining expenses failures are the policy→window→email chain at the threshold (3rd in-window occurrence): the consolidated email doesn't fire or leaves no evidence | TBD after reading SC004's transcript — hypothesis to be sharpened BEFORE the next probe | — | — | registered, not yet sharpened |
 
 Lesson recorded: H5/H6 were stacked without a control — P4 cannot separate
 leaf-path effects from pre-existing freelancing. Don't repeat.
