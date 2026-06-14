@@ -147,9 +147,10 @@ class SystemConfig:
     # driven by the HARNESS (LLMObject._dispatch_ready_steps): it iterates the
     # active plan and deterministically dispatches every ready step, so a
     # planned step can never be silently skipped by the LLM finishing early.
-    # Default OFF — the legacy LLM-driven ReAct cycle. Also honored via the
-    # LNL_HARNESS_DISPATCH=1 env var.
-    harness_dispatch: bool = False
+    # Default ON — deterministic dispatch is the intended behavior. Set the
+    # LNL_HARNESS_DISPATCH=0 env var (or pass False) to fall back to the legacy
+    # LLM-driven ReAct cycle for A/B comparison.
+    harness_dispatch: bool = True
     # Planner mode: "dag" (default) — planner emits a dependency graph and
     # independent steps (empty depends_on or all deps done) fan out concurrently
     # in a single executor turn. "sequential" — planner emits a step-by-step
@@ -230,8 +231,8 @@ class SystemConfig:
             memory_backend=str(data.get("memory_backend", "nested")),
             planner_mode=planner_mode,
             harness_dispatch=(
-                bool(data.get("harness_dispatch", False))
-                or os.environ.get("LNL_HARNESS_DISPATCH") == "1"
+                os.environ.get("LNL_HARNESS_DISPATCH") != "0"
+                and bool(data.get("harness_dispatch", True))
             ),
             enable_replan_checkpoints=bool(data.get("enable_replan_checkpoints", False)),
             replan_on_modification=bool(data.get("replan_on_modification", False)),

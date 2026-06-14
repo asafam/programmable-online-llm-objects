@@ -761,6 +761,13 @@ class TestHistoryTaskGrouping:
         obj = LLMObject(
             _make_definition(peers=[PeerDeclaration("peer-x", "downstream")]), brain,
             enable_planner=True, enable_evaluator=False,
+            # This test exercises legacy replan-in-place plan-lifecycle mechanics
+            # in isolation: it injects a single-step plan and later marks it
+            # needs_replan. The default harness dispatcher would dispatch and
+            # complete that single step within the first process_message, evicting
+            # the plan from _active_plans before the test can trigger the replan.
+            # Pin the LLM-driven path so the plan stays active across messages.
+            harness_dispatch=False,
         )
         plan = self._inject_plan(obj, trace_id="t-A", steps=[
             PlanStep(id="s1", kind="reason", description="pre-replan", status="planned"),
@@ -972,7 +979,13 @@ class TestPlannerEventGate:
             brain, enable_planner=True, enable_evaluator=False,
         )
         obj.process_message(self._event("an external event", trace_id="t-evt"))
+        # The planner must have produced a plan for this EVENT. Check active AND
+        # completed plans: under the default harness dispatcher a short plan is
+        # dispatched and completed within the same process_message, so it may
+        # already have moved out of _active_plans.
         plan = obj.plan_for("t-evt")
+        if plan is None:
+            plan = next((p for p in obj._completed_plans if p.trace_id == "t-evt"), None)
         assert plan is not None, "coordinator must plan on EVENT messages"
         assert any(s.target == "peer-x" for s in plan.steps)
 
