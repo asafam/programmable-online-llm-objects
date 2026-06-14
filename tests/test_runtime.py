@@ -101,7 +101,7 @@ class TestChainProcessing:
         rt = Runtime(brain)
         rt.create_object(ObjectDefinition(object_id="a", role="A"))
         rt.create_object(ObjectDefinition(object_id="b", role="B"))
-        rt.create_object(ObjectDefinition(object_id="c", role="C"))
+        rt.create_object(ObjectDefinition(object_id="c", role="C", skills=["respond"]))
 
         results = rt.send("b", "start chain", sender="a")
 
@@ -1706,3 +1706,51 @@ class TestHarnessDispatch:
             (e.message.sender, e.message.recipient, e.message.content) for e in rt.message_log
         ]
         assert delivered[0].message.sender == "coord"
+
+
+class TestLeafAsyncReplyRouting:
+    """A leaf (peerless, no plan) that answers a peer's ASK by dispatching an
+    ASYNC tool must route its post-tool reply back to the ORIGINAL asker, not to
+    __tool__:<name>. A leaf has no plan.original_* to carry that routing across
+    the tool-REPLY continuation, so it is stashed in _leaf_pending_routing.
+    Regression for round-robin: sales-team-rotation-sheet retrieved the roster
+    on every call but its reply reached the policy only 1/10 (async)."""
+
+    def _leaf(self, brain):
+        reg = ToolRegistry()
+        tool_exec = MockToolExecutor()
+        tool_exec.script('{"reps": ["Maya Patel", "Jordan Lee"]}')
+        reg.register("roster_data", tool_exec)
+        return LLMObject(
+            ObjectDefinition(object_id="leaf-svc", role="Read service for roster.",
+                             skills=["roster_data"]),
+            brain, tool_registry=reg,
+            enable_planner=False, enable_evaluator=False, tool_dispatch="async",
+        )
+
+    def test_post_tool_reply_routes_to_asker(self):
+        brain = MockBrain()
+        brain.script("leaf-svc", LLMResponse(  # turn 1: call the data tool
+            updated_state={}, reply="",
+            tool_calls=[ToolCall(id="t1", tool="roster_data", arguments={})]))
+        brain.script("leaf-svc", LLMResponse(  # turn 2 (continuation): answer
+            updated_state={}, reply="Roster: Maya Patel, Jordan Lee"))
+
+        leaf = self._leaf(brain)
+        assert leaf._is_leaf
+
+        ask = Message(sender="policy-x", recipient="leaf-svc", type=MessageType.DOMAIN,
+                      content="fetch the roster", expects_reply=True,
+                      trace_id="tL", id="ask-1")
+        r1 = leaf.process_message(ask)
+        assert r1.status == "pending"
+        assert "tL" in leaf._leaf_pending_routing, "routing must be stashed at pending"
+
+        results = []
+        leaf.read(results.append)  # drain the async tool REPLY → continuation
+        answered = [r for r in results if (r.reply or "").strip()]
+        assert answered, "leaf must produce a reply on the continuation"
+        final = answered[-1]
+        assert final.in_reply_to == "policy-x", \
+            f"post-tool reply must route to the asker, got {final.in_reply_to!r}"
+        assert "tL" not in leaf._leaf_pending_routing, "stash must be cleaned up"

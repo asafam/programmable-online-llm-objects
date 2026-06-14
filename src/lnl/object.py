@@ -237,6 +237,13 @@ class LLMObject:
         # correlates back to the original asker's plan.
         self._pending_inbound_asks: dict[str, tuple[str, Optional[int]]] = {}
         self._pending_inbound_lock = threading.Lock()
+        # Leaf (no-plan) async routing. A peerless object that answers a request
+        # by dispatching an ASYNC tool has no plan.original_* to carry the
+        # original asker across the tool-REPLY continuation — so its final reply
+        # would route to __tool__:<name> and be lost. Stash (sender, msg_id,
+        # msg_type, depth, step_index) keyed by trace_id at pending time and
+        # restore it on the continuation so the reply reaches the asker.
+        self._leaf_pending_routing: dict[str, tuple] = {}
         # In-flight outbound guard (async dispatch): each tool/peer REPLY starts a
         # fresh turn, and the executor re-emits asks it is still awaiting answers
         # to — observed as message storms cut by the chain-depth limit (lossy).
@@ -1265,12 +1272,21 @@ class LLMObject:
             # to go back to the ORIGINAL sender that started this trace, not to
             # __tool__:<name>. We carry that routing through plan.original_*.
             _plan = self.plan_for(trace_id)
+            _leaf_route = (
+                self._leaf_pending_routing.get(trace_id) if trace_id else None
+            )
             if _plan is not None and _plan.original_sender is not None:
                 effective_sender = _plan.original_sender
                 effective_msg_id = _plan.original_source_message_id
                 effective_msg_type = _plan.original_source_message_type or message.type
                 effective_depth = _plan.original_depth_remaining
                 effective_step_index = _plan.original_source_plan_step_index
+            elif _leaf_route is not None:
+                # Leaf (no plan): restore the original asker stashed when this
+                # trace went pending, so the post-tool reply routes back to it
+                # instead of to __tool__:<name>.
+                (effective_sender, effective_msg_id, effective_msg_type,
+                 effective_depth, effective_step_index) = _leaf_route
             else:
                 effective_sender = message.sender
                 effective_msg_id = message.id
@@ -1351,6 +1367,16 @@ class LLMObject:
                     # Persist tool names so the evaluator in the continuation
                     # turn can verify plan tool steps were actually executed.
                     plan.accumulated_tools_called.extend(tools_called_total)
+                elif trace_id is not None and not is_tool_reply:
+                    # No-plan (leaf) object dispatched an async tool while
+                    # answering a request. Remember the original asker so the
+                    # tool-REPLY continuation routes the final reply back to it.
+                    # setdefault + not-tool-reply guard capture only the original
+                    # turn, never a later tool-reply turn (sender=__tool__).
+                    self._leaf_pending_routing.setdefault(trace_id, (
+                        message.sender, message.id, message.type,
+                        message.depth_remaining, message.plan_step_index,
+                    ))
                 # Step 5 (harness dispatch): a wavefront can produce a `tell`
                 # (which MUST be routed — a tell is COMPLETE the moment it is
                 # sent) AND an async `tool`/`ask` (which makes the turn pending)
@@ -1572,6 +1598,11 @@ class LLMObject:
         # trace. Budget-capped per trace.
         self._dispatch_pending_replans(trace_id, message=message)
 
+        # The leaf's tool-REPLY continuation has produced its final reply to the
+        # original asker; drop the stashed routing for this trace. (No-op for
+        # plan-based objects — their traces are never in this map.)
+        if is_tool_reply and message.trace_id:
+            self._leaf_pending_routing.pop(message.trace_id, None)
         processing_completed_at = datetime.datetime.now(datetime.timezone.utc)
         return ProcessingResult(
             object_id=self.object_id,
