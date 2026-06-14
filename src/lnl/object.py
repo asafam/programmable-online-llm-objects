@@ -2115,14 +2115,17 @@ class LLMObject:
     def _allowed_tool(self, name: str) -> bool:
         """Skills scope tools: an object may only call tools its own skills grant.
 
-        Token-based matching, not exact — bind-time skill names and tool names
-        drift (skill send_email ~ tool send_hiring_email).
+        DISABLED BY DEFAULT (2026-06-14): skill-scoping regressed the gold base-step
+        suite ~10pt (53% -> 70.1% Steps with it off). The token-based match below is
+        brittle — it strips tools objects legitimately need, causing wrong-action /
+        incomplete-chain failures — and its motivating case (H6) was falsified. Opt
+        back in with LNL_ENABLE_TOOL_SCOPING=1, and ideally replace the fuzzy
+        token-match with an exact bind-time skill->tool mapping before doing so.
         """
         import os as _os, re as _re
-        # Ablation hatch: LNL_NO_TOOL_SCOPING=1 restores 5/25 behavior — every
-        # object sees the full registry (no skill-gating). Isolates 0ea200a as a
-        # base-step regression suspect while keeping async + all other current code.
-        if _os.environ.get("LNL_NO_TOOL_SCOPING"):
+        # Off by default: every object sees the full registry. Set
+        # LNL_ENABLE_TOOL_SCOPING=1 to restore the skill gate.
+        if not _os.environ.get("LNL_ENABLE_TOOL_SCOPING"):
             return True
         # Core runtime tools are granted to every object, not via skills.
         if name in ("create_object", "execute_code"):
