@@ -1,15 +1,20 @@
-# Versions
+# Changelog
 
-A running log of what each push to `main` did — newest first, one entry per commit.
+Release notes for the LNL runtime — newest first. Each push gets a version entry
+written like app-store "What's New": plain language, what changed and why it matters.
 
-Format: `## <short-hash> — <YYYY-MM-DD> — <title>` followed by a short bullet list of what the push changed.
+## v0.3.0 — 2026-06-14 · Multi-agent reliability
 
-## 836d7e5 — 2026-06-14 — Replace custodian with deterministic per-object shared state
+- **Entry/coordinator objects now act on event triggers**, not just direct messages. Previously an object that received an external trigger as an event never planned, so it forwarded downstream only intermittently — now it plans reliably (e.g. the applicant-tracker hiring-manager email went from ~0–15% to ~85%).
+- **Deterministic step dispatch is on by default.** The harness now dispatches every ready step of a plan, so a planned action can no longer be silently skipped by the model finishing early. Escape hatch: set `LNL_HARNESS_DISPATCH=0` to restore the old behavior.
 
-- New `State` class (`src/lnl/state.py`): one class backing private, shared, and plan-dirty state — a memory backend behind a lock (`read`/`write`/`apply`/`derive`/`clone`).
-- Per-object **shared state** with two built-in tools, `read_state` / `set_state` (`src/lnl/shared_state.py`) — deterministic, no LLM in the store; the `set_state` schema matches the configured backend dialect (flat key-based / nested path-based).
-- Private state is now a `State`; shared writes are guarded-op atomic on a live store. The shared-state prompt block + tools are gated to objects that declare a `## Shared State` section — base prompt and tool list are byte-identical otherwise.
-- `plan.state` is a JSON-object copy of master, committed by whole-object **copy-over** on success (delta replay / `accumulated_deltas` removed) — copies for deterministic harness actions, deltas for the LLM.
-- Removed the deterministic custodian-read fast path; inter-object reads now go through the full LLM cycle (deterministic reads live in `read_state`).
-- Renamed "custodian" → "shared-state owner" across data-gen + docs; renamed `executor_nested.yaml` → `executor.yaml` (the default) and the old flat `executor.yaml` → `executor_flat.yaml`.
-- Tests: `tests/test_shared_state.py` (store/registry/tools + sync/async integration); `test_custodian_validation.py` → `test_shared_state_validation.py`.
+## v0.2.0 — 2026-06-14 · Deterministic shared state (replaces "custodian")
+
+- **New: shared state.** Every object can own a shared-state partition, read and written with two deterministic tools — `read_state` and `set_state`. The store is plain code with **no LLM** inside it. Use it for anything multiple requests touch at once: counters, quotas, running totals, rate-limits, or per-item registries. Guarded ops (`incr` with a max, `reserve`/`confirm` against a cap) keep those correct under concurrency.
+- **One state model.** Private, shared, and a plan's working copy are now the same `State` type. Private state stays per-request and, on success, the whole object is copied over to the object's master state (copies for deterministic harness actions; deltas remain the LLM's interface).
+- **No cost to objects that don't use it.** The shared-state tools and instructions appear only for objects that declare a `## Shared State` section — every other object's prompt and tool list is unchanged.
+- **Cleanup.** The old "custodian" concept is gone (replaced by shared state); inter-object "report your state" now goes through the normal object cycle, and deterministic reads live in `read_state`. Internal renames: "custodian" → "shared-state owner"; executor prompt files renamed (`executor.yaml` is the default nested prompt, `executor_flat.yaml` the flat one).
+
+## v0.1.0 — baseline
+
+- Everything prior to this changelog (LNL runtime, data-generation pipeline, evaluation harness).
