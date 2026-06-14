@@ -941,3 +941,47 @@ class TestPeerlessObjectProcessing:
                       content="What rows do you have?", expects_reply=True, trace_id="t3", id="m3")
         result = obj.process_message(msg)
         assert result.reply == "model answered"
+
+
+class TestPlannerEventGate:
+    """A coordinator (non-leaf) object must run the planner on EVENT messages,
+    not only DOMAIN. External scenario events arrive as MessageType.EVENT, so an
+    entry/coordinator object that planned only on DOMAIN would never plan — it
+    would fall back to a non-deterministic LLM executor and unreliably forward
+    into its domain (the dropped-forward / unsent-email bug). Leaf write-services
+    still skip planning on EVENT (the `not _is_leaf` guard)."""
+
+    def _event(self, content: str, trace_id: str) -> Message:
+        return Message(
+            sender="__external__", recipient="test-obj",
+            type=MessageType.EVENT, content=content,
+            id=f"m-{trace_id}", trace_id=trace_id,
+        )
+
+    def test_coordinator_plans_on_event(self):
+        brain = MockBrain()
+        brain.set_default(LLMResponse(updated_state={}, reply="ok"))
+        brain.script_plan(
+            {"goal": "forward into domain",
+             "steps": [{"kind": "tell", "target": "peer-x",
+                        "description": "forward the event"}]},
+            object_id="test-obj",
+        )
+        obj = LLMObject(
+            _make_definition(peers=[PeerDeclaration("peer-x", "downstream")]),
+            brain, enable_planner=True, enable_evaluator=False,
+        )
+        obj.process_message(self._event("an external event", trace_id="t-evt"))
+        plan = obj.plan_for("t-evt")
+        assert plan is not None, "coordinator must plan on EVENT messages"
+        assert any(s.target == "peer-x" for s in plan.steps)
+
+    def test_leaf_does_not_plan_on_event(self):
+        brain = MockBrain()
+        brain.set_default(LLMResponse(updated_state={}, reply="ok"))
+        obj = LLMObject(
+            _make_definition(),  # no peers -> leaf
+            brain, enable_planner=True, enable_evaluator=False,
+        )
+        obj.process_message(self._event("an external event", trace_id="t-evt2"))
+        assert obj.plan_for("t-evt2") is None, "leaf must not plan on EVENT"

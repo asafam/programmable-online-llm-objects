@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 import queue
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -142,6 +143,13 @@ class SystemConfig:
     # context, leading to lost-intent / re-dispatch patterns). Async remains
     # available via --tool-dispatch async for actor-style production runs.
     tool_dispatch: str = "sync"
+    # Harness-driven plan dispatch. When True, the executor's wavefront is
+    # driven by the HARNESS (LLMObject._dispatch_ready_steps): it iterates the
+    # active plan and deterministically dispatches every ready step, so a
+    # planned step can never be silently skipped by the LLM finishing early.
+    # Default OFF — the legacy LLM-driven ReAct cycle. Also honored via the
+    # LNL_HARNESS_DISPATCH=1 env var.
+    harness_dispatch: bool = False
     # Planner mode: "dag" (default) — planner emits a dependency graph and
     # independent steps (empty depends_on or all deps done) fan out concurrently
     # in a single executor turn. "sequential" — planner emits a step-by-step
@@ -221,6 +229,10 @@ class SystemConfig:
             max_active_plans_per_object=int(data.get("max_active_plans_per_object", 32)),
             memory_backend=str(data.get("memory_backend", "nested")),
             planner_mode=planner_mode,
+            harness_dispatch=(
+                bool(data.get("harness_dispatch", False))
+                or os.environ.get("LNL_HARNESS_DISPATCH") == "1"
+            ),
             enable_replan_checkpoints=bool(data.get("enable_replan_checkpoints", False)),
             replan_on_modification=bool(data.get("replan_on_modification", False)),
             max_trace_messages=int(data.get("max_trace_messages", 60)),
@@ -545,6 +557,7 @@ class Runtime:
             max_active_plans=self._heartbeat.max_active_plans_per_object,
             memory_backend=self._memory_backend_name,
             tool_dispatch=self._heartbeat.tool_dispatch,
+            harness_dispatch=self._heartbeat.harness_dispatch,
         )
         # Provision this object's shared-state partition and let it surface its
         # own shared state read-only in the executor prompt.

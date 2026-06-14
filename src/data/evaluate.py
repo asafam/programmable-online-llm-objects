@@ -502,6 +502,7 @@ def _execute_test_case_inner(
         enable_evaluator=enable_evaluator,
         memory_backend=memory_backend,
         tool_dispatch=tool_dispatch,
+        harness_dispatch=(os.environ.get("LNL_HARNESS_DISPATCH") == "1"),
         planner_mode=planner_mode,
         enable_replan_checkpoints=enable_replan_checkpoints,
         replan_max_per_trace=replan_max_per_trace,

@@ -36,6 +36,7 @@ from .types import (
     PlanUpdate,
     ReactFinish,
     ReactStep,
+    STEP_TERMINAL_STATUSES,
     StateDelta,
     ToolCall,
     ToolResult,
@@ -397,6 +398,32 @@ def _active_plan_mode_note(mode: str) -> str:
     return ""
 
 
+def _ready_step_indices(plan: Optional[Plan]) -> list[int]:
+    """Indices of steps that are READY to dispatch: status=='planned' and every
+    id in `depends_on` is in a terminal status (done/failed/skipped).
+
+    Pure (no locking, no mutation) — callers that touch a live plan should hold
+    `_plans_lock`. This is the single source of truth for the ready predicate,
+    shared by the active-plan renderer's DAG `ready:` header and the harness
+    dispatcher (`LLMObject._dispatch_ready_steps`). No kind filtering here — the
+    renderer surfaces every ready step; the dispatcher filters kinds it owns.
+    """
+    if plan is None or not plan.steps:
+        return []
+    done_ids = {
+        (s.id or f"s{i+1}")
+        for i, s in enumerate(plan.steps)
+        if s.status in STEP_TERMINAL_STATUSES
+    }
+    ready: list[int] = []
+    for i, s in enumerate(plan.steps):
+        if s.status != "planned":
+            continue
+        if all(d in done_ids for d in (s.depends_on or [])):
+            ready.append(i)
+    return ready
+
+
 def _render_active_plan(plan: Optional[Plan], mode: str = "sequential") -> str:
     """Render the active plan for the prompt.
 
@@ -415,14 +442,9 @@ def _render_active_plan(plan: Optional[Plan], mode: str = "sequential") -> str:
         return "(none)"
     ready_ids: set[str] = set()
     if mode == "dag":
-        done_ids = {(s.id or f"s{i+1}") for i, s in enumerate(plan.steps)
-                    if s.status in ("done", "skipped")}
-        for i, s in enumerate(plan.steps):
-            sid = s.id or f"s{i+1}"
-            if s.status != "planned":
-                continue
-            if all(d in done_ids for d in (s.depends_on or [])):
-                ready_ids.add(sid)
+        for i in _ready_step_indices(plan):
+            s = plan.steps[i]
+            ready_ids.add(s.id or f"s{i+1}")
     # Sequential-mode: deterministically point at the first 'planned' step
     # (skipping anything already in 'dispatched' status — that step is
     # currently in flight and the LLM should NOT pick it back up). The LLM
