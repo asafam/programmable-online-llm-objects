@@ -37,7 +37,7 @@ class NestedDelta:
 
     Guarded ops (incr/decr/reserve/confirm/release) target the leaf at `path`
     and use the same optional params as the flat backend's StateDelta. See
-    docs/CUSTODIAN_SPEC.md.
+    docs/SHARED_STATE_SPEC.md.
     """
     op: str               # set | merge | delete | append | incr | decr | reserve | confirm | release
     path: str             # dotted path, "" = root
@@ -106,7 +106,7 @@ class FlatKeyValueMemory:
     """Flat top-level key/value state. Preserves pre-refactor behaviour exactly."""
 
     name = "flat"
-    prompt_file = "executor.yaml"
+    prompt_file = "executor_flat.yaml"
 
     def __init__(self, initial: Any = "") -> None:
         self._state: str = ""
@@ -209,7 +209,7 @@ def _apply_flat_delta(state: dict, delta: StateDelta) -> dict:
 # CURRENT value at a location and returns (new_value, changed); the backend then
 # writes new_value only when changed. The delta carries the params (by/min/max/
 # cap/hold_id) — both StateDelta and NestedDelta expose them, so this logic is
-# backend-agnostic. See docs/CUSTODIAN_SPEC.md.
+# backend-agnostic. See docs/SHARED_STATE_SPEC.md.
 
 GUARDED_OPS: tuple[str, ...] = ("incr", "decr", "reserve", "confirm", "release")
 
@@ -368,7 +368,7 @@ class NestedJsonMemory:
     """
 
     name = "nested"
-    prompt_file = "executor_nested.yaml"
+    prompt_file = "executor.yaml"
 
     def __init__(self, initial: Any = None) -> None:
         self._state: dict = {}

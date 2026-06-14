@@ -46,8 +46,8 @@ def _user_msg(content, recipient="obj", trace_id: str | None = None):
 
 
 def _any_plan(obj):
-    """Active plan if open, else the most recent completed plan — deterministic
-    custodian reads now answer asks instantly, so plans frequently COMPLETE and
+    """Active plan if open, else the most recent completed plan — leaf objects
+    answer asks in a single executor turn, so plans frequently COMPLETE and
     auto-close within rt.send()'s cascade (previously peers' empty mock replies
     never routed back and plans stayed open forever)."""
     if obj.active_plan is not None:

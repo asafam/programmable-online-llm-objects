@@ -133,7 +133,7 @@ class StateConstraint(BaseModel):
     exercises — IMPLEMENTATION-AGNOSTIC.
 
     It names no owning object and no mechanism: whether the invariant is realized by a
-    single-writer Custodian or otherwise is decided in object identification (Stage 1),
+    single-writer shared-state owner or otherwise is decided in object identification (Stage 1),
     not here. Stage 1.5 records this descriptor and authors the base events that exercise
     it; the expectations are phrased in observable terms, not internal mechanics.
     """
@@ -149,7 +149,7 @@ class GeneratedStateConstraint(BaseModel):
     The model reads the workflow (objects/steps describe its rules), classifies the
     cross-request invariant, and authors a role='base' event sequence whose expects
     state the OBSERVABLE outcome at each step (admitted vs blocked/held at the
-    threshold) — never any internal mechanism (no custodian, no reserve/confirm).
+    threshold) — never any internal mechanism (no shared-state owner, no reserve/confirm).
     """
     constraint_type: StateConstraintType
     threshold: str
@@ -340,12 +340,12 @@ class ObjectDef(BaseModel):
     subscriptions: list[str] = Field(default_factory=list)
     event_sources: list[str] = Field(default_factory=list)
     # Categorical: True iff this object is the single-writer owner of a
-    # cross-request/instance invariant (a Custodian — see identify_objects.yaml
-    # category 3). A custodian decides from its own state in one message and
-    # only replies; it has NO peers. Any peers emitted for a custodian are
+    # cross-request/instance invariant (a shared-state owner — see identify_objects.yaml
+    # category 3). A shared-state owner decides from its own state in one message and
+    # only replies; it has NO peers. Any peers emitted for a shared-state owner are
     # stripped at assembly (generate_workflows._assemble_sample), so the
     # peerless / atomic property holds by construction.
-    is_custodian: bool = False
+    owns_shared_state: bool = False
     @field_validator("object_id")
     @classmethod
     def slugify_object_id(cls, v: str) -> str:

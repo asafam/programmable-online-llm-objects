@@ -269,7 +269,7 @@ def bind_one(llm, spec: WorkflowSpec, objects_cfg: dict, bind_mods_tmpl: str | N
              run_tag: str | None = None) -> Sample | None:
     """Full Phase-2 binding for one spec (derive graph → assemble → mock tools → expects)."""
     # The invariant is now merged into spec.grounded_steps (as a state-constraint step) by
-    # the ground stage, so _grounded_from_spec carries it to identify_objects → custodian.
+    # the ground stage, so _grounded_from_spec carries it to identify_objects → shared-state owner.
     grounded = _grounded_from_spec(spec)
     template = _template_from_spec(spec)
     graph = _identify_objects(llm, grounded, template, objects_cfg)

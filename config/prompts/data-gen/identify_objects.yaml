@@ -64,48 +64,48 @@ prompt: |
 
      CHAIN COMPLETION: a business-logic object's turn is NOT done when it has decided — it is done
      when every downstream effect of the decision is dispatched and confirmed: the write-service
-     records, the notification goes out, the custodian commit is acknowledged. Behaviors must end
+     records, the notification goes out, the shared-state owner commit is acknowledged. Behaviors must end
      by naming the writes the object is responsible for completing; forwarding to a peer and
      stopping is an incomplete turn.
 
   2. **Business logic objects** — one per distinct domain of responsibility. Named as domain slugs (nouns describing *what they know*, not what they do): e.g., `approval-policy`, `incident-triage`, `onboarding-rules`, `pricing-engine`. **Never** name an object "orchestrator", "manager", "coordinator", "dispatcher", or any other generic control-flow role — those are architecture smells. Each object embodies a specific domain: it knows the rules of that domain, applies them to incoming messages, and sends outputs to its peers. There is no captain. Objects work in tandem — each one acts on its slice of the domain, forwarding to the next peer when its responsibility ends.
 
-  3. **Custodian objects** — the **single writer** of an invariant that spans multiple requests or multiple object instances: a cumulative cap, a quota/budget, a rate-limit, a running total, a shared pool, or a round-robin queue. Named after the resource they own (e.g., `discount-budget`, `lead-desk`, `reorder-window`) — NOT "ledger"/"manager"/"tracker". A Custodian exists so the accumulator has exactly one owner; requesters message it and keep **no private copy** of the total. Create one ONLY when such a cross-request / cross-instance invariant exists — never for a decision that reads only the current message.
+  3. **shared-state owner objects** — the **single writer** of an invariant that spans multiple requests or multiple object instances: a cumulative cap, a quota/budget, a rate-limit, a running total, a shared pool, or a round-robin queue. Named after the resource they own (e.g., `discount-budget`, `lead-desk`, `reorder-window`) — NOT "ledger"/"manager"/"tracker". A shared-state owner exists so the accumulator has exactly one owner; requesters message it and keep **no private copy** of the total. Create one ONLY when such a cross-request / cross-instance invariant exists — never for a decision that reads only the current message.
 
-     Being a custodian is a **categorical decision**: set `is_custodian: true` on that one object (and only that object), and begin its `role` with "Single-writer owner of ".
+     Being a shared-state owner is a **categorical decision**: set `owns_shared_state: true` on that one object (and only that object), and begin its `role` with "Single-writer owner of ".
 
-     VOCABULARY: "custodian" is OUR internal category word — it must NEVER appear inside any
+     VOCABULARY: "shared-state owner" is OUR internal category word — it must NEVER appear inside any
      object's `role` or `behavior` text (nor "invariant" or "state constraint"). Every behavior
      must read as a self-contained domain instruction that names its collaborators BY OBJECT ID:
      write "ask `account-renewal-window` whether this is the third approaching renewal", never
-     "ask the custodian" / "when the custodian replies". The single-writer is identified by the
-     `is_custodian` FIELD; the prose names the object explicitly so any reader knows exactly whom
+     "ask the shared-state owner" / "when the shared-state owner replies". The single-writer is identified by the
+     `owns_shared_state` FIELD; the prose names the object explicitly so any reader knows exactly whom
      to message.
 
-     A Custodian has **NO peers**. It decides from its own state in a **single message** and **replies** with the decision — it never sends an outbound message and never `ask`s anyone mid-decision (that is what guarantees the decision is atomic and the running total can't be lost). Requesters declare the Custodian as *their* peer; the Custodian declares none. Persistence and any downstream side-effects are driven by the **requester** after it gets the reply, not by the Custodian. (Any `peers` you put on a custodian are ignored.)
+     A shared-state owner has **NO peers**. It decides from its own state in a **single message** and **replies** with the decision — it never sends an outbound message and never `ask`s anyone mid-decision (that is what guarantees the decision is atomic and the running total can't be lost). Requesters declare the shared-state owner as *their* peer; the shared-state owner declares none. Persistence and any downstream side-effects are driven by the **requester** after it gets the reply, not by the shared-state owner. (Any `peers` you put on a shared-state owner are ignored.)
 
-     ROTATION custodians (round-robin order + per-member counts) must spell out the FULL pointer
+     ROTATION shared-state owners (round-robin order + per-member counts) must spell out the FULL pointer
      protocol — ambiguity here cascades into every later decision:
-     - BOOTSTRAP: the custodian starts empty; the REQUESTER fetches the ordered roster from the
-       read service and INCLUDES it in its first admit request; the custodian seeds its rotation
+     - BOOTSTRAP: the shared-state owner starts empty; the REQUESTER fetches the ordered roster from the
+       read service and INCLUDES it in its first admit request; the shared-state owner seeds its rotation
        state from that roster ONCE.
-     - From then on the custodian's own state is the SINGLE source of truth for the order — it
+     - From then on the shared-state owner's own state is the SINGLE source of truth for the order — it
        never re-reads the roster unless the request says membership changed.
      - EVERY admitted assignment advances the rotation: the selected member moves to the BACK of
        the order, in the same atomic commit as the count increment — two consecutive requests must
        never select the same member unless everyone else is at cap.
      - The reply names the selected member AND the full updated order, so the requester can write
-       the new positions to the external sheet (the sheet mirrors the custodian, never the
+       the new positions to the external sheet (the sheet mirrors the shared-state owner, never the
        reverse).
      - DAY KEYS: time-bounded counts ("per day", "per week") are keyed by the DAY part of the
        scenario time — the portion before 'T' (W01-5T09:20 belongs to day W01-5). Spell this out
        in BOTH halves; a count keyed by a full timestamp never repeats, so caps silently never
        bind.
      The requester's behavior must state the matching half: fetch the roster once, pass it in the
-     first request, write the custodian's returned order back to the sheet after each
-     assignment, and never write downstream records before the custodian confirms the commit.
+     first request, write the shared-state owner's returned order back to the sheet after each
+     assignment, and never write downstream records before the shared-state owner confirms the commit.
 
-     A Custodian owns STATE, not LOGIC. Its `behavior` exposes exactly two operations plus
+     A shared-state owner owns STATE, not LOGIC. Its `behavior` exposes exactly two operations plus
      maintenance — and NO business policy:
      - READ: reply with the current canonical state (the order, the counts, the running total,
        the window entries) — never with a recommendation or decision.
@@ -116,10 +116,10 @@ prompt: |
        serially; concurrent-writer protection is not worth the handshake.)
      - MAINTENANCE (state hygiene only): lazily reset/expire time-bounded entries on touch
        (day boundary passed → zero daily counts; window entries older than D days → drop).
-     The BUSINESS-LOGIC object makes every decision: it READs the custodian's state, applies the
+     The BUSINESS-LOGIC object makes every decision: it READs the shared-state owner's state, applies the
      policy (the cap comparison, the eligibility scan, the selection), then COMMITs the resulting
      update and acts on it. Policy words ("eligible", "select", "cap check") belong in the logic
-     object's behavior; the custodian's behavior contains only state words.
+     object's behavior; the shared-state owner's behavior contains only state words.
 
   ### Named handoffs
 
@@ -137,7 +137,7 @@ prompt: |
   2. **What domain-specific decisions are required?** → One business logic object per domain. If the automation classifies, routes, approves, assigns, or enforces policy — there MUST be a business logic object named after that domain (e.g., `approval-policy`, `triage-rules`, `routing-logic`). It holds the rules; it does not orchestrate.
   3. **What factual external data does the business logic need to look up?** → For each lookup of factual data that is NOT already in the event payload (e.g., org charts, employee directories, product catalogs) — a read service object. If the data arrives in the trigger event itself (e.g., quote details, ticket fields, form values), do NOT create a read service for it — the business logic object reads it directly from the message. Business rules and approval policies go in the business logic object's behavior, NOT in a read service.
   4. **What external outputs does the automation produce?** → For each output channel (message sent, record written, notification triggered, ticket created) — a write service object.
-  5. **Is there an invariant that spans multiple requests or instances?** → Look for a cap, quota, budget, running total, rate-limit ("no more than N per day/week"), rolling window, shared pool, or round-robin queue — anything where the correct decision depends on accumulated state, not just the current message. If yes, factor that invariant into ONE Custodian object that is its single writer, give it the atomic reserve/confirm/release (or admit+commit) protocol, and have the business logic object message it instead of holding the accumulator itself. If the decision reads only the current message, do NOT create a Custodian.
+  5. **Is there an invariant that spans multiple requests or instances?** → Look for a cap, quota, budget, running total, rate-limit ("no more than N per day/week"), rolling window, shared pool, or round-robin queue — anything where the correct decision depends on accumulated state, not just the current message. If yes, factor that invariant into ONE shared-state owner object that is its single writer, give it the atomic reserve/confirm/release (or admit+commit) protocol, and have the business logic object message it instead of holding the accumulator itself. If the decision reads only the current message, do NOT create a shared-state owner.
 
   ### Object fields
 
@@ -158,7 +158,7 @@ prompt: |
   6. `skills` — purely internal capabilities requiring no external system calls (e.g., `calculate-totals`, `format-summary`). Omit if none.
   7. `subscriptions` — pub/sub topics this object listens to. Omit if none.
   8. `event_sources` — external triggers from outside the system boundary (e.g., `webhook: action event`, `external system: record created`). Only for entry-point service objects.
-  9. `is_custodian` — boolean. `true` ONLY for a single-writer Custodian (category 3); a custodian has empty `peers`. Default `false` for every other object.
+  9. `owns_shared_state` — boolean. `true` ONLY for a single-writer shared-state owner (category 3); a shared-state owner has empty `peers`. Default `false` for every other object.
 
   ### Validation checklist
 
@@ -168,6 +168,6 @@ prompt: |
   - Business rules / domain policies are in business logic object behavior, NOT in a read service
   - Every output action has a write service object
   - At least one business logic object exists if the automation makes any decisions — and it is named after its domain, NOT "orchestrator" / "manager" / "coordinator"
-  - Any cross-request / cross-instance invariant (cap, quota, rate-limit, running total, shared pool, round-robin queue) is owned by exactly ONE object with `is_custodian: true` that requesters message; no business logic object keeps its own private copy of that accumulator
-  - Each Custodian has `is_custodian: true` and **empty `peers`** (it decides from its own state and only replies)
+  - Any cross-request / cross-instance invariant (cap, quota, rate-limit, running total, shared pool, round-robin queue) is owned by exactly ONE object with `owns_shared_state: true` that requesters message; no business logic object keeps its own private copy of that accumulator
+  - Each shared-state owner has `owns_shared_state: true` and **empty `peers`** (it decides from its own state and only replies)
   - Every peer `object_id` references an object that exists in the output

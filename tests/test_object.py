@@ -918,20 +918,10 @@ class TestHistoryTaskGrouping:
         assert all(e.plan_id != plan.id for e in obj.history_entries)
 
 
-class TestDeterministicCustodianReads:
-    """True custodians serve non-mutating asks verbatim — no inference."""
-
-    def test_read_ask_served_without_brain(self):
-        brain = MockBrain()  # no scripts: any brain call would return defaults; we assert zero calls
-        obj = LLMObject(_make_definition(), brain)  # no peers, no skills = custodian
-        obj._state = {"rotation_order": ["Maya", "Jordan"], "counts": {"W01-1": {"Maya": 1}}}
-        msg = Message(sender="policy", recipient="test-obj", type=MessageType.DOMAIN,
-                      content="Read the canonical rotation state for day W01-1",
-                      expects_reply=True, trace_id="t1", id="m1")
-        result = obj.process_message(msg)
-        assert "rotation_order" in result.reply and "Maya" in result.reply
-        assert result.metrics.model == ""  # no inference happened
-        assert result.executor_cycles == 0
+class TestPeerlessObjectProcessing:
+    """Peerless objects (pure state-keepers) process every message through the
+    model — shared-state reads now go through the deterministic read_state tool,
+    not an in-process LLM bypass."""
 
     def test_mutation_ask_goes_to_model(self):
         brain = MockBrain()

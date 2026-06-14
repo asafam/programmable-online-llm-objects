@@ -391,11 +391,11 @@ def _assemble_sample(template: dict, grounded: GroundedTemplate, graph: ObjectGr
     """Combine stage outputs into a Workflow. Slugify ids. Mock tools generated separately."""
     for obj in graph.objects:
         obj.object_id = slugify(obj.object_id)
-        # A custodian decides from its own state in one message and only
+        # A shared-state owner decides from its own state in one message and only
         # replies — it must have no peers, so nothing can suspend its decision
         # mid-flight. Strip any peers the architect emitted (a correctly-defined
-        # custodian has none); requesters peer TO it, not the other way around.
-        if obj.is_custodian:
+        # shared-state owner has none); requesters peer TO it, not the other way around.
+        if obj.owns_shared_state:
             obj.peers = []
         for peer in obj.peers:
             peer.object_id = slugify(peer.object_id)

@@ -520,7 +520,7 @@ def _execute_test_case_inner(
     )
     # Only override the runtime's prompt-file defaults when the caller passes
     # an explicit value — otherwise let the runtime pick its backend-derived
-    # default (executor.yaml for flat, executor_nested.yaml for nested).
+    # default (executor_flat.yaml for flat, executor.yaml for nested).
     if object_prompt is not None:
         rt.set_prompt_file(object_prompt)
     if planner_prompt != "planner_sequential.yaml":
@@ -562,7 +562,7 @@ def _execute_test_case_inner(
 
 def _quiesce_after_timeout(rt, max_wait_s: float) -> None:
     """A timed-out event's wave is abandoned, NOT cancelled — its threads keep
-    processing and would interleave with the next event, racing custodian
+    processing and would interleave with the next event, racing shared-state owner
     versions and cross-contaminating leads (observed: SC001's commit landing
     with version 7 while SC003 was dispatching). Wait (bounded) for every
     object to go idle before the next event is released."""
@@ -2616,7 +2616,7 @@ Examples:
         default=None,
         help=(
             "Object system-prompt template filename relative to config/prompts/lnl/. "
-            "Default: chosen by --memory (executor.yaml for flat, executor_nested.yaml "
+            "Default: chosen by --memory (executor_flat.yaml for flat, executor.yaml "
             "for nested). Pass object.yaml for the legacy self-planning agent."
         ),
     )

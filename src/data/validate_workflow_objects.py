@@ -115,7 +115,7 @@ def _health_check_object(workflow: Workflow, obj_index: int) -> list[str]:
 # Phrases in the workflow steps that signal a cross-request / cross-instance
 # invariant (a cap, quota, rate-limit, running total, shared pool, round-robin
 # queue). When any appear, the graph should own that invariant in exactly one
-# single-writer Custodian object — see docs/SHARED_STATE_DESIGN.md.
+# single-writer shared-state owner object — see docs/SHARED_STATE_DESIGN.md.
 # Phrases are deliberately constraint-shaped (verbs / limits), not bare nouns:
 # a noun like "budget" is usually just a form field, whereas "cannot exceed"
 # or "no more than" names an actual invariant. Heuristic — tune as needed.
@@ -126,47 +126,47 @@ _INVARIANT_SIGNALS = (
     "daily cap", "daily limit", "quota", "reset at", "within any",
     "shared pool", "leads per", "reorders for",
 )
-# The MANDATED custodian role prefix (config/prompts/data-gen/identify_objects.yaml):
-# a custodian's `role` MUST begin with "Single-writer owner of ". Used as a precise,
-# deterministic fallback for legacy data that predates the explicit `is_custodian` flag.
-_CUSTODIAN_ROLE_PREFIX = "single-writer owner of "
+# The MANDATED shared-state owner role prefix (config/prompts/data-gen/identify_objects.yaml):
+# a shared-state owner's `role` MUST begin with "Single-writer owner of ". Used as a precise,
+# deterministic fallback for legacy data that predates the explicit `owns_shared_state` flag.
+_SHARED_STATE_ROLE_PREFIX = "single-writer owner of "
 
 
-def _is_custodian(obj) -> bool:
-    """Deterministic custodian test. Authoritative signal: the explicit `is_custodian`
+def _owns_shared_state(obj) -> bool:
+    """Deterministic shared-state owner test. Authoritative signal: the explicit `owns_shared_state`
     flag. Fallback for flag-less (legacy) data: the MANDATED role prefix — checked on the
-    `role` ONLY, so it never fires on objects that merely mention a custodian in their
-    behavior (e.g. 'forward to the custodian')."""
-    if getattr(obj, "is_custodian", False):
+    `role` ONLY, so it never fires on objects that merely mention a shared-state owner in their
+    behavior (e.g. 'forward to the shared-state owner')."""
+    if getattr(obj, "owns_shared_state", False):
         return True
-    return (obj.role or "").strip().lower().startswith(_CUSTODIAN_ROLE_PREFIX)
+    return (obj.role or "").strip().lower().startswith(_SHARED_STATE_ROLE_PREFIX)
 
 
-def _custodian_graph_issues(workflow: Workflow) -> list[str]:
-    """Deterministic graph-level checks for the shared-invariant / Custodian
+def _shared_state_graph_issues(workflow: Workflow) -> list[str]:
+    """Deterministic graph-level checks for the shared-invariant / shared-state owner
     pattern. Heuristic and advisory — flags graphs for review, mirroring how
     health checks surface structural concerns."""
     issues: list[str] = []
     steps_text = " ".join(_step_text(st) for st in workflow.steps).lower()
     matched = sorted({s for s in _INVARIANT_SIGNALS if s in steps_text})
-    custodians = [o for o in workflow.objects if _is_custodian(o)]  # deterministic (flag or role prefix)
+    shared_state_owners = [o for o in workflow.objects if _owns_shared_state(o)]  # deterministic (flag or role prefix)
 
-    if matched and not custodians:
+    if matched and not shared_state_owners:
         issues.append(
             "stateful invariant signals in steps "
-            f"({', '.join(matched)}) but no single-writer Custodian object owns it"
+            f"({', '.join(matched)}) but no single-writer shared-state owner object owns it"
         )
 
-    # Each Custodian must be reachable — some other object must message it.
-    for cust in custodians:
+    # Each shared-state owner must be reachable — some other object must message it.
+    for owner in shared_state_owners:
         inbound = any(
-            p.object_id == cust.object_id
-            for o in workflow.objects if o.object_id != cust.object_id
+            p.object_id == owner.object_id
+            for o in workflow.objects if o.object_id != owner.object_id
             for p in o.peers
         )
         if not inbound:
             issues.append(
-                f"Custodian '{cust.object_id}' has no inbound peers — "
+                f"shared-state owner '{owner.object_id}' has no inbound peers — "
                 "no object reserves/commits against it (unreachable owner)"
             )
     return issues
@@ -207,7 +207,7 @@ def _validate_workflow_objects(
 
     # Deterministic health pass first
     health_lists = [_health_check_object(workflow, i) for i in range(len(workflow.objects))]
-    custodian_issues = _custodian_graph_issues(workflow)
+    shared_state_issues = _shared_state_graph_issues(workflow)
 
     # LLM judge — single call grades all objects + the graph
     prompt = (
@@ -248,9 +248,9 @@ def _validate_workflow_objects(
             n_objects=len(workflow.objects),
             object_verdicts=object_verdicts,
             graph_quality="POOR",
-            graph_issues=["(judge failed)"] + custodian_issues,
+            graph_issues=["(judge failed)"] + shared_state_issues,
             graph_reasoning="LLM judge failed to produce a verdict.",
-            aggregate_health=_aggregate_health(object_verdicts, custodian_issues),
+            aggregate_health=_aggregate_health(object_verdicts, shared_state_issues),
             aggregate_quality="POOR",
         )
 
@@ -273,9 +273,9 @@ def _validate_workflow_objects(
         n_objects=len(workflow.objects),
         object_verdicts=object_verdicts,
         graph_quality=judgement.graph_quality,
-        graph_issues=list(judgement.graph_issues or []) + custodian_issues,
+        graph_issues=list(judgement.graph_issues or []) + shared_state_issues,
         graph_reasoning=judgement.reasoning,
-        aggregate_health=_aggregate_health(object_verdicts, custodian_issues),
+        aggregate_health=_aggregate_health(object_verdicts, shared_state_issues),
         aggregate_quality=_aggregate_quality(object_verdicts, judgement.graph_quality),
     )
 

@@ -188,12 +188,12 @@ def deterministic_issues(s: Sample) -> list[str]:
         issues.append(f"events share the same instant (race — outcomes not promised per id): {same[:3]}")
 
     # object specs are SELF-CONTAINED domain instructions — internal framework vocabulary
-    # ("custodian", "invariant") means the spec relies on terms the system was never given
+    # ("invariant", "state constraint") means the spec relies on terms the system was never given
     leaky = [o.object_id for o in s.objects
-             if re.search(r"\bcustodian\b|\binvariant\b|\bstate constraint\b",
+             if re.search(r"\binvariant\b|\bstate constraint\b",
                           f"{o.role or ''} {o.behavior or ''}", re.I)]
     if leaky:
-        issues.append(f"object specs use internal vocabulary (custodian/invariant): {leaky[:3]}")
+        issues.append(f"object specs use internal vocabulary (invariant/state constraint): {leaky[:3]}")
 
     # analysis capability, RULES-BASED: every counting event's TEXT must contain a rule term
     # (the analysis maps content → value), and the irrelevant event's text must contain none

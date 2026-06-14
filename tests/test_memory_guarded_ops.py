@@ -2,7 +2,7 @@
 memory backends. No API key required.
 
 These ops enforce an invariant deterministically: an op that would break its
-bound is a no-op. See docs/CUSTODIAN_SPEC.md.
+bound is a no-op. See docs/SHARED_STATE_SPEC.md.
 """
 import json
 

@@ -35,7 +35,8 @@ class ObjectDefinition:
     skills: list[str] = field(default_factory=list)
     subscriptions: list[str] = field(default_factory=list)
     event_sources: list[str] = field(default_factory=list)
-    initial_state: str = ""  # optional ## State section from markdown
+    initial_state: str = ""  # optional ## State section from markdown (private state)
+    shared_state: str = ""   # optional ## Shared State section — the object's shared partition
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +324,7 @@ class StateDelta:
     Base ops: set | delete | append.
 
     Guarded ops enforce an invariant deterministically (see
-    docs/CUSTODIAN_SPEC.md): incr/decr (bounded counters) and
+    docs/SHARED_STATE_SPEC.md): incr/decr (bounded counters) and
     reserve/confirm/release (two-phase holds). A guarded op that would violate
     its bound is a no-op — the invariant holds regardless of what the LLM
     computed, which is what lets an ordinary object own a shared cap/quota
@@ -435,11 +436,11 @@ class Plan:
     # both the primary trace_id and this set so post-correlation lookups
     # resolve to the absorbing plan.
     additional_trace_ids: set[str] = field(default_factory=set)
-    # Per-plan state: initialized from master on creation; deltas apply here
-    # instead of master during plan execution. Committed to master on complete;
-    # discarded on cancel/abandon.
-    state: str = ""
-    accumulated_deltas: list["StateDelta"] = field(default_factory=list)
+    # Per-plan "dirty" state: a JSON-object COPY of the private (master) state,
+    # taken on creation. Deltas apply here instead of master during plan
+    # execution. On successful completion the whole object is COPIED OVER to
+    # master (last-write-wins snapshot); discarded on cancel/abandon.
+    state: dict = field(default_factory=dict)
     tool_rounds: int = 0                          # total tools dispatched for this trace (cross-turn cap)
     # Original DOMAIN message context, preserved for reply routing after async tool dispatch:
     original_sender: Optional[str] = None
@@ -454,8 +455,8 @@ class Plan:
     # Set to True when the object's definition was modified by an admin
     # message while this plan was active. The runtime re-plans this trace
     # against the new definition on the next inbound message before
-    # dispatching, replacing plan.steps and clearing the flag. State and
-    # accumulated_deltas are preserved across the re-plan.
+    # dispatching, replacing plan.steps and clearing the flag. The dirty
+    # `state` is preserved across the re-plan.
     needs_replan: bool = False
 
 

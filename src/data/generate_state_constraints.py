@@ -9,7 +9,7 @@ threshold, so the state-infused behavior is testable. The base events precede an
 modifications generated in Stage 2.
 
 DECOUPLED FROM IMPLEMENTATION. This stage knows nothing about HOW the invariant is
-realized (a single-writer Custodian or otherwise — that is decided in object
+realized (a single-writer shared-state owner or otherwise — that is decided in object
 identification, Stage 1). It reads the workflow's objects/steps to learn the rule and
 threshold, then writes a base scenario whose expectations are stated in OBSERVABLE
 terms (a request is admitted vs blocked/held/escalated at the threshold), never in
@@ -328,7 +328,7 @@ def coherence_issues(expect_texts: list[str], constraint_type: str) -> list[str]
     return issues
 
 # Retained for the pipeline opt-in flag's choices; the type is now CLASSIFIED by
-# the LLM from the custodian's invariant, not script-assigned.
+# the LLM from the shared-state owner's invariant, not script-assigned.
 CONSTRAINT_TYPES = ["cap", "counter", "rate_limit", "trigger", "dedup"]
 
 

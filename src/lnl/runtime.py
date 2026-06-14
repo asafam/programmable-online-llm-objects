@@ -18,6 +18,7 @@ from .events import EventSourceRegistry
 from .object import LLMObject
 from .parser import parse_object_file, parse_object_text, serialize_object
 from .tools import CodeExecutor, CreateObjectExecutor, ToolRegistry, ToolSpec
+from .shared_state import build_set_state_spec, ReadStateExecutor, SetStateExecutor, SharedStateRegistry
 from .types import (
     Message,
     MessageLog,
@@ -273,7 +274,7 @@ class Runtime:
         self._pending_timeout_seconds = cfg.pending_timeout_seconds
         self._heartbeat_interval_seconds = cfg.heartbeat_interval_seconds
         # Executor prompt file defaults to whatever the chosen backend names —
-        # flat → executor.yaml, nested → executor_nested.yaml.
+        # nested (the default) → executor.yaml, flat → executor_flat.yaml.
         self._prompt_file: str = _shared_backend.prompt_file
         # Planner mode and prompt file are derived from SystemConfig.planner_mode.
         # The mode is also forwarded to LLMObject so the executor's active_plan
@@ -331,9 +332,22 @@ class Runtime:
         # Tell the bus the chain depth so it can compute hop_depth on each delivery
         self._bus.set_max_chain_depth(self._max_chain_depth)
 
+        # Per-object shared-state stores, addressed by owner id. Each object owns
+        # one; the owner writes via set_state, anyone reads via read_state. Shared
+        # State uses the SAME backend type as private state, so the delta dialect
+        # advertised by set_state matches the object's own state_update.
+        self._shared_states = SharedStateRegistry(self._memory_backend_name)
+
         # Register create_object as a core tool available to all objects
         if self._tool_registry is not None:
             self._tool_registry.register("create_object", CreateObjectExecutor(self), CreateObjectExecutor.SPEC)
+            self._tool_registry.register(
+                "read_state", ReadStateExecutor(self._shared_states), ReadStateExecutor.SPEC
+            )
+            self._tool_registry.register(
+                "set_state", SetStateExecutor(self._shared_states),
+                build_set_state_spec(self._memory_backend_name),
+            )
             if cfg.enable_code_tool:
                 self._tool_registry.register(
                     "python",
@@ -489,7 +503,11 @@ class Runtime:
                     )
                     self._bus.deliver(msg)
 
-                ctx: dict = {"push_event": push_event, "inject_event": inject_event}
+                ctx: dict = {
+                    "push_event": push_event,
+                    "inject_event": inject_event,
+                    "self_id": obj.object_id,
+                }
                 if self._heartbeat.enable_code_tool:
                     ctx["repl_namespace"] = obj._get_repl_namespace()
                 return ctx
@@ -527,6 +545,11 @@ class Runtime:
             max_active_plans=self._heartbeat.max_active_plans_per_object,
             memory_backend=self._memory_backend_name,
             tool_dispatch=self._heartbeat.tool_dispatch,
+        )
+        # Provision this object's shared-state partition and let it surface its
+        # own shared state read-only in the executor prompt.
+        obj._shared_state_store = self._shared_states.ensure(
+            definition.object_id, definition.shared_state or None
         )
         self._bus.register(obj)
         if definition.event_sources:

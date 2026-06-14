@@ -99,6 +99,7 @@ def parse_object_text(text: str) -> tuple[ObjectDefinition, str]:
         subscriptions=subscriptions,
         event_sources=event_sources,
         initial_state=sections.get("state", ""),
+        shared_state=sections.get("shared state", ""),
     )
     return defn, obj_type
 
@@ -133,5 +134,11 @@ def serialize_object(defn: ObjectDefinition, obj_type: str = "object") -> str:
 
     if defn.event_sources:
         parts.append("\n## Event Sources\n\n" + "\n".join(f"- {s}" for s in defn.event_sources))
+
+    if defn.initial_state:
+        parts.append(f"\n## State\n\n{defn.initial_state}")
+
+    if defn.shared_state:
+        parts.append(f"\n## Shared State\n\n{defn.shared_state}")
 
     return "\n".join(parts) + "\n"

@@ -135,7 +135,7 @@ LLM-objects emit `state_update` deltas that the runtime applies to per-object st
 | `nested` (default) | List of `{op, path, value}` actions with `op ∈ {set, merge, delete, append}` and dotted paths (`tickets.T-042.status`) | Nested JSON object; updates are applied immutably as in Redux, so a single-attribute change touches only that path | Default; targeted updates to nested entities, no full-record re-emit |
 | `flat` | `{op, key, value}` with `op ∈ {set, delete, append}` | Flat top-level dict; nested entities are stored as whole sub-dicts and re-emitted in full on every attribute change | A/B comparison with historical (pre-2026-05-18) runs |
 
-The two backends pair with two different executor prompts — `config/prompts/lnl/executor_nested.yaml` (nested) and `config/prompts/lnl/executor.yaml` (flat). `--memory` picks the right one automatically; do not override `--object-prompt` unless you know what you're doing.
+The two backends pair with two different executor prompts — `config/prompts/lnl/executor.yaml` (nested, the default) and `config/prompts/lnl/executor_flat.yaml` (flat). `--memory` picks the right one automatically; do not override `--object-prompt` unless you know what you're doing.
 
 ```bash
 # Default (nested): targeted path-based updates

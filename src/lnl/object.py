@@ -24,7 +24,8 @@ from .brain import (
     plan_dict_to_plan,
 )
 from .tools import ToolRegistry
-from .memory import MemoryBackend, _coerce_to_dict, make_backend
+from .memory import MemoryBackend, _coerce_to_dict
+from .state import State
 from .types import (
     PATCHABLE_FIELDS,
     PLAN_TERMINAL_STATUSES,
@@ -63,7 +64,7 @@ class LLMObject:
         react_cross_objects: bool = True,
         pending_timeout_seconds: float = 90.0,
         heartbeat_interval_seconds: float = 30.0,
-        prompt_file: str = "executor.yaml",
+        prompt_file: str = "executor_flat.yaml",  # pairs with the default flat backend; Runtime overrides per its configured backend
         admin_prompt_file: str = "object_admin.yaml",
         auto_track_knowledge_gaps: bool = False,
         auto_ask_peers_on_gap: bool = False,
@@ -90,7 +91,7 @@ class LLMObject:
         wait_matcher_brain: "Optional[LLMBrain]" = None,
         wait_matcher_prompt_file: str = "wait_matcher.yaml",
         default_wait_timeout_seconds: float = 86400.0,  # 24h default for wait steps
-        memory_backend: "str | MemoryBackend" = "flat",
+        memory_backend: "str | MemoryBackend | State" = "flat",
         tool_dispatch: str = "sync",
     ) -> None:
         self._definition = definition
@@ -102,13 +103,21 @@ class LLMObject:
         # mutation; "last write wins" is deterministic by arrival order.
         # Working memory (in-flight step results within one cascade) belongs
         # on PlanStep.result, NOT here.
-        if isinstance(memory_backend, str):
-            self._memory: MemoryBackend = make_backend(memory_backend)
+        # Private state is a State (object-local) — the same class that backs
+        # shared state (in the registry) and an active plan's dirty working copy.
+        if isinstance(memory_backend, State):
+            self._memory: State = memory_backend
+        elif isinstance(memory_backend, str):
+            self._memory = State(backend_name=memory_backend)
         else:
-            self._memory = memory_backend
+            self._memory = State(backend=memory_backend)
         # Mirror of self._memory.serialize() — kept in sync after every backend
         # write so read-paths can keep using self._state directly.
         self._state = self._memory.serialize()
+        # The object's SHARED-state partition (a shared State), assigned by
+        # the runtime at registration. Surfaced read-only in the executor prompt;
+        # mutated only via the set_state tool. None when run outside a Runtime.
+        self._shared_state_store = None
         # History entries are tagged with the Plan.id of the task that owned
         # processing. Entries with task_id=None are orphan (admin, no-plan,
         # broadcasts). Flushed per-task when the owning plan terminates.
@@ -136,7 +145,7 @@ class LLMObject:
         # Pre-execution planner: separate LLM call producing a plan before
         # the ReAct loop.
         self._enable_planner = enable_planner
-        # LEAF FAST PATH: an object with no peers and no tools (custodians, pure
+        # LEAF FAST PATH: an object with no peers and no tools (pure
         # state-keepers) has exactly one possible move per message — read or
         # commit its state and reply. Running the coordinator ceremony on it
         # (planner call + per-step evaluator cycles) turns a ~3s atomic
@@ -144,7 +153,7 @@ class LLMObject:
         # single executor inference; planner and evaluator are skipped.
         # Peerless = leaf: an object with no peers coordinates nothing — planner
         # has nothing to plan and the evaluator verifies a one-move turn. This
-        # covers custodians (no peers, no skills) AND read/write services
+        # covers pure state-keepers (no peers, no skills) AND read/write services
         # (skills, no peers) — the services were still paying the full ceremony
         # and policies' asks sat unanswered 8s+ waiting on them.
         # Ablation hatch: LNL_NO_LEAF=1 forces full planner+evaluator ceremony on
@@ -386,14 +395,25 @@ class LLMObject:
         """Return state: a dict if parseable, otherwise the raw string (or {} if empty)."""
         return _coerce_state(self._state)
 
-    def _working_state_for(self, trace_id: Optional[str]) -> str:
-        """Return the working state for a trace: plan.state if an active plan
-        exists, otherwise the master state. The LLM always sees this view."""
+    def _working_state_for(self, trace_id: Optional[str]) -> "str | dict":
+        """Return the working state for a trace: plan.state (a JSON-object copy)
+        if an active plan exists, otherwise the master state (serialized string).
+        The LLM always sees this view; prompt builders and `derive()` accept
+        both forms."""
         with self._plans_lock:
             plan = self._active_plans.get(trace_id) if trace_id is not None else None
             if plan is None:
                 return self._state
             return plan.state
+
+    def _shared_state_snapshot(self):
+        """The object's own shared-state partition, surfaced read-only in the
+        prompt. Returns None when run outside a Runtime (no store assigned)."""
+        store = self._shared_state_store
+        if store is None:
+            return None
+        snap = store.read()
+        return snap or None
 
     @property
     def definition(self) -> ObjectDefinition:
@@ -606,6 +626,14 @@ class LLMObject:
         # checked sub-items. Always run the evaluator when there's a plan;
         # let it grade COMPLETENESS, not just status-transitions.
         try:
+            # Hand the evaluator the cumulative tool-call log WITH arguments so it
+            # can actually grade argument sub-items (evaluator.yaml mandate) instead
+            # of grading blind on tool names alone.
+            _dispatch_log = None
+            _tid = getattr(message, "trace_id", None)
+            if _tid:
+                with self._trace_dispatch_lock:
+                    _dispatch_log = list(self._trace_dispatch_log.get(_tid, [])) or None
             prompt = build_evaluator_prompt(
                 self._definition,
                 self._working_state_for(message.trace_id),
@@ -614,6 +642,7 @@ class LLMObject:
                 reply,
                 message,
                 tool_calls_this_turn=tool_calls_this_turn,
+                dispatch_log=_dispatch_log,
             )
             result, metrics = self._evaluator_brain.evaluate_call(
                 prompt, object_id=self.object_id,
@@ -803,7 +832,8 @@ class LLMObject:
         return any(phrase in text for phrase in self._SINK_DEFERRAL_PHRASES)
 
     def _merged_state(self, pending_deltas: "list", trace_id: "Optional[str]" = None) -> dict:
-        backend = make_backend(self._memory.name, initial=self._working_state_for(trace_id))
+        # Dirty working copy derived from private state, for read-only inspection.
+        backend = self._memory.derive(self._working_state_for(trace_id))
         if pending_deltas:
             backend.apply(pending_deltas)
         return backend.snapshot()
@@ -1055,55 +1085,6 @@ class LLMObject:
 
         # Retire stale or excess plans before doing any work for this trace.
         self._sweep_stale_plans()
-        # ── Deterministic custodian READS ────────────────────────────────────
-        # The custodian contract DEFINES a read as a verbatim copy: "reply with
-        # the current canonical state — never a recommendation or decision."
-        # Paying an inference to photocopy is waste, and serving reads
-        # mechanically ENFORCES the no-recommendations clause by construction
-        # (specific-value asks like "who's next?" get the full state; the
-        # asker derives — derivation is the policy's job). Conservative gate:
-        # true custodians only (no peers AND no skills), an ask expecting a
-        # reply, with no mutation verb — anything ambiguous falls through to a
-        # normal model turn (fail mode: one unnecessary inference, never a
-        # missed mutation).
-        _MUTATION_VERBS = ("commit", "apply", "increment", "decrement", "append",
-                           "update", "set ", "record", "add ", "remove", "move",
-                           "mark", "seed", "register", "write", "store", "clear",
-                           "expire", "delete", "reset", "initialize", "bootstrap")
-        import os as _os
-        if (
-            not _os.environ.get("LNL_NO_DET_READS")
-            and self._is_leaf
-            and not (self._definition.skills or [])
-            and message.type == MessageType.DOMAIN
-            and getattr(message, "expects_reply", False)
-            and isinstance(message.content, str)
-            and not any(v in message.content.lower() for v in _MUTATION_VERBS)
-        ):
-            state_str = (json.dumps(self._state, indent=1)
-                         if isinstance(self._state, dict) else str(self._state or "(empty state)"))
-            _t, _p = self._resolve_task_plan_ids(trace_id)
-            self._append_history(message, _t, _p)
-            logger.info("%s: deterministic read served (no inference)", self.object_id)
-            _now = datetime.datetime.now(datetime.timezone.utc)
-            return ProcessingResult(
-                object_id=self.object_id,
-                reply=f"Current canonical state:\n{state_str}",
-                outgoing_messages=[],
-                state_before=_coerce_state(self._state),
-                state_after=_coerce_state(self._state),
-                metrics=InferenceMetrics(model=""),
-                executor_cycles=0,
-                in_reply_to=message.sender,
-                source_message_type=message.type,
-                depth_remaining=message.depth_remaining,
-                source_message_id=message.id,
-                source_plan_step_index=message.plan_step_index,
-                source_trace_id=message.trace_id,
-                processing_started_at=_now,
-                processing_completed_at=_now,
-                status="ok",
-            )
 
         # An inbound message from a peer answers our outstanding ask to it —
         # clear the in-flight guard so follow-up sends (e.g. commit after read)
@@ -1120,8 +1101,7 @@ class LLMObject:
         # Subsequent internal self-correction cycles reuse the same plan.
         # Exception: when an admin modification marked the active plan
         # `needs_replan`, run the planner again against the new definition
-        # and replace plan.steps in place (state and accumulated_deltas are
-        # preserved).
+        # and replace plan.steps in place (the dirty `state` is preserved).
         planner_metrics: Optional[InferenceMetrics] = None
         existing_plan = self.plan_for(trace_id)
         needs_replan = existing_plan is not None and existing_plan.needs_replan
@@ -1187,7 +1167,7 @@ class LLMObject:
                                 self._flush_history_for_plan(old_plan_id)
                             plan = existing_plan
                         else:
-                            plan.state = self._state  # snapshot master at plan creation
+                            plan.state = self._memory.snapshot()  # COPY master at plan creation
                             with self._plans_lock:
                                 if trace_id is not None:
                                     self._active_plans[trace_id] = plan
@@ -1246,6 +1226,8 @@ class LLMObject:
             active_plan=self.plan_for(trace_id),
             prompt_file=self._prompt_file,
             planner_mode=self._planner_mode,
+            shared_state=self._shared_state_snapshot(),
+            has_shared_state=self._has_shared_state(),
         )
         messages = _build_chat_messages(sys_prompt, self._history, message)
 
@@ -1383,13 +1365,15 @@ class LLMObject:
                 with self._plans_lock:
                     active_plan = self._active_plans.get(trace_id) if trace_id is not None else None
                 if active_plan is not None:
-                    # Apply deltas to the plan's working state copy; master is
-                    # untouched until the plan completes.
-                    plan_backend = make_backend(self._memory.name, initial=active_plan.state)
+                    # Apply deltas to the plan's working state copy (a dirty State
+                    # deriving from private); master is untouched until completion.
+                    # Apply the LLM's deltas to the plan's dirty state like any
+                    # regular state; the deltas are not retained (the commit later
+                    # COPIES this state over to master, it does not replay deltas).
+                    plan_backend = self._memory.derive(active_plan.state)
                     plan_backend.apply(pending_deltas)
                     with self._plans_lock:
-                        active_plan.state = plan_backend.serialize()
-                        active_plan.accumulated_deltas.extend(pending_deltas)
+                        active_plan.state = plan_backend.snapshot()  # JSON object (dirty copy)
                 else:
                     # No plan — apply directly to master (planner-off path).
                     self._memory.apply(pending_deltas)
@@ -1516,6 +1500,8 @@ class LLMObject:
                     active_plan=self.plan_for(trace_id),
                     prompt_file=self._prompt_file,
                     planner_mode=self._planner_mode,
+                    shared_state=self._shared_state_snapshot(),
+                    has_shared_state=self._has_shared_state(),
                 ),
             }
 
@@ -1968,16 +1954,15 @@ class LLMObject:
                     self._active_plans[trace_id] = Plan(
                         goal=update.goal, steps=new_steps, status="active",
                         trace_id=trace_id,
-                        # Carry over the working state and accumulated deltas from
-                        # the previous plan — the plan is being reshaped, not restarted.
-                        state=prev.state if prev is not None else self._state,
-                        accumulated_deltas=list(prev.accumulated_deltas) if prev is not None else [],
+                        # Carry over the dirty working state from the previous plan —
+                        # the plan is being reshaped, not restarted.
+                        state=prev.state if prev is not None else self._memory.snapshot(),
                     )
             return
 
         # Shape 3: close active plan.
         if update.status in PLAN_TERMINAL_STATUSES:
-            accumulated = []
+            committed_state = None
             closed_plan_id: Optional[str] = None
             with self._plans_lock:
                 plan = self._active_plans.get(trace_id) if trace_id is not None else None
@@ -1990,13 +1975,16 @@ class LLMObject:
                     )
                     return
                 if update.status == "complete":
-                    accumulated = list(plan.accumulated_deltas)
+                    # Deterministic harness action: COPY the plan's dirty state
+                    # over to master (not a delta replay — deltas are the LLM's
+                    # interface; the commit is a whole-object copy).
+                    committed_state = plan.state
                 plan.status = update.status
                 closed_plan_id = plan.id
                 self._completed_plans.append(plan)
                 del self._active_plans[trace_id]
-            if accumulated:
-                self._memory.apply(accumulated)
+            if committed_state is not None:
+                self._memory.load(committed_state)
                 self._state = self._memory.serialize()
             if closed_plan_id:
                 self._flush_history_for_plan(closed_plan_id)
@@ -2128,7 +2116,7 @@ class LLMObject:
         if not _os.environ.get("LNL_ENABLE_TOOL_SCOPING"):
             return True
         # Core runtime tools are granted to every object, not via skills.
-        if name in ("create_object", "execute_code"):
+        if name in ("create_object", "execute_code", "read_state", "set_state"):
             return True
         skills = self._definition.skills or []
         if not skills:
@@ -2144,6 +2132,15 @@ class LLMObject:
                 return True
         return False
 
+    def _has_shared_state(self) -> bool:
+        """True iff this object opts into shared state — a declared `## Shared
+        State` section or a non-empty store. Gates the shared-state prompt block
+        and the read_state/set_state tools so objects that don't use shared state
+        carry zero extra prompt/tool surface."""
+        if getattr(self._definition, "shared_state", ""):
+            return True
+        return bool(self._shared_state_snapshot())
+
     def _allowed_tool_names(self) -> "set[str]":
         if not self._tool_registry:
             return set()
@@ -2151,12 +2148,25 @@ class LLMObject:
             names = self._tool_registry.names()
         except AttributeError:
             return set()
-        return {n for n in names if self._allowed_tool(n)}
+        allowed = {n for n in names if self._allowed_tool(n)}
+        # Shared-state tools are surfaced only to objects that opt in.
+        if not self._has_shared_state():
+            allowed.discard("set_state")
+            allowed.discard("read_state")
+        return allowed
 
     def _execute_scoped(self, tc, ctx, trace_id=None):
         """Registry execution behind the skills gate, with a corrective error."""
         if trace_id:
-            self._log_dispatch(trace_id, f"tool {tc.tool} executed")
+            # Log the ARGUMENTS, not just the name — the evaluator is mandated by
+            # evaluator.yaml to grade each tool argument field as a sub-item, but
+            # was previously shown only tool names, forcing it to FAIL/​hallucinate
+            # argument criteria it had no evidence for.
+            try:
+                _args = json.dumps(tc.arguments, default=str)
+            except Exception:
+                _args = str(getattr(tc, "arguments", ""))
+            self._log_dispatch(trace_id, f"tool {tc.tool} executed with args={_args[:400]}")
         if not self._allowed_tool(tc.tool):
             return ToolResult(
                 id=tc.id, output="",
@@ -2376,7 +2386,7 @@ class LLMObject:
                     steps=steps,
                     status="active",
                     trace_id=trace_id,
-                    state=self._state,  # snapshot master at plan creation
+                    state=self._memory.snapshot(),  # COPY master at plan creation
                 )
             else:
                 # Extend with steps for genuinely new targets (avoid duplicates).
@@ -3221,9 +3231,9 @@ class LLMObject:
     def _auto_close_plan_if_complete(self, trace_id: Optional[str] = None) -> None:
         """If the active plan for `trace_id` has at least one step and ALL
         steps are terminal, close the plan automatically (status='complete')
-        and commit its accumulated deltas to the master state."""
+        and COPY its dirty state over to master (deterministic harness commit)."""
         closed = False
-        accumulated = []
+        committed_state = None
         closed_plan_id: Optional[str] = None
         with self._plans_lock:
             plan = self._active_plans.get(trace_id) if trace_id is not None else None
@@ -3232,14 +3242,14 @@ class LLMObject:
             all_terminal = all(s.status in STEP_TERMINAL_STATUSES for s in plan.steps)
             if all_terminal:
                 plan.status = "complete"
-                accumulated = list(plan.accumulated_deltas)
+                committed_state = plan.state
                 closed_plan_id = plan.id
                 self._completed_plans.append(plan)
                 del self._active_plans[trace_id]
                 closed = True
         if closed:
-            if accumulated:
-                self._memory.apply(accumulated)
+            if committed_state is not None:
+                self._memory.load(committed_state)
                 self._state = self._memory.serialize()
             self._unregister_waits_for_trace(trace_id)
             if closed_plan_id:

@@ -950,6 +950,31 @@ def plan_dict_to_plan(plan_dict: dict, trace_id: Optional[str] = None) -> "Plan"
     return Plan(goal=goal, steps=steps_out, status="active", trace_id=trace_id)
 
 
+# Opt-in shared-state teaching block, injected into the executor prompt ONLY for
+# objects that declare a `## Shared State` partition (see build_system_prompt).
+# Kept here (not in the YAML) so it's gated cleanly and shared by both backends.
+_SHARED_STATE_BLOCK = """  # Shared State (your shared partition — read-only here; mutate ONLY via set_state)
+  Your state has two parts, updated with the SAME kind of delta:
+  - PRIVATE state (your "# Current State" above) — only you and your own plans
+    see it. You change it by emitting a `state_update` delta.
+  - SHARED state (below) — the same kind of state, kept in a SEPARATE store that
+    OTHER objects can READ. Only you write it, by calling the `set_state` tool
+    with a delta (the SAME delta format as your `state_update` above).
+  Read another object's shared state with `read_state(owner=...)`; omit `owner`
+  to read your own. The snapshot below is read-only context — it is NOT changed
+  by `state_update`; to change it, call `set_state`.
+  For invariants (caps, quotas, running totals) use GUARDED ops — `incr` with
+  `max`, `reserve`+`confirm`/`release` against a `cap` — never read-modify-write
+  (read_state → compute → set_state set), which races across steps.
+  WHERE A VALUE LIVES: if multiple requests/cascades may update it at the same
+  time — a counter, quota, running total, or a registry of records keyed per
+  item — keep it in SHARED state. Shared writes land on the live store and
+  COMPOSE; private state is per-request and commits last-writer-wins, so
+  concurrent private updates can be silently lost. Private state is for THIS
+  request's own working facts.
+  {shared_state}"""
+
+
 def build_system_prompt(
     definition: ObjectDefinition,
     current_state,  # str (from LLM) or dict (from mock scripts)
@@ -960,10 +985,21 @@ def build_system_prompt(
     active_plan: Optional["Plan"] = None,  # type: ignore[name-defined]
     prompt_file: str = "object.yaml",
     planner_mode: str = "dag",
+    shared_state=None,  # dict — the object's own shared-state partition (read-only here)
+    has_shared_state: bool = False,  # only objects that opt into shared state see the block + tools
 ) -> str:
     """Build the system prompt from the YAML template and an ObjectDefinition."""
     config = _load_prompt_config(prompt_file)
     template = config["system_prompt"]
+
+    # The shared-state teaching block + its snapshot are OPT-IN: only objects that
+    # declare a `## Shared State` partition carry them. Objects that don't use
+    # shared state get a prompt identical to the pre-shared-state baseline, so the
+    # feature can't tax base-step execution.
+    shared_state_section = ""
+    if has_shared_state:
+        snap = json.dumps(shared_state, indent=2) if shared_state else "(empty)"
+        shared_state_section = _SHARED_STATE_BLOCK.replace("{shared_state}", snap)
 
     peers = ""
     if definition.peers:
@@ -993,6 +1029,11 @@ def build_system_prompt(
     result = template
     for key, value in substitutions.items():
         result = result.replace("{" + key + "}", value)
+    # Append the opt-in shared-state block at the very end (after # Current State,
+    # which is the last section). Empty for non-participating objects, so their
+    # prompt is identical to the pre-shared-state baseline.
+    if shared_state_section:
+        result = result.rstrip() + "\n\n" + shared_state_section + "\n"
     return result
 
 

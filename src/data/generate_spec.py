@@ -151,14 +151,14 @@ def _process_spec(llm, spec: WorkflowSpec, ground_cfg, steps_cfg, ground_be_cfg)
     spec.domain = grounded.domain
     spec.grounded_steps = list(grounded.grounded_steps)
     # Merge the infused invariant INTO the workflow steps as a first-class state-constraint
-    # step (object-free), so every downstream consumer — graph derivation (→ custodian),
+    # step (object-free), so every downstream consumer — graph derivation (→ shared-state owner),
     # validators, the eval judge — sees it natively. state_constraint stays as structured
     # metadata. (Replaces the transient append previously done in bind_spec.)
     if spec.state_constraint:
         sc = spec.state_constraint
         # Phrase as a NATURAL business rule — annotators rejected the explicit "State
         # constraint" label. The invariant signals in the description still let object
-        # identification detect the invariant and create a custodian.
+        # identification detect the invariant and create a shared-state owner.
         rule = (sc.description or "").strip()
         if sc.threshold and sc.threshold.lower() not in rule.lower():
             rule = (f"{rule} ({sc.threshold})" if rule else sc.threshold).strip()

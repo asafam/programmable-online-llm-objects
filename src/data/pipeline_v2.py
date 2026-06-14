@@ -67,15 +67,15 @@ def _scenario_coherence_issues(s) -> list[str]:
 
 
 def _validate_unified(path: Path) -> int:
-    """Deterministic: custodian-graph checks on the bound output (incl. invariant→custodian,
-    custodian reachability) + recipient/target membership + scenario coherence."""
+    """Deterministic: shared-state owner-graph checks on the bound output (incl. invariant→shared-state owner,
+    shared-state owner reachability) + recipient/target membership + scenario coherence."""
     from src.data.schema import Sample
-    from src.data.validate_workflow_objects import _custodian_graph_issues
+    from src.data.validate_workflow_objects import _shared_state_graph_issues
     flagged = 0
     for line in open(path):
         s = Sample.model_validate_json(line)
         ids = {o.object_id for o in s.objects}
-        issues = list(_custodian_graph_issues(s))
+        issues = list(_shared_state_graph_issues(s))
         issues += [f"event {e.id} recipient '{e.recipient}' ∉ objects" for e in s.events if e.recipient not in ids]
         issues += [f"mod {m.id} target '{m.target}' ∉ objects" for m in s.modifications if m.target not in ids]
         issues += _scenario_coherence_issues(s)
