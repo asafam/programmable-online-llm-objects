@@ -1109,7 +1109,13 @@ class LLMObject:
         self._auto_close_plan_if_complete(trace_id)
 
         # Pre-execution planning (separate LLM call). Runs once per trace;
-        # gated on DOMAIN message + no plan ever seen for this trace.
+        # gated on a workflow-triggering message (DOMAIN peer request OR EVENT
+        # external/published trigger) + no plan ever seen for this trace.
+        # EVENT must plan too: an entry/coordinator object receives external
+        # scenario events as MessageType.EVENT, never DOMAIN — without this it
+        # would never plan and would fall back to a non-deterministic LLM
+        # executor, unreliably forwarding into its domain. The `not _is_leaf`
+        # guard keeps pure leaf write-services from planning on EVENT.
         # Subsequent internal self-correction cycles reuse the same plan.
         # Exception: when an admin modification marked the active plan
         # `needs_replan`, run the planner again against the new definition
@@ -1120,7 +1126,7 @@ class LLMObject:
         if (
             self._enable_planner
             and not self._is_leaf
-            and message.type == MessageType.DOMAIN
+            and message.type in (MessageType.DOMAIN, MessageType.EVENT)
             and (existing_plan is None or needs_replan)
         ):
             with self._planned_traces_lock:
