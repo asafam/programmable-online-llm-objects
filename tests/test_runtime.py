@@ -3,6 +3,7 @@ import pytest
 from pathlib import Path
 
 from src.lnl import (
+    LLMObject,
     LLMResponse,
     MockBrain,
     ObjectDefinition,
@@ -11,7 +12,7 @@ from src.lnl import (
 )
 from src.lnl.runtime import Runtime, SystemConfig
 from src.lnl.tools import CodeExecutor, MockToolExecutor, ToolRegistry
-from src.lnl.types import MessageType, ToolCall
+from src.lnl.types import Message, MessageType, Plan, PlanStep, ToolCall
 
 
 @pytest.fixture
@@ -1486,3 +1487,222 @@ class TestDepthSemantics:
         tid = next(iter(trace_ids))
         delivered = [e for e in rt.message_log if e.message.trace_id == tid]
         assert len(delivered) <= 6  # initial + budget(4) + tolerance for the seed message
+
+
+class TestHarnessDispatch:
+    """Harness-driven plan dispatch (SystemConfig.harness_dispatch / LLMObject
+    ._dispatch_ready_steps). The HARNESS iterates the active plan and dispatches
+    every ready step deterministically — a planned step can never be silently
+    skipped by the LLM finishing early.
+
+    MockBrain pops one response per react_call; the harness makes one focused
+    react_call per dispatched step. script_plan supplies the plan structure;
+    here we pre-seed the plan directly on the object so we control deps/status.
+    """
+
+    def _make_obj(self, brain, tool_exec, *, tool_dispatch, tool_name="record"):
+        from src.lnl.tools import ToolRegistry
+        reg = ToolRegistry()
+        reg.register(tool_name, tool_exec)
+        defn = ObjectDefinition(
+            object_id="coord",
+            role="Coordinator.",
+            skills=[tool_name],
+            peers=[PeerDeclaration("hiring-email", "notify target")],
+        )
+        return LLMObject(
+            defn, brain, tool_registry=reg,
+            enable_planner=False, enable_evaluator=False,
+            harness_dispatch=True, tool_dispatch=tool_dispatch,
+        )
+
+    def _domain(self, trace_id):
+        return Message(
+            sender="__user__", recipient="coord", type=MessageType.DOMAIN,
+            content="onboard new hire", trace_id=trace_id, id="m-domain",
+        )
+
+    def _seed_plan(self, obj, trace_id, steps):
+        plan = Plan(goal="onboard", steps=steps, trace_id=trace_id, state=obj._state)
+        obj._active_plans[trace_id] = plan
+        return plan
+
+    def test_A_headline_every_planned_step_attempted(self):
+        """Plan [tool s1 record, tell s2 notify], both deps=[]. With the flag ON
+        BOTH s1's tool fires AND s2's tell is emitted — even though a single
+        LLM finish could have emitted only one. Sync dispatch → deterministic."""
+        from src.lnl.tools import MockToolExecutor
+
+        brain = MockBrain()
+        # Focused react for s1 (tool) — consumed first (plan order).
+        brain.script("coord", LLMResponse(
+            updated_state={}, reply="",
+            tool_calls=[ToolCall(id="t1", tool="record", arguments={"who": "Alice"})],
+        ))
+        # Focused react for s2 (tell).
+        brain.script("coord", LLMResponse(
+            updated_state="", reply="",
+            outgoing_messages=[OutgoingMessage(recipient="hiring-email", content="New hire recorded")],
+        ))
+        tool_exec = MockToolExecutor()
+        tool_exec.script("recorded ok")
+
+        obj = self._make_obj(brain, tool_exec, tool_dispatch="sync")
+        plan = self._seed_plan(obj, "trA", [
+            PlanStep(id="s1", kind="tool", target="record", description="record the hire", depends_on=[]),
+            PlanStep(id="s2", kind="tell", target="hiring-email", description="notify hiring-email", depends_on=[]),
+        ])
+
+        result = obj.process_message(self._domain("trA"))
+
+        # s1's tool actually fired (sync → deterministic call_log).
+        assert len(tool_exec.call_log) == 1
+        assert tool_exec.call_log[0].tool == "record"
+        # s2's tell reached the result, correlated to step index 1.
+        tells = [o for o in result.outgoing_messages if not o.expects_reply]
+        assert len(tells) == 1, result.outgoing_messages
+        assert tells[0].recipient == "hiring-email"
+        assert tells[0].plan_step_index == 1
+        # Both steps terminal.
+        assert all(s.status == "done" for s in plan.steps)
+
+    def test_B_cross_turn_dependency(self):
+        """Plan [tool s1, tell s2 depends_on=[s1]]. Turn 1 dispatches only s1
+        (async → pending), s2 stays planned. After the tool REPLY lands, the
+        next turn dispatches s2 and the plan closes."""
+        import threading
+        from src.lnl.types import ToolResult
+
+        class _GatedTool:
+            def __init__(self):
+                self.gate = threading.Event()
+                self.call_log = []
+
+            def execute(self, call, context):
+                self.call_log.append(call)
+                self.gate.wait(timeout=5)
+                return ToolResult(id=call.id, output="recorded ok")
+
+        brain = MockBrain()
+        brain.script("coord", LLMResponse(  # turn 1: s1 tool
+            updated_state={}, reply="",
+            tool_calls=[ToolCall(id="t1", tool="record", arguments={"who": "Bob"})],
+        ))
+        brain.script("coord", LLMResponse(  # turn 2: s2 tell
+            updated_state="", reply="",
+            outgoing_messages=[OutgoingMessage(recipient="hiring-email", content="Notify Bob")],
+        ))
+        tool_exec = _GatedTool()
+
+        obj = self._make_obj(brain, tool_exec, tool_dispatch="async")
+        plan = self._seed_plan(obj, "trB", [
+            PlanStep(id="s1", kind="tool", target="record", description="record", depends_on=[]),
+            PlanStep(id="s2", kind="tell", target="hiring-email", description="notify", depends_on=["s1"]),
+        ])
+
+        # Turn 1: only s1 dispatched; tool parked at the gate → pending.
+        result1 = obj.process_message(self._domain("trB"))
+        assert result1.status == "pending"
+        assert plan.steps[0].status == "dispatched"   # s1 in flight
+        assert plan.steps[1].status == "planned"      # s2 still blocked
+        assert len(tool_exec.call_log) == 1
+
+        # Release the tool → REPLY posts to the mailbox; drain it.
+        tool_exec.gate.set()
+        results = []
+        obj.read(results.append)
+
+        # s2 was dispatched on the continuation turn; plan closed.
+        all_out = [o for r in results for o in r.outgoing_messages]
+        s2_tells = [o for o in all_out if o.recipient == "hiring-email" and not o.expects_reply]
+        assert len(s2_tells) == 1, all_out
+        assert plan.steps[0].status == "done"
+        assert plan.steps[1].status == "done"
+
+    def test_C_pending_carries_outgoing(self):
+        """Plan [tell s1 independent, tool s2 independent] (async). The turn is
+        pending (s2's tool in flight) BUT the returned ProcessingResult must
+        carry s1's tell — a tell is complete the moment it is sent, never []."""
+        from src.lnl.tools import MockToolExecutor
+
+        brain = MockBrain()
+        brain.script("coord", LLMResponse(  # s1 tell (plan order first)
+            updated_state="", reply="",
+            outgoing_messages=[OutgoingMessage(recipient="hiring-email", content="Heads up")],
+        ))
+        brain.script("coord", LLMResponse(  # s2 tool
+            updated_state={}, reply="",
+            tool_calls=[ToolCall(id="t1", tool="record", arguments={"who": "Cy"})],
+        ))
+        tool_exec = MockToolExecutor()
+        tool_exec.script("recorded ok")
+
+        obj = self._make_obj(brain, tool_exec, tool_dispatch="async")
+        self._seed_plan(obj, "trC", [
+            PlanStep(id="s1", kind="tell", target="hiring-email", description="heads up", depends_on=[]),
+            PlanStep(id="s2", kind="tool", target="record", description="record", depends_on=[]),
+        ])
+
+        result = obj.process_message(self._domain("trC"))
+
+        assert result.status == "pending"
+        # Step-5 guard: the pending result still routes s1's tell (NOT []).
+        assert result.outgoing_messages, "pending turn dropped the tell"
+        tells = [o for o in result.outgoing_messages if o.recipient == "hiring-email"]
+        assert len(tells) == 1
+        assert tells[0].plan_step_index == 0
+
+    def test_D_pending_tell_routed_to_bus_via_runtime(self):
+        """End-to-end Step-5 (the hard rule): under a REAL Runtime with harness
+        dispatch, a turn that goes pending (tool in flight) STILL routes its
+        tell to the bus. The unit-level test C only proves the ProcessingResult
+        carries the tell; this proves the Runtime actually delivers it."""
+        from src.lnl.tools import MockToolExecutor, ToolRegistry
+
+        brain = MockBrain()
+        brain.set_default(LLMResponse(updated_state={}, reply="ok"))
+        brain.script("coord", LLMResponse(  # s1 tell
+            updated_state="", reply="",
+            outgoing_messages=[OutgoingMessage(recipient="hiring-email", content="Heads up: new hire")],
+        ))
+        brain.script("coord", LLMResponse(  # s2 tool
+            updated_state={}, reply="",
+            tool_calls=[ToolCall(id="t1", tool="record", arguments={"who": "Dee"})],
+        ))
+
+        reg = ToolRegistry()
+        tool_exec = MockToolExecutor()
+        tool_exec.script("recorded ok")
+        reg.register("record", tool_exec)
+
+        rt = Runtime(brain, tool_registry=reg, system_config=SystemConfig(
+            harness_dispatch=True, enable_planner=False, enable_evaluator=False,
+            tool_dispatch="async",
+        ))
+        rt.create_object(ObjectDefinition(
+            object_id="coord", role="Coordinator.",
+            skills=["record"], peers=[PeerDeclaration("hiring-email", "notify target")]))
+        rt.create_object(ObjectDefinition(object_id="hiring-email", role="Email sink."))
+
+        coord = rt._bus.objects["coord"]
+        coord._active_plans["trD"] = Plan(
+            goal="onboard", trace_id="trD", state=coord._state, steps=[
+                PlanStep(id="s1", kind="tell", target="hiring-email", description="heads up", depends_on=[]),
+                PlanStep(id="s2", kind="tool", target="record", description="record", depends_on=[]),
+            ])
+
+        msg = Message(sender="__user__", recipient="coord", type=MessageType.DOMAIN,
+                      content="onboard", id="m-d", trace_id="trD")
+        rt._dispatch([msg])
+
+        # The tell was routed to the bus and DELIVERED to hiring-email — even
+        # though the turn that produced it returned pending (tool in flight).
+        delivered = [
+            e for e in rt.message_log
+            if e.delivered and e.message.recipient == "hiring-email"
+            and "Heads up" in (e.message.content or "")
+        ]
+        assert delivered, [
+            (e.message.sender, e.message.recipient, e.message.content) for e in rt.message_log
+        ]
+        assert delivered[0].message.sender == "coord"

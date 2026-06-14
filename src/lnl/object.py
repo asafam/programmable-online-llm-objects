@@ -16,6 +16,7 @@ from .brain import (
     LLMBrain,
     _build_chat_messages,
     _normalize_step_kind,
+    _ready_step_indices,
     build_admin_prompt,
     build_evaluator_prompt,
     build_planner_prompt,
@@ -93,6 +94,7 @@ class LLMObject:
         default_wait_timeout_seconds: float = 86400.0,  # 24h default for wait steps
         memory_backend: "str | MemoryBackend | State" = "flat",
         tool_dispatch: str = "sync",
+        harness_dispatch: bool = False,
     ) -> None:
         self._definition = definition
         self._brain = brain
@@ -265,6 +267,19 @@ class LLMObject:
         # "async" (default): tools submitted to pool, result arrives via mailbox REPLY.
         # "sync": tools executed inline inside _run_react_cycle, loop continues immediately.
         self._tool_dispatch = tool_dispatch
+        # Harness-driven plan dispatch (flag, default OFF). When True AND an
+        # active plan exists, the executor's wavefront is driven by
+        # _dispatch_ready_steps — the HARNESS iterates the plan and dispatches
+        # every ready step deterministically (guaranteeing each planned step is
+        # attempted) instead of trusting one LLM finish to emit them. OFF =
+        # legacy _run_react_cycle path, unchanged.
+        self._harness_dispatch = harness_dispatch
+        # Transient channel: when _dispatch_ready_steps returns "pending"
+        # (a tool/ask is in flight) it stashes the wavefront's accumulated
+        # outgoing here so the pending ProcessingResult can still route any
+        # `tell` produced that same turn. process_message reads + clears it.
+        # Safe as a plain attribute: one object processes one message at a time.
+        self._harness_pending_outgoing: list[OutgoingMessage] = []
 
     def _get_tool_pool(self) -> ThreadPoolExecutor:
         """Lazy accessor for the per-object tool-execution pool.
@@ -1041,12 +1056,9 @@ class LLMObject:
         ):
             _plan = self.plan_for(trace_id)
             if _plan is not None and _plan.status == "active" and _plan.steps:
-                _done_ids = {st.id for st in _plan.steps if st.status in STEP_TERMINAL_STATUSES}
                 _waiting = any(st.status == "dispatched" for st in _plan.steps)
-                _actionable = any(
-                    st.status == "planned" and all(d in _done_ids for d in (st.depends_on or []))
-                    for st in _plan.steps
-                )
+                with self._plans_lock:
+                    _actionable = len(_ready_step_indices(_plan)) > 0
                 _all_terminal = all(st.status in STEP_TERMINAL_STATUSES for st in _plan.steps)
                 if _waiting and not _actionable and not _all_terminal:
                     _t, _p = self._resolve_task_plan_ids(trace_id)
@@ -1296,7 +1308,24 @@ class LLMObject:
         evaluator_total = InferenceMetrics(model="")
 
         while True:
-            finish, pending_deltas, react_metrics, tools_called = self._run_react_cycle(messages, trace_id, origin_msg=message)
+            # Harness-driven dispatch (flag): when ON and an active (non-leaf)
+            # plan exists, the harness iterates the plan and dispatches every
+            # ready step deterministically. Otherwise the legacy LLM-driven
+            # ReAct cycle runs unchanged. Reset the pending-outgoing channel
+            # each iteration so no stale wavefront leaks across cycles.
+            self._harness_pending_outgoing = []
+            if (
+                self._harness_dispatch
+                and not self._is_leaf
+                and self.plan_for(trace_id) is not None
+            ):
+                finish, pending_deltas, react_metrics, tools_called = self._dispatch_ready_steps(
+                    messages, trace_id, origin_msg=message
+                )
+            else:
+                finish, pending_deltas, react_metrics, tools_called = self._run_react_cycle(
+                    messages, trace_id, origin_msg=message
+                )
             tools_called_total.extend(tools_called)
             total_metrics = _accumulate_metrics(total_metrics, react_metrics)
             executor_total = _accumulate_metrics(executor_total, react_metrics)
@@ -1316,13 +1345,21 @@ class LLMObject:
                     # Persist tool names so the evaluator in the continuation
                     # turn can verify plan tool steps were actually executed.
                     plan.accumulated_tools_called.extend(tools_called_total)
+                # Step 5 (harness dispatch): a wavefront can produce a `tell`
+                # (which MUST be routed — a tell is COMPLETE the moment it is
+                # sent) AND an async `tool`/`ask` (which makes the turn pending)
+                # in the same pass. The legacy path never emits outgoing on a
+                # pending turn, so this is [] there (channel cleared each cycle).
+                pending_out = self._harness_pending_outgoing
+                self._harness_pending_outgoing = []
+                pending_out = self._correlate_outgoing(pending_out, trace_id) if pending_out else []
                 _t, _p = self._resolve_task_plan_ids(trace_id)
                 self._append_history(message, _t, _p)
                 processing_completed_at = datetime.datetime.now(datetime.timezone.utc)
                 return ProcessingResult(
                     object_id=self.object_id,
                     reply="",
-                    outgoing_messages=[],
+                    outgoing_messages=pending_out,
                     state_before=_coerce_state(state_before),
                     state_after=_coerce_state(self._state),
                     metrics=total_metrics,
@@ -1780,63 +1817,299 @@ class LLMObject:
             # surfaced to the LLM on subsequent turns through the rendered
             # active_plan. There is no separate "continuation" conversation —
             # the REPLY is processed as a regular inbound message.
-            with self._lock:
-                self._pending_tool_count += len(tcs)
-            if plan is not None:
-                plan.tool_rounds += len(tcs)
-            else:
-                # Fallback cross-turn counter when no plan exists.
-                key = trace_id or ""
-                self._tool_rounds_per_trace[key] = self._tool_rounds_per_trace.get(key, 0) + len(tcs)
-            pool = self._get_tool_pool()
-            # Detect duplicate tc.id within the batch — the LLM should be
-            # giving each tool_call a unique id, but malformed outputs happen.
-            # Without unique ids, _capture_tool_result_on_step can't tell which
-            # call's result it is recording on plan.steps[i].result.
-            seen_tc_ids: set[str] = set()
-            for tc in tcs:
-                if tc.id in seen_tc_ids:
-                    logger.warning(
-                        "Duplicate tool_call id %r in batch for %s; replies will "
-                        "still be uniquely correlated via dispatch_id, but step "
-                        "result capture may lose the earlier call's output.",
-                        tc.id, self.object_id,
-                    )
-                seen_tc_ids.add(tc.id)
-                tools_called.append(tc.tool)
-                dispatch_id = secrets.token_hex(2)  # 4-char suffix for unique call correlation
-                call_key = f"{tc.id}-{dispatch_id}"
-                # Mark the corresponding plan step as 'dispatched' so the plan
-                # render shows the tool is in flight (not 'planned', not 'done').
-                # The status transitions to 'done'/'failed' via
-                # _capture_tool_result_on_step when the REPLY arrives.
-                if tc.plan_step_index is not None:
-                    self.mark_step_dispatched(tc.plan_step_index, trace_id)
-                try:
-                    pool.submit(self._execute_tool, tc, trace_id, dispatch_id,
-                                origin_msg.depth_remaining if origin_msg is not None else 0)
-                except RuntimeError:
-                    # Pool shut down — synthesize error reply directly.
-                    with self._lock:
-                        self._pending_tool_count -= 1
-                    err_reply = Message(
-                        sender=f"__tool__:{tc.tool}",
-                        recipient=self.object_id,
-                        type=MessageType.REPLY,
-                        content="",
-                        status="failed",
-                        error="Tool pool unavailable.",
-                        trace_id=trace_id,
-                        plan_step_index=tc.plan_step_index,
-                        depth_remaining=(origin_msg.depth_remaining if origin_msg is not None else 0),
-                        id=f"tool-reply-{call_key}",
-                        in_reply_to=call_key,
-                    )
-                    self.deliver(err_reply)  # _pending_tool_count already decremented above
+            self._submit_async_tool_batch(tcs, trace_id, plan, origin_msg, tools_called)
             # Return pending — no finish yet; tool REPLYs arrive via mailbox.
             return None, pending_deltas, metrics, tools_called
 
         return finish, pending_deltas, metrics, tools_called
+
+    def _submit_async_tool_batch(
+        self,
+        tcs: "list[ToolCall]",
+        trace_id: Optional[str],
+        plan: "Optional[Plan]",
+        origin_msg: "Optional[Message]",
+        tools_called: list[str],
+    ) -> None:
+        """Submit a batch of tool calls to the per-object pool (async).
+
+        Single source of the async batch semantics, shared verbatim by
+        `_run_react_cycle` and `_dispatch_ready_steps`. Increments
+        `_pending_tool_count` for the WHOLE batch BEFORE any submit (so read()
+        cannot unblock mid-batch), advances the tool-round counter
+        (`plan.tool_rounds`, or the no-plan fallback dict), marks each
+        plan-tagged step 'dispatched', and submits each call. On pool shutdown
+        it synthesizes a failure REPLY (already decrementing the count). Every
+        dispatched tool name is appended to `tools_called`.
+        """
+        with self._lock:
+            self._pending_tool_count += len(tcs)
+        if plan is not None:
+            plan.tool_rounds += len(tcs)
+        else:
+            # Fallback cross-turn counter when no plan exists.
+            key = trace_id or ""
+            self._tool_rounds_per_trace[key] = self._tool_rounds_per_trace.get(key, 0) + len(tcs)
+        pool = self._get_tool_pool()
+        # Detect duplicate tc.id within the batch — the LLM should be giving
+        # each tool_call a unique id, but malformed outputs happen. Without
+        # unique ids, _capture_tool_result_on_step can't tell which call's
+        # result it is recording on plan.steps[i].result.
+        seen_tc_ids: set[str] = set()
+        for tc in tcs:
+            if tc.id in seen_tc_ids:
+                logger.warning(
+                    "Duplicate tool_call id %r in batch for %s; replies will "
+                    "still be uniquely correlated via dispatch_id, but step "
+                    "result capture may lose the earlier call's output.",
+                    tc.id, self.object_id,
+                )
+            seen_tc_ids.add(tc.id)
+            tools_called.append(tc.tool)
+            dispatch_id = secrets.token_hex(2)  # 4-char suffix for unique call correlation
+            call_key = f"{tc.id}-{dispatch_id}"
+            # Mark the corresponding plan step as 'dispatched' so the plan
+            # render shows the tool is in flight (not 'planned', not 'done').
+            # The status transitions to 'done'/'failed' via
+            # _capture_tool_result_on_step when the REPLY arrives.
+            if tc.plan_step_index is not None:
+                self.mark_step_dispatched(tc.plan_step_index, trace_id)
+            try:
+                pool.submit(self._execute_tool, tc, trace_id, dispatch_id,
+                            origin_msg.depth_remaining if origin_msg is not None else 0)
+            except RuntimeError:
+                # Pool shut down — synthesize error reply directly.
+                with self._lock:
+                    self._pending_tool_count -= 1
+                err_reply = Message(
+                    sender=f"__tool__:{tc.tool}",
+                    recipient=self.object_id,
+                    type=MessageType.REPLY,
+                    content="",
+                    status="failed",
+                    error="Tool pool unavailable.",
+                    trace_id=trace_id,
+                    plan_step_index=tc.plan_step_index,
+                    depth_remaining=(origin_msg.depth_remaining if origin_msg is not None else 0),
+                    id=f"tool-reply-{call_key}",
+                    in_reply_to=call_key,
+                )
+                self.deliver(err_reply)  # _pending_tool_count already decremented above
+
+    def _focused_react_call(
+        self,
+        messages: list[dict],
+        sid: str,
+        kind: str,
+        target: Optional[str],
+        description: str,
+    ) -> "tuple[ReactStep, InferenceMetrics]":
+        """Run one ReAct call scoped to a SINGLE plan step.
+
+        Reuses the already-built executor `messages` (which carry the normal
+        system prompt) and appends a directive constraining the model to emit
+        ONLY this step's action. The harness owns WHICH step fires and WHETHER
+        it fires; the model only authors the args/content. The shared
+        `messages` list is never mutated — a per-call copy carries the
+        directive.
+        """
+        directive = (
+            f"[Harness directive] Produce ONLY the action for plan step {sid}: "
+            f"{kind} → {target}; {description}\n"
+            "Emit exactly one tool_call (kind=tool) or exactly one "
+            f"outgoing_messages entry addressed to '{target}' (kind=tell/ask), "
+            "or the state_update(s) for this step (kind=reason). Do NOT emit "
+            "any other step's action, and do NOT hold this step back."
+        )
+        focused = list(messages) + [{"role": "user", "content": directive}]
+        return self._brain.react_call(focused, object_id=self.object_id)
+
+    def _dispatch_ready_steps(
+        self,
+        messages: list[dict],
+        trace_id: Optional[str] = None,
+        origin_msg: "Optional[Message]" = None,
+    ) -> "tuple[Optional[ReactFinish], list[StateDelta], InferenceMetrics, list[str]]":
+        """Harness-driven wavefront dispatch (flag ON path).
+
+        Mirrors `_run_react_cycle`'s signature and 4-tuple return contract:
+        `(finish_or_None, pending_deltas, metrics, tools_called)`. Returns
+        `None` (pending) iff a tool or ask was dispatched this turn (its reply
+        arrives later via the mailbox); otherwise returns a `ReactFinish`
+        carrying the wavefront's accumulated outgoing (the synchronous part of
+        the turn is complete).
+
+        Each pass: compute the ready set (`_ready_step_indices`) and dispatch
+        every ready step the harness owns (tell/ask/tool/reason). A step that
+        advances synchronously (tell/reason, or sync tool) flips to a terminal
+        status, so we recompute and continue — letting an in-turn dependency
+        chain (e.g. tell→tell) resolve fully. `wait`/`replan`/`final` are left
+        to their existing dispatchers/closure paths.
+        """
+        MAX_INNER_PASSES = 6
+        metrics = InferenceMetrics(model="")
+        pending_deltas: list[StateDelta] = []
+        tools_called: list[str] = []
+        accumulated_outgoing: list[OutgoingMessage] = []
+        pending = False  # set once a tool/ask is dispatched → turn returns None
+
+        for _pass in range(MAX_INNER_PASSES):
+            with self._plans_lock:
+                plan = self._active_plans.get(trace_id) if trace_id is not None else None
+                ready = _ready_step_indices(plan)
+            if plan is None or not ready:
+                break
+            advanced = False
+            for idx in ready:
+                with self._plans_lock:
+                    if idx >= len(plan.steps):
+                        continue
+                    step = plan.steps[idx]
+                    if step.status != "planned":
+                        continue
+                    kind = step.kind
+                    target = step.target
+                    description = step.description
+                    sid = step.id or f"s{idx+1}"
+
+                if kind in ("wait", "replan"):
+                    # Owned by _dispatch_pending_waits / _dispatch_pending_replans
+                    # — never dispatched here.
+                    continue
+
+                if kind == "final":
+                    # Terminal marker with no action. The legacy path leans on
+                    # the LLM's finish (and the renderer hides it from `next`);
+                    # under harness dispatch nothing else closes it, so a `final`
+                    # left 'planned' would block _auto_close_plan_if_complete.
+                    # Close it (only once its deps are terminal, which the ready
+                    # predicate already guarantees) so the plan can complete.
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    with self._plans_lock:
+                        if step.status == "planned":
+                            step.status = "done"
+                            step.completed_at = now
+                            plan.last_progress_at = now
+                            advanced = True
+                    continue
+
+                if kind in ("tell", "ask"):
+                    step_obj, m = self._focused_react_call(messages, sid, kind, target, description)
+                    metrics = _accumulate_metrics(metrics, m)
+                    content = description
+                    outs = (step_obj.finish.outgoing_messages if step_obj.finish else None) or []
+                    if outs and outs[0].content:
+                        content = outs[0].content
+                    out = OutgoingMessage(
+                        recipient=target or "",
+                        content=content,
+                        expects_reply=(kind == "ask"),
+                    )
+                    out.plan_step_index = idx  # harness owns the correlation
+                    accumulated_outgoing.append(out)
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    with self._plans_lock:
+                        if step.status == "planned":
+                            if kind == "tell":
+                                # A tell is COMPLETE the moment it is sent —
+                                # never pending. Mark done immediately; the bus
+                                # send routes it (carried even on a pending turn).
+                                step.status = "done"
+                                step.completed_at = now
+                                advanced_local = True
+                            else:
+                                # Ask awaits a reply — mark dispatched so it is
+                                # not re-fired, and dependents stay blocked.
+                                step.status = "dispatched"
+                                advanced_local = False
+                            plan.last_progress_at = now
+                        else:
+                            advanced_local = False
+                    if kind == "tell":
+                        advanced = advanced or advanced_local
+                    else:
+                        pending = True
+                    continue
+
+                if kind == "reason":
+                    step_obj, m = self._focused_react_call(messages, sid, kind, target, description)
+                    metrics = _accumulate_metrics(metrics, m)
+                    if step_obj.state_updates:
+                        pending_deltas.extend(step_obj.state_updates)
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    with self._plans_lock:
+                        if step.status == "planned":
+                            step.status = "done"
+                            step.completed_at = now
+                            if step.result is None and step.result_summary:
+                                step.result = step.result_summary
+                                step.result_kind = "reason"
+                            plan.last_progress_at = now
+                            advanced = True
+                    continue
+
+                if kind == "tool":
+                    # Cross-turn cap (mirrors _run_react_cycle ~1690): never
+                    # exceed max_tool_rounds for this trace.
+                    with self._plans_lock:
+                        cross_turn_rounds = (
+                            plan.tool_rounds if plan is not None
+                            else self._tool_rounds_per_trace.get(trace_id or "", 0)
+                        )
+                    if cross_turn_rounds >= self._max_tool_rounds:
+                        continue
+                    step_obj, m = self._focused_react_call(messages, sid, kind, target, description)
+                    metrics = _accumulate_metrics(metrics, m)
+                    tcs = list(step_obj.tool_calls or [])
+                    if not self._tool_registry or not tcs:
+                        # Nothing actionable for this step this pass — leave it
+                        # planned (the evaluator/retry loop can revisit). Skip to
+                        # avoid spinning on it.
+                        continue
+                    for tc in tcs:
+                        tc.plan_step_index = idx  # harness owns the correlation
+                    if self._tool_dispatch == "sync":
+                        # Inline execution — result captured immediately, step
+                        # flips to done/failed → synchronous progress.
+                        ctx = self._tool_context_factory(self) if self._tool_context_factory else {}
+                        for tc in tcs:
+                            tools_called.append(tc.tool)
+                            try:
+                                result = self._execute_scoped(tc, ctx, trace_id=trace_id)
+                            except Exception as exc:
+                                result = ToolResult(id=tc.id, output="", error=f"Tool execution raised: {exc}")
+                            try:
+                                self._capture_tool_result_on_step(trace_id, idx, result)
+                            except Exception:
+                                logger.exception("Failed to capture tool result on plan step for %s", self.object_id)
+                        with self._plans_lock:
+                            if plan is not None:
+                                plan.tool_rounds += len(tcs)
+                            else:
+                                key = trace_id or ""
+                                self._tool_rounds_per_trace[key] = self._tool_rounds_per_trace.get(key, 0) + len(tcs)
+                        advanced = True
+                    else:
+                        # Async — submit to pool; reply arrives via mailbox.
+                        self._submit_async_tool_batch(tcs, trace_id, plan, origin_msg, tools_called)
+                        pending = True
+                    continue
+
+            if not advanced:
+                break
+
+        if pending:
+            # A tool/ask is in flight. Stash the wavefront outgoing so the
+            # pending ProcessingResult still routes any tell produced this turn.
+            self._harness_pending_outgoing = accumulated_outgoing
+            return None, pending_deltas, metrics, tools_called
+
+        return (
+            ReactFinish(reply="", updated_state=self._state, outgoing_messages=accumulated_outgoing),
+            pending_deltas,
+            metrics,
+            tools_called,
+        )
 
     def _build_evaluator_feedback_text(self, criteria: list, feedback: str) -> str:
         """Format the evaluator's per-sub-item diagnostics into a user-message
@@ -2198,6 +2471,18 @@ class LLMObject:
         sender_plan_id = plan.id if plan is not None else None
 
         for out in outgoing:
+            # Harness dispatch pre-stamps plan_step_index on the outgoing and
+            # has already advanced the step's status (tell→done, ask→dispatched).
+            # Preserve that correlation — re-running Path 1/2 here would reset
+            # the index (the matcher only binds `planned` steps, so an already-
+            # advanced step never re-matches and the index would be lost).
+            # Provably inert on the legacy path: the LLM never sets
+            # plan_step_index, so non-harness outgoing always enter as None.
+            if out.plan_step_index is not None:
+                out.task_id = sender_task_id
+                out.plan_id = sender_plan_id
+                continue
+
             out.plan_step_index = None
             out.in_reply_to = None
             out.is_reply = False
