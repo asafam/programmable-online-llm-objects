@@ -91,6 +91,18 @@ Single-agent comparison using OpenClaw. See [EVALUATION.md](EVALUATION.md) for s
 
 - `/commit` — Creates a git commit using haiku (cheaper/faster model). Accepts optional message guidance: `/commit fix ambiguity handling`.
 
+## Versioning
+
+- **Every push to `main` MUST update `VERSIONS.md`.** Before pushing to `main`
+  (including a merge into `main`), add a new version entry at the top of
+  `VERSIONS.md` summarizing what changed in that push.
+- Format: `## vX.Y.Z — YYYY-MM-DD · <short title>`, newest first, followed by
+  plain-language "What's New" bullets (what changed and why it matters — not a
+  raw commit list). Bump semver by impact: patch = fixes, minor = new
+  behavior/features, major = breaking changes.
+- If a push genuinely ships nothing user-facing, still add an entry noting that
+  (e.g. internal/refactor) so the changelog stays a complete push history.
+
 ## Principles
 
 - Never hardcode domain-specific logic — keep code generic, configurable, LLM-driven

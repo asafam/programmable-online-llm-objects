@@ -3,6 +3,11 @@
 Release notes for the LNL runtime — newest first. Each push gets a version entry
 written like app-store "What's New": plain language, what changed and why it matters.
 
+## v0.3.1 — 2026-06-15 · Reliable service replies
+
+- **Read/write services now reliably reply to the objects that call them.** In the default async mode, a service object that answered a request by calling a tool could lose its reply on the way back — it was addressed to an internal tool channel instead of the original caller, so the caller was left waiting and the workflow stalled. The reply now always returns to the caller. Concretely, in a round-robin lead-assignment run the rotation roster reaching the policy went from ~1-in-10 to ~9-in-10, so leads actually get assigned.
+- **Internal:** added a project rule — every push to `main` adds an entry to this changelog.
+
 ## v0.3.0 — 2026-06-14 · Multi-agent reliability
 
 - **Entry/coordinator objects now act on event triggers**, not just direct messages. Previously an object that received an external trigger as an event never planned, so it forwarded downstream only intermittently — now it plans reliably (e.g. the applicant-tracker hiring-manager email went from ~0–15% to ~85%).
